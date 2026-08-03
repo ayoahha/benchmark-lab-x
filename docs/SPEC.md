@@ -34,12 +34,26 @@ All task data MUST be synthetic — no real name, company, address, or fact. Set
 
 Automatic checks first, then human review on anonymized outputs in random order, against `verify.md` and the anchor examples. Verdicts `PASS` / `PARTIAL` / `FAIL` / `UNKNOWN` with short evidence. Ambiguous failure = `UNKNOWN` and a new card version, never a rerun. Two diverging runs = `UNSTABLE`, shown as-is. A model MUST NOT be the sole judge of its own output. Card edits create a new version; silent edits are forbidden.
 
-### 2.5 Repository layout
+### 2.5 Scoring
+
+Scoring is mechanical once the human has judged each checklist item; no step below involves discretion.
+
+- Every `verify.md` item is tagged `[C]` (critical) or `[S]` (secondary). Disqualifying errors listed in `task.md` count as critical.
+- Verdict derivation: any `[C]` failed → `FAIL`; all items passed → `PASS`; all `[C]` passed but ≥ 1 `[S]` failed → `PARTIAL`; output unjudgeable (broken format, ambiguity) → `UNKNOWN`.
+- Item score: `items passed / items total`, in [0, 1], recorded next to the verdict. It refines comparison within a family; it MUST NOT be averaged across families.
+- Generative tasks (2 runs): both verdicts recorded; the comparison verdict is the WORST of the two, plus the `UNSTABLE` flag when they diverge.
+- Family scoreboard per model: `PASS count / task count`, mean item score, `UNSTABLE` count, median cost, median duration, human-rework distribution.
+- Comparison rule: model A beats model B in a family only if it has ≥ 2 more `PASS`, or equal `PASS` and strictly higher item scores on the same tasks. A one-task gap is noise and MUST be reported as such.
+- No aggregate score across families, ever. A model's report is its four family lines.
+
+### 2.6 Repository layout
 
 ```
 tasks/<set>/<slug>/   task.md, input files, verify.md, anchor-pass.md, anchor-fail.md
 runs/<date>/          one frozen campaign per folder
+tools/collect.py      the call collector (§2.1), the only program in the repo
 docs/SPEC.md          this file
+docs/RUNBOOK.md       step-by-step campaign procedure
 ```
 
 ## 3. Milestones
@@ -75,4 +89,4 @@ Exit criteria:
 
 ## 4. Out of scope for the whole POC
 
-Web search, multi-turn sessions, coding tasks, LLM-assisted judging, statistics beyond per-family counts, public leaderboards, more than 5 models per campaign.
+Web search, multi-turn sessions, coding tasks, LLM-assisted judging, cross-family aggregate scores, statistics beyond the §2.5 scoreboard, public leaderboards, more than 5 models per campaign.

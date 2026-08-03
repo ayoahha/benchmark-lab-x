@@ -2,15 +2,15 @@
 
 ## Binary checklist
 
-- [ ] 1. The output contains exactly the sections `## Recommendation`, `## Points of caution`, and `## Unknowns`.
-- [ ] 2. Offer B is recommended; if a score is calculated under the reference assumption “statutory health insurance optical share = €0,” its overall score is 83.27 points. Omitting an exact score is acceptable when the missing component is identified as unknown.
-- [ ] 3. The recommendation gives three comparative reasons grounded in the profile and supported by exact quotations from the documents.
-- [ ] 4. Every quoted passage exists word for word in the cited document and actually supports the associated claim.
-- [ ] 5. Offer C's adverse exclusion is identified: no contact-lens reimbursement during the first eleven months despite the displayed allowance.
-- [ ] 6. The exclusion's first-year effect is applied; under the reference assumption, Offer C's optical out-of-pocket cost is €350, not €100. Declining to calculate it is acceptable if the missing component is explicitly identified.
-- [ ] 7. The absence from all three offers of a quantified statutory health insurance share for optical care is identified as unknown.
-- [ ] 8. Budget and waiting-period filters, benefits, and periods are compared without adding external data.
-- [ ] 9. No amount, benefit, exclusion, period, or quotation absent from the corpus is invented.
+- [ ] [S] 1. The output contains exactly the sections `## Recommendation`, `## Points of caution`, and `## Unknowns`.
+- [ ] [C] 2. Offer B is recommended; if a score is calculated under the reference assumption “statutory health insurance optical share = €0,” its overall score is 83.27 points. Omitting an exact score is acceptable when the missing component is identified as unknown.
+- [ ] [C] 3. The recommendation gives three comparative reasons grounded in the profile and supported by exact quotations from the documents.
+- [ ] [C] 4. Every quoted passage exists word for word in the cited document and actually supports the associated claim.
+- [ ] [C] 5. Offer C's adverse exclusion is identified: no contact-lens reimbursement during the first eleven months despite the displayed allowance.
+- [ ] [C] 6. The exclusion's first-year effect is applied; under the reference assumption, Offer C's optical out-of-pocket cost is €350, not €100. Declining to calculate it is acceptable if the missing component is explicitly identified.
+- [ ] [C] 7. The absence from all three offers of a quantified statutory health insurance share for optical care is identified as unknown.
+- [ ] [C] 8. Budget and waiting-period filters, benefits, and periods are compared without adding external data.
+- [ ] [C] 9. No amount, benefit, exclusion, period, or quotation absent from the corpus is invented.
 
 ## Reference facts
 

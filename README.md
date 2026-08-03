@@ -67,6 +67,14 @@ Each task = a folder `tasks/<set>/<slug>/` containing `task.md`, the input files
 
 One row per task × model × run: task, model+version, provider served, date, result, evidence, cost, duration, human rework (`none` / `minor` < 2 min / `major`).
 
+## Scoring
+
+Per task: each `verify.md` item is tagged `[C]` critical or `[S]` secondary, and the verdict is derived mechanically — a failed `[C]` means FAIL, all items passed means PASS, only `[S]` failures mean PARTIAL, unjudgeable means UNKNOWN. An item score (passed/total) refines comparison inside a family. Models are compared per family only (see `docs/SPEC.md` §2.5 for the full rules); there is never a cross-family aggregate.
+
+## Running a campaign
+
+See `docs/RUNBOOK.md`. The single API call per run goes through `tools/collect.py` (the §2.1 collector); everything else is manual.
+
 ## Task card review checklist
 
 - [ ] all TEMPLATE fields present

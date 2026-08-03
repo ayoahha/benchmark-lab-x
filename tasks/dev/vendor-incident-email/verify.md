@@ -2,16 +2,16 @@
 
 ## Binary checklist
 
-- [ ] 1. The output contains only the email body between `<email>` and `</email>`.
-- [ ] 2. The email body contains no more than 200 words.
-- [ ] 3. The cause is accurate: the migration script left locks on the sessions table, after which the connection pool became saturated.
-- [ ] 4. The agreed corrective measure is accurate: a lock-release check was added to the migration procedure and a dedicated residual-lock alert was created.
-- [ ] 5. A goodwill gesture is explicitly proposed without being presented as already decided in the provided documents.
-- [ ] 6. No numeric resolution deadline is promised.
-- [ ] 7. The email does not admit contractual fault.
-- [ ] 8. Every necessary technical term is explained in plain language.
-- [ ] 9. No fact, time, commitment, or progress status contradicts the provided documents.
-- [ ] 10. The tone is neutral, professional, and ready to send to the client.
+- [ ] [S] 1. The output contains only the email body between `<email>` and `</email>`.
+- [ ] [C] 2. The email body contains no more than 200 words.
+- [ ] [C] 3. The cause is accurate: the migration script left locks on the sessions table, after which the connection pool became saturated.
+- [ ] [C] 4. The agreed corrective measure is accurate: a lock-release check was added to the migration procedure and a dedicated residual-lock alert was created.
+- [ ] [C] 5. A goodwill gesture is explicitly proposed without being presented as already decided in the provided documents.
+- [ ] [C] 6. No numeric resolution deadline is promised.
+- [ ] [C] 7. The email does not admit contractual fault.
+- [ ] [C] 8. Every necessary technical term is explained in plain language.
+- [ ] [C] 9. No fact, time, commitment, or progress status contradicts the provided documents.
+- [ ] [S] 10. The tone is neutral, professional, and ready to send to the client.
 
 ## Reference facts
 

@@ -2,15 +2,15 @@
 
 ## Binary checklist
 
-- [ ] 1. The output contains exactly the four sections `## Decisions`, `## Amount`, `## Deadlines`, and `## Open points`.
-- [ ] 2. Confirmed decisions are assigned to the correct date and distinguished from requests or unconfirmed announcements, including the client's acceptance of the “Portfolio” and “Materials” pages on 9 February 2026.
-- [ ] 3. The final amount is €4,850 excluding VAT, and the initial €4,200 excluding VAT is identified as obsolete within a resolved revision, not as a contradiction that remains open.
-- [ ] 4. The amount revision is explained: the old amount reappears in the internal purchase order before the final confirmation rejects it.
-- [ ] 5. Final mockup delivery is set for 20 March 2026; 13 March 2026 is identified as the initial deadline that was replaced.
-- [ ] 6. The changed mockup deadline is presented as a resolved revision, including the earlier date, not as a contradiction that remains open.
-- [ ] 7. Other valid deadlines, including sending the quote to the accountant before 21 February 2026, are reported without turning a target, validity date, or announced transfer into a completed event.
-- [ ] 8. The absence of information about first-year hosting and the domain name is identified as an open point.
-- [ ] 9. No fact, agreement, amount, deadline, or answer absent from the thread is invented.
+- [ ] [S] 1. The output contains exactly the four sections `## Decisions`, `## Amount`, `## Deadlines`, and `## Open points`.
+- [ ] [C] 2. Confirmed decisions are assigned to the correct date and distinguished from requests or unconfirmed announcements, including the client's acceptance of the “Portfolio” and “Materials” pages on 9 February 2026.
+- [ ] [C] 3. The final amount is €4,850 excluding VAT, and the initial €4,200 excluding VAT is identified as obsolete within a resolved revision, not as a contradiction that remains open.
+- [ ] [C] 4. The amount revision is explained: the old amount reappears in the internal purchase order before the final confirmation rejects it.
+- [ ] [C] 5. Final mockup delivery is set for 20 March 2026; 13 March 2026 is identified as the initial deadline that was replaced.
+- [ ] [C] 6. The changed mockup deadline is presented as a resolved revision, including the earlier date, not as a contradiction that remains open.
+- [ ] [S] 7. Other valid deadlines, including sending the quote to the accountant before 21 February 2026, are reported without turning a target, validity date, or announced transfer into a completed event.
+- [ ] [C] 8. The absence of information about first-year hosting and the domain name is identified as an open point.
+- [ ] [C] 9. No fact, agreement, amount, deadline, or answer absent from the thread is invented.
 
 ## Reference facts
 

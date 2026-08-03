@@ -2,16 +2,16 @@
 
 ## Binary checklist
 
-- [ ] 1. The schedule contains two distinct Markdown tables, one for Saturday and one for Sunday.
-- [ ] 2. A final section titled exactly `## Unmet constraints` follows the two tables.
-- [ ] 3. C1: there are exactly two plenary sessions, both in Room A, on Saturday from 09:00 to 12:00 and Sunday from 09:30 to 12:30.
-- [ ] 4. C2 and C10: there are exactly three workshops, all in Room B for a complete bookable slot, with at least one on each day; Nadia leads exactly two and Sophie exactly one.
-- [ ] 5. C3 and C9: Amelia runs reception at both plenary sessions and is assigned to no activity after 18:00; the Saturday 17:30–19:30 review meeting in Room A, which requires Amelia, Kevin, and Thomas, is flagged as impossible because of C3, with no invented solution.
-- [ ] 6. C4: Kevin manages sound at both plenary sessions and is not assigned on Sunday afternoon.
-- [ ] 7. C5: every workshop has exactly one authorized facilitator working within her availability.
-- [ ] 8. C6: Julian runs the catering point during every workshop and during the Saturday 17:30–19:30 slot if it is used; his Sunday-morning unavailability is respected.
-- [ ] 9. C7: Thomas is scheduled 30 minutes before every plenary session and workshop, within his availability.
-- [ ] 10. C8: no workshop or other use of Room B is scheduled during the Sunday-morning plenary session.
+- [ ] [S] 1. The schedule contains two distinct Markdown tables, one for Saturday and one for Sunday.
+- [ ] [S] 2. A final section titled exactly `## Unmet constraints` follows the two tables.
+- [ ] [C] 3. C1: there are exactly two plenary sessions, both in Room A, on Saturday from 09:00 to 12:00 and Sunday from 09:30 to 12:30.
+- [ ] [C] 4. C2 and C10: there are exactly three workshops, all in Room B for a complete bookable slot, with at least one on each day; Nadia leads exactly two and Sophie exactly one.
+- [ ] [C] 5. C3 and C9: Amelia runs reception at both plenary sessions and is assigned to no activity after 18:00; the Saturday 17:30–19:30 review meeting in Room A, which requires Amelia, Kevin, and Thomas, is flagged as impossible because of C3, with no invented solution.
+- [ ] [C] 6. C4: Kevin manages sound at both plenary sessions and is not assigned on Sunday afternoon.
+- [ ] [C] 7. C5: every workshop has exactly one authorized facilitator working within her availability.
+- [ ] [C] 8. C6: Julian runs the catering point during every workshop and during the Saturday 17:30–19:30 slot if it is used; his Sunday-morning unavailability is respected.
+- [ ] [C] 9. C7: Thomas is scheduled 30 minutes before every plenary session and workshop, within his availability.
+- [ ] [C] 10. C8: no workshop or other use of Room B is scheduled during the Sunday-morning plenary session.
 
 ## Reference facts
 
