@@ -32,18 +32,28 @@ All task data MUST be synthetic — no real name, company, address, or fact. Set
 
 ### 2.4 Judgment
 
-Automatic checks first, then human review on anonymized outputs in random order, against `verify.md` and the anchor examples. Verdicts `PASS` / `PARTIAL` / `FAIL` / `UNKNOWN` with short evidence. Ambiguous failure = `UNKNOWN` and a new card version, never a rerun. Two diverging runs = `UNSTABLE`, shown as-is. A model MUST NOT be the sole judge of its own output. Card edits create a new version; silent edits are forbidden.
+Automatic checks first, then human review on anonymized outputs in random order, against `verify.md` and the anchor examples. Verdicts `PASS` / `PARTIAL` / `FAIL` / `UNKNOWN` with short evidence. Attribution of unjudgeable cases follows §2.5 (model-attributable defects are `FAIL`; only external causes are `UNKNOWN`). Two diverging runs = `UNSTABLE`, shown as-is — a separate flag, never a verdict. A model MUST NOT be the sole judge of its own output. Card edits create a new version; silent edits are forbidden.
 
 ### 2.5 Scoring
 
 Scoring is mechanical once the human has judged each checklist item; no step below involves discretion.
 
 - Every `verify.md` item is tagged `[C]` (critical) or `[S]` (secondary). Disqualifying errors listed in `task.md` count as critical.
-- Verdict derivation: any `[C]` failed → `FAIL`; all items passed → `PASS`; all `[C]` passed but ≥ 1 `[S]` failed → `PARTIAL`; output unjudgeable (broken format, ambiguity) → `UNKNOWN`.
-- Item score: `items passed / items total`, in [0, 1], recorded next to the verdict. It refines comparison within a family; it MUST NOT be averaged across families.
-- Generative tasks (2 runs): both verdicts recorded; the comparison verdict is the WORST of the two, plus the `UNSTABLE` flag when they diverge.
-- Family scoreboard per model: `PASS count / task count`, mean item score, `UNSTABLE` count, median cost, median duration, human-rework distribution.
-- Comparison rule: model A beats model B in a family only if it has ≥ 2 more `PASS`, or equal `PASS` and strictly higher item scores on the same tasks. A one-task gap is noise and MUST be reported as such.
+- Verdict derivation:
+  - any `[C]` failed → `FAIL`
+  - all items passed → `PASS`
+  - all `[C]` passed but ≥ 1 `[S]` failed → `PARTIAL`
+  - **Imputability rule for `UNKNOWN`**: a defect attributable to the model (broken but readable template, ignored instructions, wrong content) is `FAIL`, not `UNKNOWN`. `UNKNOWN` is reserved for external causes only: corrupted evidence, invalidated run (e.g. route mismatch after collect), ambiguous card. Every `UNKNOWN` MUST trigger a card or infrastructure action (new card version, route fix, re-collect); it is never a silent skip and never a free pass for the model.
+- Item score: `items passed / items total`, in [0, 1], recorded next to the verdict. Diagnostic only — see below.
+- Generative tasks (2 runs): both verdicts recorded; the comparison verdict is the WORST of the two (`PASS` > `PARTIAL` > `FAIL`), plus the `UNSTABLE` flag when they diverge. `UNSTABLE` is a separate counter, never folded into the four verdict counts.
+- Family scoreboard per model — four counts: `PASS`, `PARTIAL`, `FAIL`, `UNKNOWN`. Define `judgeable = total − UNKNOWN`. Pass rate = `PASS / judgeable` (undefined when `judgeable = 0`). Also publish, as diagnostics only: mean item score, `UNSTABLE` count, median cost, median duration, human-rework distribution.
+- **Paired comparison** (replaces any absolute PASS-count gap rule such as "≥ 2 more PASS"):
+  - Per task, rank the two models' comparison verdicts: `PASS` > `PARTIAL` > `FAIL`. A task pair that includes `UNKNOWN` on either side is excluded.
+  - If fewer than 4 judgeable pairs in the family → result is `INCONCLUSIVE`. Families in V0 with 2–3 tasks yield an index only, never a head-to-head verdict.
+  - Model A beats model B if and only if victories > defeats **and** victories ≥ 2; otherwise `TIE`.
+  - Output is always explicit: `BEATS` / `TIE` / `INCONCLUSIVE`.
+- Diagnostics (item score, rework, cost, duration, `UNSTABLE`) are published but MUST NOT decide a comparison.
+- Temperature stays at 0 and the seed stays fixed across comparable runs. `UNSTABLE` measures provider non-determinism under those controlled inputs, not real-world usage variability.
 - No aggregate score across families, ever. A model's report is its four family lines.
 
 ### 2.6 Repository layout
