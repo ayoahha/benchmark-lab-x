@@ -1,4 +1,4 @@
-# benchmark-lab-x — POC specification
+# benchmark-lab-x: POC specification
 
 Normative specification for the first POC, split into versioned milestones (V0 → V2). The README gives the overview; when they disagree, this file wins. Keywords MUST / MUST NOT / SHOULD follow their usual meaning.
 
@@ -8,11 +8,11 @@ A private benchmark of everyday, non-coding tasks (writing, synthesis, organizat
 
 The POC is complete when all of the following hold:
 
-- **O1 — Verdict on demand**: any new model can be evaluated in at most half a day of human time (runs + judgment), producing a per-family verdict with evidence, never a single aggregate score.
-- **O2 — Real signal**: at least one improvement or regression between two model versions has been detected and confirmed by the evidence trail (not by impression).
-- **O3 — Longitudinal comparability**: at least three campaigns exist and remain comparable (pinned routes, versioned cards, frozen run folders).
-- **O4 — Bounded maintenance**: upkeep outside campaigns stays under ~2 h/month (card repairs, twin variants).
-- **O5 — Privacy intact**: the private set has never been published, pasted into an online chat, or reused for design.
+- **O1: Verdict on demand**: any new model can be evaluated in at most half a day of human time (runs + judgment), producing a per-family verdict with evidence, never a single aggregate score.
+- **O2: Real signal**: at least one improvement or regression between two model versions has been detected and confirmed by the evidence trail (not by impression).
+- **O3: Longitudinal comparability**: at least three campaigns exist and remain comparable (pinned routes, versioned cards, frozen run folders).
+- **O4: Bounded maintenance**: upkeep outside campaigns stays under ~2 h/month (card repairs, twin variants).
+- **O5: Privacy intact**: the private set has never been published, pasted into an online chat, or reused for design.
 
 ## 2. Invariants (all versions)
 
@@ -20,19 +20,21 @@ These rules never change between milestones.
 
 ### 2.1 Code boundary
 
-The only program allowed is the call collector. It MUST: load one task's prompt and files, make one API call with no retry, record the raw response and metadata (model, provider actually served, parameters, tokens, cost, duration, date, input-file hashes), and stop. It MUST NOT score, parse responses, loop over tasks, retry, rephrase, or aggregate. Reporting tools added in later milestones MUST be read-only over recorded runs and MUST NOT touch judgment.
+The only program allowed is the call collector. It MUST: load one task's prompt and files, make one API call with no retry, record the raw response and metadata (model, provider actually served, parameters, tokens, cost, duration, date, input-file hashes), and stop. It MUST NOT score, parse responses, loop over tasks, retry, rephrase, or aggregate. Reporting tools added in later milestones MUST be read-only over recorded runs and MUST NOT touch judgment. No card-linting tool either: card compliance is checked by hand against the checklist in `TEMPLATE.md`.
 
 ### 2.2 Call layer
 
 OpenRouter, pinned: explicit `provider.only`, `allow_fallbacks: false`, `require_parameters: true`. The provider actually served MUST be logged per run; runs with different routes MUST NOT be compared longitudinally. The prompt MUST impose an output template; format is checked before substantive judgment.
 
+The OpenRouter account keeps every "train on request data" endpoint class disabled: a task routed to a training endpoint is burned, so this is the benchmark's anti-contamination line, not a tuning knob. Each model is pinned to a compliant host in `models.toml` (check `GET /api/v1/models/<id>/endpoints`). A model whose only route trains on request data is **not benchmarkable**: record it in `models.toml` as a commented-out entry with the reason, never loosen the account policy for it.
+
 ### 2.3 Data and privacy
 
-All task data MUST be synthetic — no real name, company, address, or fact. Sets: `dev` (tuning, burnable), `calibration` (a known model must reach the expected result), `private` (never exposed outside runs). Exposure counter per card, max 2, then the twin variant replaces it.
+All task data MUST be synthetic: no real name, company, address, or fact. Sets: `dev` (tuning, burnable), `calibration` (a known model must reach the expected result), `private` (never exposed outside runs). Exposure counter per card, max 2, then the twin variant replaces it.
 
 ### 2.4 Judgment
 
-Automatic checks first, then human review on anonymized outputs in random order, against `verify.md` and the anchor examples. Verdicts `PASS` / `PARTIAL` / `FAIL` / `UNKNOWN` with short evidence. Attribution of unjudgeable cases follows §2.5 (model-attributable defects are `FAIL`; only external causes are `UNKNOWN`). Two diverging runs = `UNSTABLE`, shown as-is — a separate flag, never a verdict. A model MUST NOT be the sole judge of its own output. Card edits create a new version; silent edits are forbidden.
+Automatic checks first, then human review on anonymized outputs in random order, against `verify.md` and the anchor examples. Verdicts `PASS` / `PARTIAL` / `FAIL` / `UNKNOWN` with short evidence. Attribution of unjudgeable cases follows §2.5 (model-attributable defects are `FAIL`; only external causes are `UNKNOWN`). Two diverging runs = `UNSTABLE`, shown as-is: a separate flag, never a verdict. A model MUST NOT be the sole judge of its own output. Card edits create a new version; silent edits are forbidden.
 
 ### 2.5 Scoring
 
@@ -44,9 +46,9 @@ Scoring is mechanical once the human has judged each checklist item; no step bel
   - all items passed → `PASS`
   - all `[C]` passed but ≥ 1 `[S]` failed → `PARTIAL`
   - **Imputability rule for `UNKNOWN`**: a defect attributable to the model (broken but readable template, ignored instructions, wrong content) is `FAIL`, not `UNKNOWN`. `UNKNOWN` is reserved for external causes only: corrupted evidence, invalidated run (e.g. route mismatch after collect), ambiguous card. Every `UNKNOWN` MUST trigger a card or infrastructure action (new card version, route fix, re-collect); it is never a silent skip and never a free pass for the model.
-- Item score: `items passed / items total`, in [0, 1], recorded next to the verdict. Diagnostic only — see below.
+- Item score: `items passed / items total`, in [0, 1], recorded next to the verdict. Diagnostic only: see below.
 - Generative tasks (2 runs): both verdicts recorded; the comparison verdict is the WORST of the two (`PASS` > `PARTIAL` > `FAIL`), plus the `UNSTABLE` flag when they diverge. `UNSTABLE` is a separate counter, never folded into the four verdict counts.
-- Family scoreboard per model — four counts: `PASS`, `PARTIAL`, `FAIL`, `UNKNOWN`. Define `judgeable = total − UNKNOWN`. Pass rate = `PASS / judgeable` (undefined when `judgeable = 0`). Also publish, as diagnostics only: mean item score, `UNSTABLE` count, median cost, median duration, human-rework distribution.
+- Family scoreboard per model: four counts: `PASS`, `PARTIAL`, `FAIL`, `UNKNOWN`. Define `judgeable = total − UNKNOWN`. Pass rate = `PASS / judgeable` (undefined when `judgeable = 0`). Also publish, as diagnostics only: mean item score, `UNSTABLE` count, median cost, median duration, human-rework distribution.
 - **Paired comparison** (replaces any absolute PASS-count gap rule such as "≥ 2 more PASS"):
   - Per task, rank the two models' comparison verdicts: `PASS` > `PARTIAL` > `FAIL`. A task pair that includes `UNKNOWN` on either side is excluded.
   - If fewer than 4 judgeable pairs in the family → result is `INCONCLUSIVE`. Families in V0 with 2–3 tasks yield an index only, never a head-to-head verdict.
@@ -68,7 +70,7 @@ docs/RUNBOOK.md       step-by-step campaign procedure
 
 ## 3. Milestones
 
-### V0 — prove the card contract (current)
+### V0: prove the card contract (current)
 
 Scope: 4 families (constrained writing, document synthesis, organization and trade-offs, research on a fixed corpus), `dev` set only, 4 complete cards, manual grid.
 
@@ -78,9 +80,9 @@ Exit criteria:
 - [ ] every card judgeable in ≤ 10 min including the ~2x research family
 - [ ] TEMPLATE stable: pilot required no field additions or removals
 
-### V1 — full task set and trusted judgment
+### V1: full task set and trusted judgment
 
-Scope: complete the 10-task set — `calibration` (2 tasks) and `private` (the remaining tasks, authored maintainer-side and kept out of any AI chat), plus the results grid as a committed artifact per campaign.
+Scope: complete the 10-task set: `calibration` (2 tasks) and `private` (the remaining tasks, authored maintainer-side and kept out of any AI chat), plus the results grid as a committed artifact per campaign.
 
 Exit criteria:
 - [ ] 10 tasks live across the three sets; calibration verdicts match expectations
@@ -88,7 +90,7 @@ Exit criteria:
 - [ ] judge drift measured once: cold re-judgment of a sample after 2 weeks, divergences documented
 - [ ] twin-variant flow exercised at least once on a burned card
 
-### V2 — repeatable POC (final)
+### V2: repeatable POC (final)
 
 Scope: make campaigns routine and the archive trustworthy; add the fifth family (forms and administrative procedures) if V1 shows a coverage gap.
 
