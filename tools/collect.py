@@ -37,7 +37,7 @@ import sys
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import requests
 
@@ -61,16 +61,35 @@ EXIT_EXISTS = 9
 EXIT_IO = 10
 
 
-def die(code: int, msg: str) -> None:
+def die(code: int, msg: str) -> NoReturn:
     print(f"error: {msg}", file=sys.stderr)
     raise SystemExit(code)
 
 
+def load_dotenv_key() -> str | None:
+    """Read OPENROUTER_API_KEY from a repo-local .env (gitignored), if any"""
+    env_file = Path(".env")
+    if not env_file.is_file():
+        return None
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("OPENROUTER_API_KEY="):
+            value = line.split("=", 1)[1].strip().strip("'\"")
+            return value or None
+    return None
+
+
 def preflight_key() -> str:
-    """Require OPENROUTER_API_KEY present; never print its value"""
+    """Require a key; repo-local .env (dedicated campaign key) wins over the
+    shell environment. Never print its value"""
+    key = load_dotenv_key()
+    if key:
+        print("key source: .env (repo-local, gitignored)", file=sys.stderr)
+        return key
     key = os.environ.get("OPENROUTER_API_KEY")
     if key is None or not str(key).strip():
-        die(EXIT_NO_KEY, "OPENROUTER_API_KEY not set (present, never displayed)")
+        die(EXIT_NO_KEY, "OPENROUTER_API_KEY not set (env var or repo .env; never displayed)")
+    print("key source: environment variable", file=sys.stderr)
     return str(key).strip()
 
 
@@ -251,12 +270,25 @@ def cleanup_or_fail(out: Path, reason: str, detail: str | None = None) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="benchmark-lab-x call collector")
     ap.add_argument("task_dir", type=Path)
-    ap.add_argument("--model", required=True, help="OpenRouter model id")
-    ap.add_argument("--provider", required=True, help="pinned provider (provider.only)")
+    ap.add_argument("--model", help="OpenRouter model id (or use --alias)")
+    ap.add_argument("--provider", help="pinned provider (provider.only) (or use --alias)")
+    ap.add_argument(
+        "--alias",
+        default=None,
+        help="model alias resolved from models.toml (fields: model, provider, expect_provider)",
+    )
+    ap.add_argument(
+        "--models-file",
+        type=Path,
+        default=Path("models.toml"),
+        help="registry used by --alias (default: ./models.toml)",
+    )
     ap.add_argument("--run", type=int, default=1, help="run number (1 or 2)")
     ap.add_argument("--attempt", type=int, default=1, help="attempt number after a FAILED run (evidence is never deleted)")
     ap.add_argument("--temperature", type=float, default=0.0)
-    ap.add_argument("--max-tokens", type=int, default=4096)
+    # 16384: reasoning models spend their budget on reasoning tokens first;
+    # 4096 starved content on long cards (finish_reason=length, content null)
+    ap.add_argument("--max-tokens", type=int, default=16384)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument(
         "--expect-provider",
@@ -266,14 +298,41 @@ def main() -> None:
     ap.add_argument("--out-root", type=Path, default=Path("runs") / date.today().isoformat())
     args = ap.parse_args()
 
+    if args.alias:
+        if args.model or args.provider:
+            die(EXIT_USAGE, "--alias replaces --model/--provider; do not mix them")
+        if not args.models_file.is_file():
+            die(EXIT_USAGE, f"{args.models_file} not found (needed by --alias)")
+        import tomllib
+
+        try:
+            registry = tomllib.loads(args.models_file.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as exc:
+            die(EXIT_USAGE, f"invalid {args.models_file}: {exc}")
+        entry = registry.get(args.alias)
+        if not isinstance(entry, dict) or "model" not in entry or "provider" not in entry:
+            known = ", ".join(sorted(k for k, v in registry.items() if isinstance(v, dict)))
+            die(EXIT_USAGE, f"alias {args.alias!r} not in {args.models_file} (known: {known})")
+        args.model = entry["model"]
+        args.provider = entry["provider"]
+        if not args.expect_provider and entry.get("expect_provider"):
+            args.expect_provider = entry["expect_provider"]
+        omit_params = entry.get("omit_params", [])
+        if omit_params and not isinstance(omit_params, list):
+            die(EXIT_USAGE, "omit_params must be a list of parameter names")
+    else:
+        omit_params = []
+    if not args.model or not args.provider:
+        die(EXIT_USAGE, "--model and --provider are required (or --alias)")
+
     if args.run not in (1, 2):
         die(EXIT_USAGE, "--run must be 1 or 2 (campaign invariant)")
     if args.attempt < 1:
         die(EXIT_USAGE, "--attempt must be >= 1")
-    if args.temperature != 0.0 or args.seed != 42 or args.max_tokens != 4096:
+    if args.temperature != 0.0 or args.seed != 42 or args.max_tokens != 16384:
         print(
             "warning: sampling parameters deviate from campaign invariants "
-            "(temp 0, seed 42, max_tokens 4096) — recorded in meta.json",
+            "(temp 0, seed 42, max_tokens 16384) — recorded in meta.json",
             file=sys.stderr,
         )
 
@@ -327,6 +386,15 @@ def main() -> None:
         },
         "usage": {"include": True},
     }
+    # Documented deviation: some pinned endpoints reject require_parameters
+    # when a sampling knob is unsupported (e.g. seed); the registry may omit
+    # those knobs explicitly and the omission is recorded in meta.json
+    allowed_omissions = {"seed", "top_p"}
+    for name in omit_params:
+        if name not in allowed_omissions:
+            die(EXIT_USAGE, f"omit_params entry {name!r} not allowed (only {sorted(allowed_omissions)})")
+        body.pop(name, None)
+        print(f"warning: parameter {name!r} omitted for this endpoint (declared in registry)", file=sys.stderr)
     # Canonical JSON for payload hash (stable separators, sorted keys)
     payload_bytes = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
@@ -454,11 +522,11 @@ def main() -> None:
         "provider_pinned": args.provider,
         "provider_served": provider_served,
         "params": {
-            "temperature": args.temperature,
-            "top_p": 1,
-            "max_tokens": args.max_tokens,
-            "seed": args.seed,
+            k: body[k]
+            for k in ("temperature", "top_p", "max_tokens", "seed")
+            if k in body
         },
+        "params_omitted": sorted(omit_params),
         "usage": usage,
         "cost_usd": cost_usd,
         "finish_reason": finish_reason,
