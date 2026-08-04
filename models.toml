@@ -1,7 +1,8 @@
 # Model registry for campaigns: pick one with:
 #   uv run tools/collect.py tasks/dev/<slug> --alias <name> --run N
 # Fields: model (OpenRouter id), provider (pin slug), optional expect_provider
-# (served display name when it differs from the pin slug).
+# (served display name when it differs from the pin slug), optional
+# reasoning_max_tokens (sent as body reasoning.max_tokens when set).
 # Add or remove entries freely; the collector never loops over this file.
 #
 # Adding a model: check its hosts first —
@@ -18,15 +19,26 @@
 
 # First-party DeepSeek endpoint is excluded by the account's OpenRouter data
 # policy (no training on prompts): Novita fp8 is the compliant pin
+# reasoning supported on Novita (checked /endpoints 2026-08-04)
 [deepseek-v4-flash]
 model = "deepseek/deepseek-v4-flash-0731"
 provider = "novita"
+reasoning_max_tokens = 8192
 
+# reasoning supported on Alibaba (checked /endpoints 2026-08-04)
 [qwen3-8-max]
 model = "qwen/qwen3.8-max"
 provider = "alibaba"
+reasoning_max_tokens = 8192
 
 [laguna-s-2-1]
 model = "poolside/laguna-s-2.1"
 provider = "poolside"
 omit_params = ["seed", "top_p"]
+
+# permanent reference candidate, see RUNBOOK; the endpoint rejects
+# temperature/top_p (reasoning family), omission recorded in meta.json
+[reference-gpt-5-6]
+model = "openai/gpt-5.6-sol"
+provider = "openai"
+omit_params = ["temperature", "top_p"]
