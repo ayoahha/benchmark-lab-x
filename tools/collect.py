@@ -23,7 +23,7 @@ Exit codes (stable):
 
 Usage:
     uv run tools/collect.py tasks/dev/<slug> \
-        --model openai/gpt-5.6 --provider openai --run 1
+        --model openai/gpt-5.6-sol --provider openai --run 1
 """
 
 from __future__ import annotations
@@ -210,7 +210,10 @@ def extract_provider_served(data: dict[str, Any]) -> str | None:
 
 
 def validate_response(data: Any) -> tuple[str, dict[str, Any]]:
-    """Require non-empty choices, string content, minimal structure"""
+    """Require choices and extract content; empty/whitespace is infrastructure-invalid
+    unless finish_reason=length (envelope says the budget ran out: the empty
+    output is recorded and attribution stays with the human judge)
+    """
     if not isinstance(data, dict):
         die(EXIT_VALIDATION, "response is not a JSON object")
     if "error" in data and data["error"]:
@@ -230,8 +233,18 @@ def validate_response(data: Any) -> tuple[str, dict[str, Any]]:
     if first.get("finish_reason") == "error":
         die(EXIT_API_ERROR, "finish_reason=error (HTTP 200 masking a failure)")
     content = message.get("content")
+    finish_reason = first.get("finish_reason")
+    # finish_reason=length with null/empty content: model-attributable FAIL, still COMPLETE
+    if content is None:
+        if finish_reason == "length":
+            return "", first
+        die(EXIT_VALIDATION, "choices[0].message.content is null (infrastructure invalid)")
     if not isinstance(content, str):
-        die(EXIT_VALIDATION, "choices[0].message.content is not a string (got null or non-string)")
+        die(EXIT_VALIDATION, "choices[0].message.content is not a string")
+    if not content.strip():
+        if finish_reason == "length":
+            return content, first
+        die(EXIT_VALIDATION, "choices[0].message.content is empty or whitespace (infrastructure invalid)")
     return content, first
 
 
@@ -247,6 +260,12 @@ def atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
+# Request summary appended to every FAILED receipt so failed runs keep their
+# parameters (timeout, reasoning cap, hashes); set once in main after the
+# request body is final, empty before that point
+REQUEST_NOTE: str = ""
+
+
 def mark_failed(out: Path, reason: str, detail: str | None = None) -> None:
     """Leave a single FAILED marker file carrying reason and redacted receipt.
 
@@ -257,6 +276,8 @@ def mark_failed(out: Path, reason: str, detail: str | None = None) -> None:
         body = reason + "\n"
         if detail is not None:
             body += "\n" + redact_http_body(detail) + "\n"
+        if REQUEST_NOTE:
+            body += "\nrequest: " + REQUEST_NOTE + "\n"
         (out / "FAILED").write_text(body, encoding="utf-8")
     except OSError as exc:
         print(f"warning: could not write FAILED receipt: {exc}", file=sys.stderr)
@@ -291,6 +312,12 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=16384)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="HTTP timeout in seconds (default: 600)",
+    )
+    ap.add_argument(
         "--expect-provider",
         default=None,
         help="expected provider display name when it differs from the pin slug (e.g. pin google-vertex, served Google)",
@@ -298,6 +325,7 @@ def main() -> None:
     ap.add_argument("--out-root", type=Path, default=Path("runs") / date.today().isoformat())
     args = ap.parse_args()
 
+    reasoning_max_tokens: int | None = None
     if args.alias:
         if args.model or args.provider:
             die(EXIT_USAGE, "--alias replaces --model/--provider; do not mix them")
@@ -320,6 +348,11 @@ def main() -> None:
         omit_params = entry.get("omit_params", [])
         if omit_params and not isinstance(omit_params, list):
             die(EXIT_USAGE, "omit_params must be a list of parameter names")
+        raw_rmt = entry.get("reasoning_max_tokens")
+        if raw_rmt is not None:
+            if not isinstance(raw_rmt, int) or isinstance(raw_rmt, bool) or raw_rmt < 1:
+                die(EXIT_USAGE, "reasoning_max_tokens must be a positive integer")
+            reasoning_max_tokens = raw_rmt
     else:
         omit_params = []
     if not args.model or not args.provider:
@@ -329,6 +362,10 @@ def main() -> None:
         die(EXIT_USAGE, "--run must be 1 or 2 (campaign invariant)")
     if args.attempt < 1:
         die(EXIT_USAGE, "--attempt must be >= 1")
+    if args.timeout < 1:
+        die(EXIT_USAGE, "--timeout must be >= 1")
+    if reasoning_max_tokens is not None and reasoning_max_tokens >= args.max_tokens:
+        die(EXIT_USAGE, "reasoning_max_tokens must be lower than --max-tokens")
     if args.temperature != 0.0 or args.seed != 42 or args.max_tokens != 16384:
         print(
             "warning: sampling parameters deviate from campaign invariants "
@@ -372,7 +409,7 @@ def main() -> None:
     except OSError as exc:
         die(EXIT_IO, f"could not reserve {out}: {exc}")
 
-    body = {
+    body: dict[str, Any] = {
         "model": args.model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": args.temperature,
@@ -386,10 +423,12 @@ def main() -> None:
         },
         "usage": {"include": True},
     }
+    if reasoning_max_tokens is not None:
+        body["reasoning"] = {"max_tokens": reasoning_max_tokens}
     # Documented deviation: some pinned endpoints reject require_parameters
     # when a sampling knob is unsupported (e.g. seed); the registry may omit
     # those knobs explicitly and the omission is recorded in meta.json
-    allowed_omissions = {"seed", "top_p"}
+    allowed_omissions = {"seed", "top_p", "temperature"}
     for name in omit_params:
         if name not in allowed_omissions:
             die(EXIT_USAGE, f"omit_params entry {name!r} not allowed (only {sorted(allowed_omissions)})")
@@ -401,6 +440,18 @@ def main() -> None:
     )
     payload_hash = hashlib.sha256(payload_bytes).hexdigest()
 
+    global REQUEST_NOTE
+    REQUEST_NOTE = json.dumps(
+        {
+            "model": args.model,
+            "provider": args.provider,
+            "params": {k: body[k] for k in ("temperature", "top_p", "max_tokens", "seed", "reasoning") if k in body},
+            "timeout_s": args.timeout,
+            "payload_hash": payload_hash[:16],
+        },
+        ensure_ascii=False,
+    )
+
     started = datetime.now(timezone.utc)
     t0 = time.monotonic()
     try:
@@ -411,7 +462,7 @@ def main() -> None:
                 "Content-Type": "application/json",
             },
             data=payload_bytes,
-            timeout=600,
+            timeout=args.timeout,
             allow_redirects=False,
         )
     except requests.RequestException as exc:
@@ -431,6 +482,11 @@ def main() -> None:
             redact_http_body(resp.text),
         )
         die(EXIT_HTTP, f"HTTP {resp.status_code} (redacted receipt in {out / 'FAILED'})")
+
+    # Empty/whitespace HTTP body is infrastructure-invalid (never judged)
+    if not resp.text or not resp.text.strip():
+        cleanup_or_fail(out, "empty_body", "(empty or whitespace HTTP body)")
+        die(EXIT_VALIDATION, "response body is empty or whitespace (infrastructure invalid)")
 
     try:
         data = resp.json()
@@ -496,12 +552,23 @@ def main() -> None:
     finish_reason = first_choice.get("finish_reason")
     if finish_reason == "length":
         print(
-            "warning: finish_reason=length (output may be truncated)",
+            "warning: finish_reason=length (output may be truncated; "
+            "attribution is the judge's call — see usage token split in meta.json)",
             file=sys.stderr,
         )
 
     usage = data.get("usage")
     cost_usd = normalize_cost_usd(usage)
+
+    # An empty output can only be attributed with the usage token split as
+    # evidence; without it the run is infrastructure-invalid, not judgeable
+    if finish_reason == "length" and not content.strip() and not isinstance(usage, dict):
+        cleanup_or_fail(out, "length_without_usage")
+        die(
+            EXIT_VALIDATION,
+            "empty output with finish_reason=length but no usage data: "
+            "attribution cannot be evidenced (infrastructure invalid)",
+        )
 
     # Input fidelity manifest: every file body actually placed in the prompt
     input_manifest = {
@@ -512,6 +579,14 @@ def main() -> None:
         for name, text in inputs.items()
     }
 
+    params: dict[str, Any] = {
+        k: body[k]
+        for k in ("temperature", "top_p", "max_tokens", "seed")
+        if k in body
+    }
+    if "reasoning" in body:
+        params["reasoning"] = body["reasoning"]
+
     meta = {
         "task": slug,
         "run": args.run,
@@ -521,12 +596,9 @@ def main() -> None:
         "model_served": model_served,
         "provider_pinned": args.provider,
         "provider_served": provider_served,
-        "params": {
-            k: body[k]
-            for k in ("temperature", "top_p", "max_tokens", "seed")
-            if k in body
-        },
+        "params": params,
         "params_omitted": sorted(omit_params),
+        "timeout_s": args.timeout,
         "usage": usage,
         "cost_usd": cost_usd,
         "finish_reason": finish_reason,
