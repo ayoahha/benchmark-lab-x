@@ -2,6 +2,17 @@
 
 Copy this file to `tasks/<set>/<slug>/task.md` and fill in every field. Verification lives in `verify.md` in the same folder.
 
+Review checklist before a card enters a campaign (checked by hand — no linting tool, by design):
+
+- [ ] all TEMPLATE fields present
+- [ ] verbatim instructions, output template included
+- [ ] stability (closed/generative) declared, resulting run count
+- [ ] PASS/FAIL anchor examples attached
+- [ ] every `verify.md` item tagged `[C]` or `[S]`
+- [ ] 100% synthetic data, no real name/fact
+- [ ] twin variant sketched
+- [ ] exposure counter at 0
+
 ---
 
 # <slug> — v1

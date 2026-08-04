@@ -2,92 +2,115 @@
 
 Private benchmark of everyday tasks for comparing AI models under reproducible conditions.
 
-## What this benchmark is?
+Markdown task cards, one small call collector, human judgment. Everyday work an average person would do — writing, summarizing, organizing, searching provided documents — not coding. The output is a directional signal per task family, never a general-purpose ranking.
 
-- A folder of Markdown tasks + a results grid filled in by hand.
-- Everyday work tasks an average person would do: writing, summarizing, organizing, searching through provided documents.
-- A directional signal between models, never a general-purpose ranking.
+Full design rationale and normative rules live in [`docs/SPEC.md`](docs/SPEC.md).
 
-## What this benchmark is not?
+The benchmarking procedure is in [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
-- Not a harness: **no evaluation engine**. The only code allowed is a call collector (see Boundary).
-- No single LLM judge, no aggregate score, no free web search.
-- Does not predict the product experience of vendor apps (the model is tested bare, via API).
+This README covers what you need to run it.
 
-## Code / no-code boundary
+## Getting started
 
-The call collector does exactly this, and nothing else:
+### Prerequisites
 
-1. loads the prompt and files for a task;
-2. makes **one** API call, no retry;
-3. records the raw response + metadata: model, provider actually served, parameters, tokens, cost, duration, date, input file fingerprints;
-4. stops.
+- [`uv`](https://docs.astral.sh/uv/) (the collector declares its own Python ≥ 3.12 and dependency)
+- An [OpenRouter](https://openrouter.ai) account and API key
 
-Forbidden: scoring, parsing the response, multi-task loops, retries, rephrasing, aggregation. If a `run_all_tasks()` function shows up, the boundary has been crossed. Judgment lives in each task's `verify.md` and stays human. No automated linting either: card compliance is checked against this README's checklist.
+### Install
 
-## Call layer
+```sh
+git clone git@github.com:ayoahha/benchmark-lab-x.git
+cd benchmark-lab-x
+```
 
-OpenRouter, pinned:
+Nothing to build: the only program is `tools/collect.py`, run through `uv`.
 
-- `provider.only` (explicit provider), `allow_fallbacks: false`, `require_parameters: true`;
-- the provider actually served (as returned by the API) is logged with every run: 2 campaigns are only comparable if the route is identical;
-- output template enforced in the prompt;
-- format is checked before any substantive judgment (otherwise you're measuring native formatting style, not competence).
+### Configure the API key
 
-Groq: possible complement for open models, never the primary layer (narrow catalog, fast deprecations).
+Create a **dedicated** OpenRouter key with a spend cap (never your personal key), then either:
 
-Privacy: a task sent to an API is seen by the aggregator and the provider; ZDR limits retention, not disclosure. Hence 100% synthetic data, and "private" means: never published, never pasted into an online chat, never reused to design prompts.
+```sh
+cp .env.example .env      # put the key in .env (gitignored, takes precedence)
+# or
+export OPENROUTER_API_KEY=...   # shell env var
+```
 
-## Families (V0: 10 tasks)
+Never pass the key as an argument, commit it, or paste it into a chat or issue. Run artifacts (`meta.json`, `raw.json`) never contain it. Revoke the key after any shared or one-off use.
 
-| Family                      | Tasks | Verification                                                 |
-| --------------------------- | ----- | ------------------------------------------------------------ |
-| Constrained writing         | 3     | binary checklist ≤ 10 items, human review                    |
-| Document synthesis          | 3     | known ground truth (planted contradictions/obligations)      |
-| Organization and trade-offs | 2     | violated constraints counted                                 |
-| Research on a fixed corpus  | 2     | citations checked against the corpus (~2x verification cost) |
+Account-side: keep every "train on request data" endpoint class disabled in OpenRouter's privacy settings, that is the benchmark's anti-contamination line (refer to SPEC §2.2).
 
-V1 reserve: forms and administrative procedures.
+### Configure the models
 
-## Task card contract
+Models live in [`models.toml`](models.toml): one entry per model with its OpenRouter id and pinned provider. Before adding one, check its hosts and pick one that does not train on request data:
 
-Each task = a folder `tasks/<set>/<slug>/` containing `task.md`, the input files, `verify.md`. `task.md` follows `TEMPLATE.md`: one-sentence objective, context/files, visible instructions (verbatim, output template included), expected result, success conditions, disqualifying errors, possible automatic verification, elements for human review, limits (time/budget/attempts), stability (closed/generative: fixes the number of runs upfront), exposure counter, twin variant.
+```sh
+curl -s https://openrouter.ai/api/v1/models/<author/slug>/endpoints
+```
 
-## Protocol
+If no compliant host exists, the model is not benchmarkable : record it commented-out in `models.toml` with the reason.
 
-1. **Three sealed sets**: `tasks/dev/` (tuning, burnable), `tasks/calibration/` (a known model must get the expected score), `tasks/prive/` (never exposed outside runs).
-2. **Identical conditions**: same verbatim prompt, same files, same limits for every model; config + date logged per run.
-3. **Runs**: 2 runs on any generative task (decided in the card, never after the fact), 1 on closed-form response. Two diverging verdicts get an `UNSTABLE` label, displayed as-is, no 3rd tie-breaking run, no averaging.
-4. **Judgment**: automatic verification first (observable properties), then human review on anonymized outputs in random order. PASS/FAIL anchor examples fixed per task at design time; cold re-judgment of a sample after 2 weeks to measure the judge's own drift. Never a single LLM judge on its own output.
-5. **Result**: `PASS` / `PARTIAL` / `FAIL` / `UNKNOWN` + short evidence. Ambiguous failure = `UNKNOWN`, no retry; it's the card that gets improved (new version), not the run that gets redone.
-6. **Wear**: exposure counter per card, max 2; beyond that, generate the twin variant (same skills, changed parameters), versioned, never published.
-7. **Campaigns**: frozen in `runs/<date>/`, 4-5 models max, reported by family ("3/3, 2/3, 1/2, 2/2"), never a single score.
+### First run
 
-## Results grid
+```sh
+uv run tools/collect.py tasks/dev/vendor-incident-email --alias deepseek-v4-flash --run 1
+```
 
-One row per task × model × run: task, model+version, provider served, date, result, evidence, cost, duration, human rework (`none` / `minor` < 2 min / `major`).
+This makes exactly one API call and writes `runs/<date>/<task>__<model>__r1/` containing `response.md`, `raw.json`, `meta.json`, and a `COMPLETE` marker. Check the printed line: `provider_served` must match the pin, otherwise the run is marked `FAILED` and must not be judged.
 
-## Scoring
+## Usage
 
-Per task: each `verify.md` item is tagged `[C]` critical or `[S]` secondary, and the verdict is derived mechanically — a failed `[C]` means FAIL, all items passed means PASS, only `[S]` failures mean PARTIAL, unjudgeable means UNKNOWN. An item score (passed/total) refines comparison inside a family. Models are compared per family only (see `docs/SPEC.md` §2.5 for the full rules); there is never a cross-family aggregate.
+### Collect a campaign
 
-## Running a campaign
+One command per task × model × run (runs: 2 for generative cards, 1 for closed ones):
 
-See `docs/RUNBOOK.md`. The single API call per run goes through `tools/collect.py` (the §2.1 collector); everything else is manual.
+```sh
+uv run tools/collect.py tasks/dev/<slug> --alias <name> --run 1
+uv run tools/collect.py tasks/dev/<slug> --alias <name> --run 2
+```
 
-## Task card review checklist
+No loop, no retry, no scoring ; The collector stops after recording. A failed call leaves a `FAILED` receipt; keep it as evidence and relaunch with `--attempt 2`. Full procedure, including anonymized judging and the results grid: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
-- [ ] all TEMPLATE fields present
-- [ ] verbatim instructions, output template included
-- [ ] stability (closed/generative) declared, resulting run count
-- [ ] PASS/FAIL anchor examples attached
-- [ ] 100% synthetic data, no real name/fact
-- [ ] twin variant sketched
-- [ ] exposure counter at 0
+### Judge
+
+Judgment is human and mechanical: automatic checks first, then the task's `verify.md` checklist item by item against the anchors, on anonymized outputs. Verdict derivation and model comparison rules: SPEC §2.5.
+
+### Collector reference
+
+```
+uv run tools/collect.py <task_dir> (--alias NAME | --model ID --provider PIN)
+    [--run 1|2] [--attempt N] [--expect-provider NAME]
+    [--temperature F] [--seed N] [--max-tokens N] [--out-root DIR]
+```
+
+Campaign invariants: temperature 0, seed 42 (omitted per-endpoint via `omit_params` in `models.toml` when unsupported), max_tokens 16384. Deviations print a warning and are recorded in `meta.json`. Stable exit codes are listed in the script header.
+
+## Repository layout
+
+```text
+tasks/<set>/<slug>/   task.md, input files, verify.md, anchor-pass.md, anchor-fail.md
+runs/<date>/          one frozen campaign per folder (campaign.md, run folders, grid.md)
+tools/collect.py      the call collector — the only program in the repo
+models.toml           model registry used by --alias
+docs/SPEC.md          normative specification (boundary, scoring, milestones)
+docs/RUNBOOK.md       step-by-step campaign procedure
+TEMPLATE.md           task card contract
+```
+
+Sets: `dev` (tuning, burnable), `calibration` (a known model must reach the expected result), `private` (never exposed outside runs, never pasted into any online chat).
+
+## Design in brief
+
+- **Families (V0, 10 tasks)**: constrained writing (3), document synthesis (3), organization and trade-offs (2), research on a fixed corpus (2).
+- **Boundary**: no evaluation engine. The collector loads one task, makes one pinned API call, records response + metadata, stops. Judgment lives in `verify.md` and stays human; no LLM judges its own output.
+- **Scoring**: checklist items tagged `[C]`/`[S]`; failed `[C]` → FAIL, all passed → PASS, only `[S]` failed → PARTIAL, external causes → UNKNOWN. Models compared per family by paired comparison (`BEATS` / `TIE` / `INCONCLUSIVE`); diagnostics (item score, cost, rework, `UNSTABLE`) never break a tie; no cross-family aggregate, ever.
+- **Reproducibility**: pinned provider routes, fixed sampling, frozen campaign folders, versioned cards, exposure counter (max 2, then a twin variant replaces the card).
 
 ## Known limits
 
-- 10 tasks: directional signal, a one-task gap is noise.
-- Consumable tasks: burned after 2 exposures or any publication.
+- 10 tasks: directional signal. Families with 2-3 tasks yield an index, never a head-to-head verdict (paired comparison needs ≥ 4 judgeable pairs).
+- Tasks are consumable: burned after 2 exposures or any publication.
 - Compares model+route pairs; a provider change behind OpenRouter invalidates longitudinal comparison.
 - The single human judge remains a stable bias, bounded by anchoring and cold re-judgment, not eliminated.
+- `UNSTABLE` measures provider non-determinism under controlled inputs, not real-world usage variability.
+- Tested bare via API: does not predict the product experience of vendor apps.

@@ -1,0 +1,32 @@
+# Model registry for campaigns: pick one with:
+#   uv run tools/collect.py tasks/dev/<slug> --alias <name> --run N
+# Fields: model (OpenRouter id), provider (pin slug), optional expect_provider
+# (served display name when it differs from the pin slug).
+# Add or remove entries freely; the collector never loops over this file.
+#
+# Adding a model: check its hosts first —
+#   curl -s https://openrouter.ai/api/v1/models/<id>/endpoints
+# and pin a host that does not train on request data (SPEC 2.2). If every
+# host trains on request data, the model is NOT benchmarkable: keep its entry
+# below, commented out, with the reason: do not loosen the account policy.
+#
+# Not benchmarkable (no non-training host): none so far
+
+# omit_params: sampling knobs the pinned endpoint rejects under
+# require_parameters (checked against /models/<id>/endpoints); the omission
+# is recorded in each run's meta.json
+
+# First-party DeepSeek endpoint is excluded by the account's OpenRouter data
+# policy (no training on prompts): Novita fp8 is the compliant pin
+[deepseek-v4-flash]
+model = "deepseek/deepseek-v4-flash-0731"
+provider = "novita"
+
+[qwen3-8-max]
+model = "qwen/qwen3.8-max"
+provider = "alibaba"
+
+[laguna-s-2-1]
+model = "poolside/laguna-s-2.1"
+provider = "poolside"
+omit_params = ["seed", "top_p"]
