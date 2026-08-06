@@ -1,0 +1,460 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = []
+# ///
+"""Produit les données techniques agrégées d'une campagne au format JSON.
+
+Une ligne par run attendu, avec de quoi rejouer la notation et vérifier chaque
+chiffre publié. Ce fichier machine reste sous `runs/` et sert d'entrée à la page
+de résultats.
+
+Ce que ce rapporteur garantit, et que la version précédente ne garantissait pas :
+
+- le vérificateur voit la réponse sous un chemin neutre, sans alias ni chemin
+  de run d'origine (R-010) ;
+- chaque run attendu porte l'un des cinq états terminaux, y compris ceux qui
+  n'ont jamais été tentés (R-013) ;
+- un candidat n'est classé que si tous ses runs attendus sont `SCORED`, et la
+  page est marquée provisoire dès qu'un seul ne l'est pas (R-020, R-027) ;
+- `verify_hash` porte sur un manifeste canonique des fichiers côté juge, en
+  SHA-256 complet, et non sur une concaténation d'octets tronquée (R-015).
+
+Usage :
+    uv run tools/rapport_campagne.py <carte> <dossier_de_runs>... > runs/<campagne>/results-data.json
+"""
+
+import hashlib
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).parent))
+from empreintes import empreinte  # noqa: E402
+
+CHAMPS_RUN = ("task", "task_version", "run", "date", "backend", "model_requested",
+              "model_served", "revision", "provider_pinned", "provider_served",
+              "finish_reason", "duration_s", "cost_usd", "prompt_hash",
+              "payload_hash", "execution_manifest_hash", "regime_confidentialite",
+              "protocol_version")
+
+SCHEMA_CONTEXTE = "benchmark-lab-x/measurement-context/v1"
+PROTOCOLE_VERSION = "benchmark-lab-x/protocol/v1"
+
+# Nom sous lequel la réponse est présentée au vérificateur. Neutre par
+# construction : il ne porte ni alias, ni numéro de run, ni tentative
+NOM_NEUTRE = "reponse.md"
+
+
+def actifs_cote_juge(carte: str, verificateur: Path) -> list[dict]:
+    """Fichiers qui définissent ou calibrent la note, triés par chemin POSIX.
+
+    L'ancienne version hachait `tools/*_pentagone.py` par simple concaténation,
+    ce qui laissait dehors le cache d'oracle et les reçus de témoins : deux
+    calibrages différents rendaient la même empreinte
+    """
+    racine = Path(__file__).parent.parent
+    candidats: list[Path] = [verificateur]
+    famille = carte.split("-")[0]
+    candidats += sorted(verificateur.parent.glob(f"oracle_{famille}.py"))
+    dossier_carte = racine / "tasks" / "dev" / carte
+    for motif in ("oracle-cache.json", "verify.md", "anchor-*.md", "temoins/*"):
+        candidats += sorted(dossier_carte.glob(motif))
+    vus, manifeste = set(), []
+    for f in candidats:
+        if not f.is_file() or f in vus:
+            continue
+        vus.add(f)
+        manifeste.append({
+            "path": f.resolve().relative_to(racine.resolve()).as_posix(),
+            "sha256": hashlib.sha256(f.read_bytes()).hexdigest(),
+        })
+    return sorted(manifeste, key=lambda x: x["path"])
+
+
+def version_verificateur(carte: str) -> str:
+    """Étiquette `verify-vM` déclarée par la carte"""
+    md = Path(__file__).parent.parent / "tasks" / "dev" / carte / "task.md"
+    try:
+        m = re.search(r"\bverify-v(\d+)\b", md.read_text(encoding="utf-8"))
+    except OSError:
+        return "inconnue"
+    return f"verify-v{m.group(1)}" if m else "inconnue"
+
+
+def descripteur_environnement() -> dict:
+    """Environnement du vérificateur, épinglé (R-015)"""
+    sys.path.insert(0, str(Path(__file__).parent))
+    from moteur_rendu import descripteur
+
+    return descripteur()
+
+
+def noter_aveugle(dossier: Path, verificateur: Path, delai: int = 180) -> dict | None:
+    """Noter un run sans que le vérificateur puisse voir de quel candidat il vient.
+
+    R-010 : la réponse est recopiée sous un nom neutre, dans un dossier
+    temporaire dont le chemin ne contient ni alias ni numéro de run. Invoquer le
+    vérificateur directement depuis `runs/<carte>__<alias>__r<n>/` reste
+    diagnostique et n'est pas éligible à une page validée.
+
+    Un dépassement de délai est un résultat, pas une panne : une page qui
+    recalcule toute la trajectoire à chaque appel dépasse le budget de la carte,
+    et c'est un échec du candidat. Un run normal se vérifie en moins d'une
+    seconde ; 180 s laissent trois ordres de grandeur de marge. C'est ici, et
+    pas dans le vérificateur, que le budget est opposable : Playwright
+    n'interrompt pas du JavaScript synchrone
+    """
+    source = dossier / "response.md"
+    if not source.is_file():
+        return None
+    with tempfile.TemporaryDirectory(prefix="notation-") as tmp:
+        neutre = Path(tmp) / NOM_NEUTRE
+        shutil.copyfile(source, neutre)
+        try:
+            out = subprocess.run(["uv", "run", str(verificateur), str(neutre)],
+                                 capture_output=True, text=True, timeout=delai)
+        except subprocess.TimeoutExpired:
+            return {"niveau_atteint": 0, "niveaux": {}, "frontiere": "A1_api_totale",
+                    "mesures": {"depassement_temps_s": delai},
+                    "verdict": "FAIL", "cause": "budget de temps dépassé"}
+    if out.returncode != 0:
+        # Le vérificateur a refusé de noter : environnement non conforme, ou
+        # défaut d'instrument. Ce n'est pas une note nulle du candidat
+        return {"_instrument": (out.stderr or "").strip()[-300:] or f"code {out.returncode}"}
+    try:
+        return json.loads(out.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def etat_terminal(dossier: Path, meta: dict | None, note: dict | None) -> tuple[str, dict]:
+    """Rendre l'état R-013 d'un run tenté, et ce qui le justifie.
+
+    Les cinq états sont exclusifs. `MISSING` n'est pas décidable ici : il porte
+    sur un run planifié dont aucun dossier n'existe, et se déduit plus haut
+    """
+    for etat in ("INELIGIBLE", "INFRA_ERROR"):
+        marqueur = dossier / etat
+        if marqueur.exists():
+            try:
+                corps = json.loads(marqueur.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                corps = {}
+            return etat, {"motif": corps.get("motif"), "detail": corps.get("detail")}
+
+    if (dossier / "FAILED").exists() and not (dossier / "COMPLETE").exists():
+        # Un appel parti qui n'a pas rendu de sortie scoreable. Les tentatives
+        # autorisées sont gérées par le lanceur ; à la clôture, ce qui reste
+        # sans COMPLETE a épuisé ce qui lui était accordé
+        motif = (dossier / "FAILED").read_text(encoding="utf-8").splitlines()[0]
+        return "INFRA_ERROR", {"motif": motif}
+
+    if not (dossier / "COMPLETE").exists():
+        return "INFRA_ERROR", {"motif": "run interrompu, aucun marqueur COMPLETE"}
+
+    if note is not None and "_instrument" in note:
+        return "UNKNOWN", {"motif": "l'instrument a refusé de noter",
+                           "detail": note["_instrument"]}
+    if note is None:
+        return "UNKNOWN", {"motif": "le vérificateur n'a pas rendu de résultat lisible"}
+
+    m = meta or {}
+    if m.get("finish_reason") == "length":
+        # R-013 : distinguer un arrêt prématuré du fournisseur d'un épuisement
+        # réel du budget préenregistré. Sans cette distinction, une coupure de
+        # fournisseur se lisait comme une faute du candidat
+        budget = ((m.get("params") or {}).get("max_tokens")
+                  or (m.get("budget_sortie") or {}).get("max_tokens"))
+        consomme = (m.get("usage") or {}).get("completion_tokens")
+        if not isinstance(consomme, int) or not isinstance(budget, int) or consomme < budget:
+            return "UNKNOWN", {"motif": "finish_reason=length sous le budget résolu",
+                               "detail": f"completion_tokens={consomme}, max_tokens={budget}"}
+        return "SCORED", {"verdict": "FAIL",
+                          "motif": "budget de sortie épuisé, arrêt prouvé"}
+
+    return "SCORED", {"verdict": note.get("verdict")}
+
+
+def runs_attendus(racine: Path, conf: dict | None, carte: str, alias_vus: set[str]) -> dict:
+    """Plan de campagne : quels runs auraient dû exister.
+
+    Sans `campaign.toml`, le plan se déduit de ce qui a été collecté, ce qui ne
+    peut jamais révéler un `MISSING`. Le fichier de campagne est donc la seule
+    source honnête du plan, et son absence est signalée
+    """
+    if conf and conf.get("candidats") and conf.get("runs"):
+        return {"source": "campaign.toml",
+                "alias": sorted(conf["candidats"]),
+                "runs": list(range(1, int(conf["runs"]) + 1))}
+    return {"source": "déduit des runs présents, MISSING indétectable",
+            "alias": sorted(alias_vus), "runs": [1, 2, 3, 4]}
+
+
+def main() -> int:
+    if len(sys.argv) < 3:
+        print(__doc__, file=sys.stderr)
+        return 2
+    carte, dossiers = sys.argv[1], [Path(d) for d in sys.argv[2:]]
+    verificateur = Path(__file__).parent / f"verifier_{carte.split('-')[0]}.py"
+    if not verificateur.exists():
+        print(f"vérificateur introuvable : {verificateur}", file=sys.stderr)
+        return 1
+
+    conf = None
+    for d in dossiers:
+        if (d / "campaign.toml").is_file():
+            conf = tomllib.loads((d / "campaign.toml").read_text(encoding="utf-8"))
+            break
+
+    runs: list[dict] = []
+    vus: set[tuple[str, int]] = set()
+    alias_vus: set[str] = set()
+    for d in dossiers:
+        for dossier in sorted(d.glob(f"{carte}__*")):
+            if not dossier.is_dir():
+                continue
+            parties = dossier.name.split("__")
+            alias = parties[1] if len(parties) > 1 else "?"
+            numero = int(re.sub(r"\D", "", parties[2])) if len(parties) > 2 else 0
+            alias_vus.add(alias)
+            meta_f = dossier / "meta.json"
+            m = json.loads(meta_f.read_text(encoding="utf-8")) if meta_f.is_file() else None
+
+            note = noter_aveugle(dossier, verificateur) if (dossier / "COMPLETE").exists() else None
+            etat, justif = etat_terminal(dossier, m, note)
+
+            ligne: dict[str, Any] = {k: (m or {}).get(k) for k in CHAMPS_RUN}
+            ligne["alias"] = alias
+            ligne["run"] = numero
+            ligne["tentative"] = parties[3][1:] if len(parties) > 3 else "1"
+            ligne["etat"] = etat
+            ligne.update({k: v for k, v in justif.items() if v is not None})
+            p = (m or {}).get("params") or {}
+            ligne["max_tokens"] = p.get("max_tokens")
+            ligne["source_budget"] = ((m or {}).get("budget_sortie") or {}).get("source")
+            ligne["reasoning_effort"] = (p.get("reasoning") or {}).get("effort")
+            ligne["reasoning_max_tokens"] = (p.get("reasoning") or {}).get("max_tokens")
+            u = (m or {}).get("usage") or {}
+            ligne["reasoning_tokens"] = (u.get("completion_tokens_details") or {}).get("reasoning_tokens")
+            ligne["completion_tokens"] = u.get("completion_tokens")
+            if note and "_instrument" not in note:
+                ligne["niveau"] = note.get("niveau_atteint")
+                ligne["paliers_total"] = len(note.get("niveaux") or {})
+                ligne["frontiere"] = note.get("frontiere")
+                ligne["ecart_reference"] = (note.get("mesures") or {}).get("ecart_reference")
+                ligne["instant_reference_s"] = (note.get("mesures") or {}).get("instant_reference_s")
+                if note.get("cause"):
+                    ligne["cause"] = note["cause"]
+                    ligne["depassement_temps_s"] = (note.get("mesures") or {}).get("depassement_temps_s")
+            else:
+                ligne["niveau"] = None
+            # Seul un run `SCORED` porte un niveau opposable
+            if etat != "SCORED":
+                ligne["niveau_opposable"] = None
+            else:
+                ligne["niveau_opposable"] = ligne["niveau"]
+            runs.append(ligne)
+            vus.add((alias, numero))
+
+    # R-013 : un run planifié jamais tenté à la clôture est `MISSING`. Il n'a
+    # pas de dossier, donc rien ne le signalerait sans ce parcours du plan
+    plan = runs_attendus(dossiers[0], conf, carte, alias_vus)
+    # R-013 : « ce statut s'applique à tous les runs attendus du couple
+    # carte-configuration, sans appel ». Un seul run refusé au pré-vol rend donc
+    # les trois autres inéligibles eux aussi, et non manquants : la route ne
+    # deviendra pas conforme entre deux runs. Sans cette propagation, une
+    # configuration correctement refusée laissait trois `MISSING` qui bloquaient
+    # à jamais la page validée (revue du 2026-08-06)
+    ineligibles = {r["alias"] for r in runs if r["etat"] == "INELIGIBLE"}
+    # R-013a : un candidat retiré du panel après le gel du plan n'est ni en
+    # panne ni oublié, c'est une décision. Le déclarer dans `campaign.toml`
+    # évite de le maquiller en `INFRA_ERROR`, ce qui accuserait un fournisseur
+    # à la place d'une décision humaine, et bloquerait la page pour toujours
+    retraits = (conf or {}).get("retraits") or {}
+    for alias in plan["alias"]:
+        for n in plan["runs"]:
+            if (alias, n) in vus:
+                continue
+            if alias in retraits:
+                runs.append({"alias": alias, "run": n, "etat": "RETIRE",
+                             "motif": retraits[alias],
+                             "niveau": None, "niveau_opposable": None, "tentative": None})
+            elif alias in ineligibles:
+                runs.append({"alias": alias, "run": n, "etat": "INELIGIBLE",
+                             "motif": "propagé depuis un run refusé au pré-vol (R-013)",
+                             "niveau": None, "niveau_opposable": None, "tentative": None})
+            else:
+                runs.append({"alias": alias, "run": n, "etat": "MISSING",
+                             "motif": "run planifié jamais tenté à la clôture",
+                             "niveau": None, "niveau_opposable": None,
+                             "tentative": None})
+
+    # Une tentative n'est pas un run attendu. R-013 attribue un état unique au
+    # run attendu, pas à chacun de ses essais : un run repris après un échec de
+    # fournisseur et finalement scoré est `SCORED`, et ses tentatives ratées
+    # restent des pièces à conviction (R-024), pas des états de plus. Compter
+    # les dossiers plutôt que les runs faisait apparaître seize `INFRA_ERROR`
+    # là où il y avait quatre runs réussis après reprise
+    for r in runs:
+        if r["alias"] in retraits and r["etat"] in ("INFRA_ERROR", "MISSING"):
+            r["etat"], r["motif"] = "RETIRE", retraits[r["alias"]]
+
+    attendus_resolus: dict[tuple[str, int], dict] = {}
+    for r in runs:
+        cle = (r["alias"], r["run"])
+        courant = attendus_resolus.get(cle)
+        meilleur = r["etat"] == "SCORED"
+        if courant is None or (meilleur and courant["etat"] != "SCORED"):
+            attendus_resolus[cle] = r
+        elif courant["etat"] != "SCORED":
+            # à défaut de succès, la dernière tentative fait foi. Comparaison
+            # entière et non lexicographique : `"2" >= "10"` vaut True en
+            # chaînes, ce qui aurait retenu la mauvaise tentative au-delà de
+            # neuf essais (revue du 2026-08-06)
+            def rang(x: dict) -> int:
+                try:
+                    return int(x.get("tentative") or 1)
+                except (TypeError, ValueError):
+                    return 1
+
+            if rang(r) >= rang(courant):
+                attendus_resolus[cle] = r
+    for r in runs:
+        r["tentative_retenue"] = attendus_resolus.get((r["alias"], r["run"])) is r
+    runs_attendus_resolus = list(attendus_resolus.values())
+
+    # R-019 : niveau retenu au troisième meilleur des quatre runs, c'est-à-dire
+    # le niveau qu'au moins trois runs franchissent. Tolère un mauvais tirage et
+    # pas deux. R-020 : le candidat n'est classé que si tous ses runs attendus
+    # sont `SCORED` ; sinon il est présenté hors classement avec son manque
+    par_alias: dict[str, list] = {}
+    for r in runs_attendus_resolus:
+        par_alias.setdefault(r["alias"], []).append(r)
+
+    candidats = []
+    for alias, v in par_alias.items():
+        etats = [r["etat"] for r in v]
+        attendus = len(plan["runs"])
+        scores = [r for r in v if r["etat"] == "SCORED"]
+        niveaux = sorted((r["niveau_opposable"] for r in scores
+                          if r["niveau_opposable"] is not None), reverse=True)
+        tout_score = len(scores) == attendus and len(niveaux) == attendus
+        ineligible = "INELIGIBLE" in etats
+        hors_plan = alias not in plan["alias"]
+        retire = "RETIRE" in etats
+        couts = [r.get("cost_usd") or 0 for r in v if r.get("cost_usd") is not None]
+        durees = [r.get("duration_s") or 0 for r in v if r.get("duration_s") is not None]
+        candidats.append({
+            "alias": alias,
+            "model_served": next((r.get("model_served") for r in v if r.get("model_served")), None),
+            "provider_served": next((r.get("provider_served") for r in v if r.get("provider_served")), None),
+            "reasoning_effort": next((r.get("reasoning_effort") for r in v if r.get("reasoning_effort")), None),
+            "execution_manifest_hash": next((r.get("execution_manifest_hash") for r in v
+                                             if r.get("execution_manifest_hash")), None),
+            "etats": {e: etats.count(e) for e in sorted(set(etats))},
+            "runs_attendus": attendus,
+            "runs_scored": len(scores),
+            "niveaux": niveaux,
+            # R-020 : hors classement tant que tout n'est pas `SCORED`
+            # R-020 classe les candidats de la campagne, c'est-à-dire ceux du
+            # plan gelé. Un alias collecté hors plan est présenté avec ses
+            # niveaux mais reste hors classement : sinon un classement « de
+            # campagne » cesse d'être la projection de son plan, et n'importe
+            # quel dossier déposé sous `runs/` y entre (revue du 2026-08-06)
+            "hors_plan": hors_plan,
+            "classable": tout_score and not ineligible and not hors_plan and not retire,
+            "niveau_retenu": (niveaux[2] if tout_score and not hors_plan
+                              and len(niveaux) >= 3 else None),
+            "hors_classement": ("RETIRE" if retire
+                                else "INELIGIBLE" if ineligible
+                                else "absent du plan de campagne" if hors_plan
+                                else None if tout_score else "runs non scorés"),
+            "niveau_indicatif": min(niveaux) if niveaux else None,
+            "cout_moyen_usd": round(sum(couts) / len(couts), 6) if couts else None,
+            "duree_moyenne_s": round(sum(durees) / len(durees), 1) if durees else None,
+        })
+    # Les classables d'abord, par niveau retenu décroissant ; le reste ensuite,
+    # sans jamais mêler un niveau indicatif à un niveau retenu (R-020)
+    candidats.sort(key=lambda c: (0 if c["classable"] else 1,
+                                  -(c["niveau_retenu"] if c["niveau_retenu"] is not None else -1),
+                                  -(c["niveau_indicatif"] if c["niveau_indicatif"] is not None else -1),
+                                  c["alias"]))
+
+    # R-027 : la page n'est validée que si chaque run attendu de chaque candidat
+    # éligible porte `SCORED`. Le contrôle est fail-closed : il énumère ce qui
+    # manque au lieu de conclure sur ce qui est présent
+    non_termines = {}
+    for r in runs_attendus_resolus:
+        # Un run hors plan ne peut ni valider ni bloquer une page : il n'est pas
+        # un run attendu de cette campagne
+        if r["alias"] not in plan["alias"]:
+            continue
+        if r["etat"] not in ("SCORED", "INELIGIBLE", "RETIRE"):
+            non_termines.setdefault(r["etat"], []).append(f"{r['alias']}/r{r['run']}")
+    conformite = {
+        "page_validee": not non_termines and plan["source"] == "campaign.toml",
+        "blocages": non_termines,
+        "plan": plan,
+        "motif": ("aucun" if not non_termines and plan["source"] == "campaign.toml"
+                  else ("plan de campagne absent, un run manquant serait invisible"
+                        if plan["source"] != "campaign.toml"
+                        else "des runs attendus ne sont pas dans un état terminal scoré")),
+    }
+
+    # R-017 : compteurs dérivés des reçus, jamais saisis à la main. Un prompt est
+    # « parti » dès qu'un appel a atteint un fournisseur, succès ou échec ; les
+    # refus au pré-vol ne comptent pas, aucune donnée n'a quitté le poste. Le
+    # compte porte sur les tentatives et non sur les runs attendus : une reprise
+    # renvoie bel et bien la carte au fournisseur
+    partis = sum(1 for r in runs if r["etat"] in ("SCORED", "UNKNOWN")
+                 or (r["etat"] == "INFRA_ERROR" and r.get("motif") not in
+                     ("metadonnees_route_inatteignables",)))
+    cycle_de_vie = {
+        "prompts_partis": partis,
+        "unite": "tentatives ayant atteint un fournisseur, reprises comprises",
+        "runs_attendus": len(runs_attendus_resolus),
+        "campagnes": sorted({str(d) for d in dossiers}),
+        "campagnes_terminees": sum(1 for d in dossiers if (d / "campaign.toml").is_file()),
+        "regle": "R-017 : une carte à information courte participe à deux campagnes au maximum",
+    }
+
+    manifeste_juge = actifs_cote_juge(carte, verificateur)
+    verify_hash = empreinte(manifeste_juge)
+    env = descripteur_environnement()
+    contexte = {
+        "schema_version": SCHEMA_CONTEXTE,
+        "task_version": next((r.get("task_version") for r in runs if r.get("task_version")), None),
+        "prompt_hash": next((r.get("prompt_hash") for r in runs if r.get("prompt_hash")), None),
+        "verify_version": version_verificateur(carte),
+        "verify_hash": verify_hash,
+        "protocol_version": PROTOCOLE_VERSION,
+        "measurement_environment_hash": empreinte(env),
+        "confidentiality_regime": next((r.get("regime_confidentialite") for r in runs
+                                        if r.get("regime_confidentialite")), None),
+    }
+
+    print(json.dumps({
+        "carte": carte,
+        "verify_version": contexte["verify_version"],
+        "verify_hash": verify_hash,
+        "actifs_cote_juge": manifeste_juge,
+        "environnement_mesure": env,
+        "measurement_context": contexte,
+        "measurement_context_hash": empreinte(contexte),
+        "conformite": conformite,
+        "cycle_de_vie": cycle_de_vie,
+        "paliers_total": next((r.get("paliers_total") for r in runs if r.get("paliers_total")), None),
+        "runs": runs,
+        "candidats": candidats,
+    }, ensure_ascii=False, indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
