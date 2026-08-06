@@ -1,44 +1,280 @@
-# Model registry for campaigns: pick one with:
+# Registre des modèles pour les campagnes : choisir avec :
 #   uv run tools/collect.py tasks/dev/<slug> --alias <name> --run N
-# Fields: model (OpenRouter id), provider (pin slug), optional expect_provider
-# (served display name when it differs from the pin slug), optional
-# reasoning_max_tokens (sent as body reasoning.max_tokens when set).
-# Add or remove entries freely; the collector never loops over this file.
+# Champs : model (identifiant OpenRouter), provider (slug du pin),
+# expect_provider optionnel (nom d'affichage servi quand il diffère du slug),
+# reasoning_effort ou reasoning_max_tokens optionnel. Une valeur différente
+# exige un alias distinct
+# Ajouter ou retirer des entrées librement ; le collecteur ne boucle jamais sur ce fichier.
 #
-# Adding a model: check its hosts first —
+# Ajouter un modèle : vérifier d'abord ses hébergeurs
 #   curl -s https://openrouter.ai/api/v1/models/<id>/endpoints
-# and pin a host that does not train on request data (SPEC 2.2). If every
-# host trains on request data, the model is NOT benchmarkable: keep its entry
-# below, commented out, with the reason: do not loosen the account policy.
+# et épingler un hébergeur qui ne s'entraîne pas sur les données des requêtes
+# (RULES R-005). Si tous les hébergeurs s'entraînent, le modèle n'est PAS
+# benchmarkable : garder son entrée ci-dessous, commentée, avec la raison ;
+# ne jamais assouplir la politique du compte.
 #
-# Not benchmarkable (no non-training host): none so far
+# Non benchmarkables (aucun hébergeur sans entraînement) : aucun à ce jour
 
-# omit_params: sampling knobs the pinned endpoint rejects under
-# require_parameters (checked against /models/<id>/endpoints); the omission
-# is recorded in each run's meta.json
+# reasoning_max_tokens a été retiré des candidats de base le 2026-08-05 : le
+# paramètre était limitant chez Alibaba et ignoré chez Novita. Toute valeur
+# qualifiée vit désormais sous un alias distinct ; elle ne se mélange jamais au
+# candidat sans paramètre. Le budget de sortie max_tokens reste commun
 
-# First-party DeepSeek endpoint is excluded by the account's OpenRouter data
-# policy (no training on prompts): Novita fp8 is the compliant pin
-# reasoning supported on Novita (checked /endpoints 2026-08-04)
+# omit_params : réglages d'échantillonnage que l'endpoint épinglé rejette sous
+# require_parameters (vérifié contre /models/<id>/endpoints) ; l'omission est
+# consignée dans le meta.json de chaque run
+
+# L'endpoint DeepSeek first-party est exclu par la politique de données du
+# compte OpenRouter (pas d'entraînement sur les prompts) : Novita fp8 est le
+# pin conforme
+# Route : DeepSeek depuis le 2026-08-06, sur critère `selection-route/v2`.
+# Novita servait déjà en `fp8`, comme l'éditeur : à précision égale, la route
+# de celui qui publie le modèle fait référence. Aucune route en pleine
+# précision n'existe pour ce modèle, `fp8` est ce que tout le monde obtient
 [deepseek-v4-flash]
 model = "deepseek/deepseek-v4-flash-0731"
-provider = "novita"
-reasoning_max_tokens = 8192
+provider = "deepseek"
 
-# reasoning supported on Alibaba (checked /endpoints 2026-08-04)
+# reasoning supporté chez Alibaba (vérifié /endpoints 2026-08-04)
 [qwen3-8-max]
 model = "qwen/qwen3.8-max"
 provider = "alibaba"
-reasoning_max_tokens = 8192
 
-[laguna-s-2-1]
-model = "poolside/laguna-s-2.1"
-provider = "poolside"
-omit_params = ["seed", "top_p"]
+# [laguna-s-2-1]
+# model = "poolside/laguna-s-2.1"
+# provider = "poolside"
+# omit_params = ["seed", "top_p"]
 
-# permanent reference candidate, see RUNBOOK; the endpoint rejects
-# temperature/top_p (reasoning family), omission recorded in meta.json
+# # candidat référent permanent ; l'endpoint rejette
+# # temperature/top_p (famille reasoning), omission consignée dans meta.json
+# Aucun suffixe d'effort : ce candidat n'envoie aucun `reasoning_effort` et le
+# niveau que le fournisseur applique par défaut n'a jamais été mesuré. Le
+# nommer « default » laissait croire à un réglage nommé qui n'existe pas ; le
+# nommer « medium » serait pire, ce serait inventer la valeur. Dès que la sonde
+# d'efforts aura identifié le niveau réellement appliqué, cet alias prend son nom
 [reference-gpt-5-6]
 model = "openai/gpt-5.6-sol"
 provider = "openai"
 omit_params = ["temperature", "top_p"]
+
+# même modèle, effort de raisonnement high. L’ancienne sonde employait l’alias
+# ambigu reference-gpt-5-6-max ; le registre courant nomme la valeur réelle
+[reference-gpt-5-6-high]
+model = "openai/gpt-5.6-sol"
+provider = "openai"
+omit_params = ["temperature", "top_p"]
+reasoning_effort = "high"
+
+# effort xhigh : accepté par l'API, mais une valeur inconnue peut être acceptée
+# puis ignorée en silence. La vérification est la comparaison de consommation de
+# raisonnement avec l'alias high sur la même carte : si elle ne diffère pas,
+# l'effort n'a pas été appliqué et l'alias doit être retiré
+[reference-gpt-5-6-xhigh]
+model = "openai/gpt-5.6-sol"
+provider = "openai"
+omit_params = ["temperature", "top_p"]
+reasoning_effort = "xhigh"
+
+# --- petits modèles, ajoutés le 2026-08-04 pour la sonde de plancher de difficulté ---
+# Question posée : un petit modèle tombe-t-il dans les pièges d'engagement comme
+# les trois plus gros ? S'il n'y tombe pas, la carte ne mesure rien.
+# /endpoints n'expose plus de data_policy par endpoint ; la conformité repose
+# sur le réglage de compte « pas d'entraînement sur les requêtes » (RULES R-005)
+
+# --- élargissement du panel, 2026-08-04 ---
+# Couverture voulue : US, CN, UE. Chaque entrée est épinglée sur un hébergeur
+# qui supporte seed, sans quoi la graine fixe de campagne ne tiendrait pas
+
+# CN, sorti le 2026-07-16
+
+# US, sorti le 2026-07-08 ; aucun effort envoyé, distinct de high par la
+# consommation de raisonnement mesurée. Le niveau appliqué par défaut reste
+# inconnu, donc l'alias reste sans suffixe
+[grok-4-5]
+model = "x-ai/grok-4.5"
+provider = "xai"
+
+# CN, sorti le 2026-06-16
+# RETIRÉ du panel le 2026-08-04 : 25 minutes par appel sur la carte pentagone,
+# contre 3,5 min pour grok-4.5. La lenteur est consignée comme diagnostic,
+# le modèle ne participe plus aux campagnes
+# [glm-5-2]
+# model = "z-ai/glm-5.2"
+# provider = "novita"
+
+# dense 27B, sorti le 2026-04-27
+# Candidat historique sans paramètre de raisonnement : aucun jeton de
+# raisonnement déclaré par l’endpoint lors de la sonde, niveau retenu 1
+# [qwen3-6-27b]
+# model = "qwen/qwen3.6-27b"
+# provider = "alibaba"
+
+# # Même modèle et même route avec reasoning.max_tokens=32768. Candidat distinct :
+# # l’endpoint a déclaré des jetons de raisonnement. Rejeu du 2026-08-05 avec le
+# # vérificateur courant : niveaux 10 et 1, donc niveau retenu 1. Le paramètre ne
+# # démontre aucune amélioration stable ni le mécanisme interne du modèle
+# [qwen3-6-27b-r32768]
+# model = "qwen/qwen3.6-27b"
+# provider = "alibaba"
+# reasoning_max_tokens = 32768
+
+# # 8B le plus récent disponible, sorti le 2026-04-30 ; pas de paramètre reasoning
+# # [granite-4-1-8b]
+# # model = "ibm-granite/granite-4.1-8b"
+# # provider = "coreweave"
+
+# # # sorti le 2025-12-02, huit mois d'âge au moment du test : gardé comme témoin,
+# # # son âge est une limite connue de la comparaison
+# # [ministral-8b]
+# # model = "mistralai/ministral-8b-2512"
+# # provider = "mistral"
+
+# US, sorti le 2026-06-09 ; second modèle frontière du panel
+# L'effort de raisonnement fait partie de l'identité du candidat, au même titre
+# que la route. Comparer un modèle à effort maximal contre un autre à son effort
+# par défaut mesure aussi les réglages. Un alias par triplet modèle, route et
+# effort ; jamais d'effort implicite sur un modèle qui expose ce paramètre
+[fable-5-high]
+model = "anthropic/claude-fable-5"
+provider = "anthropic"
+omit_params = ["seed", "temperature", "top_p"]
+reasoning_effort = "high"
+
+[fable-5-medium]
+model = "anthropic/claude-fable-5"
+provider = "anthropic"
+omit_params = ["seed", "temperature", "top_p"]
+reasoning_effort = "medium"
+
+[fable-5-xhigh]
+model = "anthropic/claude-fable-5"
+provider = "anthropic"
+omit_params = ["seed", "temperature", "top_p"]
+reasoning_effort = "xhigh"
+
+[grok-4-5-high]
+model = "x-ai/grok-4.5"
+provider = "xai"
+reasoning_effort = "high"
+
+# Opus 5, ajouté le 2026-08-05 pour compléter la couverture Anthropic
+[opus-5-high]
+model = "anthropic/claude-opus-5"
+provider = "anthropic"
+omit_params = ["seed", "temperature", "top_p"]
+reasoning_effort = "high"
+
+[opus-5-xhigh]
+model = "anthropic/claude-opus-5"
+provider = "anthropic"
+omit_params = ["seed", "temperature", "top_p"]
+reasoning_effort = "xhigh"
+
+# Panel élargi le 2026-08-05. Les quatre petits modèles sortent du panel général :
+# ils seront testés sur des cartes dédiées à leur catégorie de poids
+[mistral-medium-3-5]
+model = "mistralai/mistral-medium-3-5"
+provider = "mistral"
+
+# Les quatre suivants : provider épinglé sur le fournisseur de premier rang du
+# modèle, et `seed` omis parce que leurs endpoints ne l'exposent pas
+[mimo-v2-5]
+model = "xiaomi/mimo-v2.5"
+provider = "xiaomi"
+omit_params = ["seed"]
+
+[minimax-m3]
+model = "minimax/minimax-m3"
+provider = "minimax"
+omit_params = ["seed"]
+
+# Route de premier rang DeepSeek, refusée sous le régime `retenu` : elle
+# s'entraîne sur les données des requêtes. Accessible sous `--regime expose`,
+# le seul régime des cartes déjà publiques (R-005 scindée le 2026-08-05)
+[deepseek-v4-pro]
+model = "deepseek/deepseek-v4-pro"
+provider = "deepseek"
+omit_params = ["seed"]
+
+# Route : GMICloud depuis le 2026-08-06, sur critère `selection-route/v2`.
+# Seul cas du panel où une route en pleine précision existe réellement : elle
+# déclare `bf16` là où l'éditeur lui-même sert en `fp8`. Elle gagne aussi sur
+# les deux autres axes, 253 952 jetons de complétion contre 128 000, et elle
+# accepte tout le contrat d'échantillonnage quand `tencent` refusait `top_p`
+# et `seed`. Le seul point où elle perd est de ne pas être l'éditeur, ce que
+# le critère place après la précision, précisément pour ce cas
+[hy3]
+model = "tencent/hy3"
+provider = "gmicloud"
+
+# Kimi K3 sur routes alternatives, ajoutées le 2026-08-05. La route Morph rend
+# 429 « temporarily rate-limited upstream » sur douze tentatives consécutives.
+# Sous R-003 et R-004 une route différente est un candidat différent : ces
+# alias ne se comparent pas à `kimi-k3` sur Morph, ils s'ajoutent au tableau
+
+# BaseTen impose top_p : « Cannot override enforced sampling params »
+
+# Sonde d'effort, 2026-08-05. `default` consomme environ 2833 jetons de
+# raisonnement contre 8650 en `high` : GPT 5.6-sol raisonne donc toujours, même
+# sans paramètre. Ces alias servent à identifier quelle valeur nommée
+# correspond au défaut, en comparant la consommation sur la même carte
+
+# Kimi K3 expose reasoning_effort. Vérifier si `max` est accepté et distinct
+
+# Kimi K3, 2026-08-05. Le candidat sans effort déclaré est retiré : son défaut
+# a consommé 23 207 puis 43 422 jetons de raisonnement sur deux runs identiques.
+# Un effort qui varie du simple au double n'est pas un candidat, c'est un tirage
+#
+# Route : Wafer depuis le 2026-08-06, sur critère `selection-route/v2`.
+# Modal avait été retenue pour son débit, sans voir qu'elle sert le modèle en
+# `mxfp4`, une quantification sur quatre bits : le débit ne compte pas ici, la
+# précision des poids si. Wafer déclare `fp8` et accepte tous les paramètres du
+# contrat, seed compris. Aucune route non quantifiée n'existe pour ce modèle,
+# `moonshotai` sert lui-même en `mxfp4` : `fp8` est le mieux disponible et
+# l'écart au modèle de référence est assumé, pas ignoré.
+# Les douze 429 de Morph du 2026-08-05 n'étaient pas une route morte : le reçu
+# annonçait `retry_after_seconds: 2` sur un pool partagé, et le lanceur a
+# renvoyé les trois tentatives en quelques secondes. Corrigé le 2026-08-06
+#
+# Un seul alias, `max`. `kimi-k3-high` a été retiré le 2026-08-06 : sa collecte
+# n'a abouti que sur deux runs sur quatre là où `max` en a complété quatre, sur
+# la même route et au même moment. Le motif du retrait est le rythme que ce
+# fournisseur impose, pas un résultat observé : aucun des deux alias n'était
+# noté au moment de la décision (R-013a)
+[kimi-k3-max]
+model = "moonshotai/kimi-k3"
+provider = "wafer"
+reasoning_effort = "max"
+
+# --- Muse Spark 1.2, ajouté le 2026-08-06 ---
+# Sondé avant ajout, comme l'exige la discipline sur les niveaux de raisonnement.
+# Contrairement à la présomption de départ, ce modèle EXPOSE des niveaux : les
+# sept valeurs essayées sont toutes acceptées.
+#
+#   effort      jetons de raisonnement (3 tirages)
+#   (aucun)     2787  3335  3511
+#   minimal     1106  1251  1400
+#   low         1690  1979  2174
+#   medium      2093  2378  2899
+#   high        2849  2891  3670
+#   xhigh       3583  3715  3836
+#   max         2817  3343  3413
+#
+# Un seul niveau retenu, `max`. On mesure le haut de gamme de chaque modèle,
+# pas son échelle complète : ouvrir `minimal` et `low` ici obligerait à les
+# ouvrir chez OpenAI et Anthropic, et le panel deviendrait ingérable.
+#
+# Le choix de `max` plutôt que `high` évite au passage un problème non résolu :
+# sur trois tirages, les plages de `high`, `xhigh` et `max` se recouvrent, et
+# rien ne prouvait qu'ils soient des candidats distincts au sens de R-003. Une
+# seconde sonde à six tirages a été coupée par un 429 du fournisseur. Avec un
+# seul alias, la question ne se pose plus.
+#
+# Route : `meta`, seule route existante, celle de l'éditeur, précision non
+# déclarée, 1 040 384 jetons de complétion. Elle refuse `seed`.
+
+[muse-spark-1-2-max]
+model = "meta/muse-spark-1.2"
+provider = "meta"
+omit_params = ["seed"]
+reasoning_effort = "max"
