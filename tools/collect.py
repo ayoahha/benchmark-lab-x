@@ -2,24 +2,26 @@
 # requires-python = ">=3.12"
 # dependencies = ["requests"]
 # ///
-"""Call collector (SPEC section 2.1).
+"""Collecteur d'un appel direct, selon R-004.
 
-Loads one task's prompt and input files, makes ONE OpenRouter call with a
-pinned provider, records the raw response and metadata, and stops.
-No scoring, no parsing, no task loop, no retry.
+Charge les consignes et entrées d'une carte, effectue un appel OpenRouter sur
+un provider épinglé, écrit la réponse et son reçu, puis s'arrête. Il ne note
+pas, ne boucle pas et ne relance pas.
 
-Exit codes (stable):
-    0  success
-    1  usage / bad arguments
-    2  API key missing
-    3  task directory invalid
-    4  prompt assembly failed
-    5  HTTP / transport error
-    6  API returned an error object
-    7  response failed structural validation
-    8  provider_served or model_served mismatch (run invalid)
-    9  run directory already exists
-   10  I/O failure after reservation
+Codes de sortie stables :
+    0  succès
+    1  arguments invalides
+    2  clé API absente
+    3  dossier de carte invalide
+    4  assemblage du prompt impossible
+    5  erreur HTTP ou transport
+    6  erreur renvoyée par l'API
+    7  réponse structurellement invalide
+    8  modèle ou provider servi différent du pin
+    9  dossier de run déjà présent
+   10  erreur d'entrée-sortie après réservation
+   11  route non conforme au pré-vol, INELIGIBLE sans appel (R-004, R-025)
+   12  métadonnées de route inatteignables, INFRA_ERROR sans appel (R-013)
 
 Usage:
     uv run tools/collect.py tasks/dev/<slug> \
@@ -41,11 +43,24 @@ from typing import Any, NoReturn
 
 import requests
 
+sys.path.insert(0, str(Path(__file__).parent))
+from empreintes import empreinte  # noqa: E402
+
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Judge-side files never sent to the model
 EXCLUDED = {"task.md", "verify.md", "prompt.txt"}
 # Files matching these prefixes are also never sent
 EXCLUDED_PREFIXES = ("anchor-",)
+
+# Backend réellement traversé. Constante aujourd'hui, mais consignée : R-003
+# distingue deux backends comme deux candidats, ce qui suppose que le reçu
+# nomme celui qui a servi au lieu de le laisser implicite dans le code
+BACKEND = "openrouter"
+# Le protocole désigne l'ensemble indissociable collecte + notation (ARD §2.2) :
+# tout changement de l'une des deux parties l'incrémente
+PROTOCOLE_VERSION = "benchmark-lab-x/protocol/v1"
+COLLECTEUR_VERSION = "collect.py/v2"
+SCHEMA_MANIFESTE = "benchmark-lab-x/execution-manifest/v1"
 
 # Stable exit codes
 EXIT_OK = 0
@@ -59,6 +74,8 @@ EXIT_VALIDATION = 7
 EXIT_ROUTE_MISMATCH = 8
 EXIT_EXISTS = 9
 EXIT_IO = 10
+EXIT_INELIGIBLE = 11
+EXIT_INFRA = 12
 
 
 def die(code: int, msg: str) -> NoReturn:
@@ -100,15 +117,12 @@ def is_excluded(name: str) -> bool:
 
 
 def assemble_prompt(task_dir: Path) -> tuple[str, dict[str, str], list[str]]:
-    """Build the user message byte-faithfully from card inputs.
+    """Assembler le message utilisateur sans réécrire les entrées de la carte
 
-    Assembly contract:
-    - Instructions come from prompt.txt (if present) or the quoted block under
-      "## Instructions visible to the model" in task.md, with only the leading
-      "> " quote markers stripped — body bytes otherwise unchanged (UTF-8 text)
-    - Each non-excluded *.md input is read as UTF-8 text with no rewriting and
-      appended under a "--- FILE: <name> ---" header in sorted filename order
-    - Returns (prompt, inputs_by_name, warnings)
+    Les consignes viennent de prompt.txt ou du bloc cité sous
+    « Consignes visibles par le modèle » dans task.md. Seul le préfixe de
+    citation est retiré. Chaque fichier Markdown non exclu est ensuite ajouté
+    dans l’ordre lexical. Retourne le prompt, les entrées et les avertissements
     """
     warnings: list[str] = []
     override = task_dir / "prompt.txt"
@@ -119,13 +133,14 @@ def assemble_prompt(task_dir: Path) -> tuple[str, dict[str, str], list[str]]:
             die(EXIT_PROMPT, "prompt.txt is empty")
     else:
         card = (task_dir / "task.md").read_bytes().decode("utf-8")
+        # Les cartes sont en français ; le titre suit le contrat tasks/TEMPLATE.md
         m = re.search(
-            r"^## Instructions visible to the model.*?\n(.*?)(?=^## )",
+            r"^## Consignes visibles par le modèle.*?\n(.*?)(?=^## )",
             card,
             re.DOTALL | re.MULTILINE,
         )
         if not m:
-            die(EXIT_PROMPT, "no 'Instructions visible to the model' section in task.md")
+            die(EXIT_PROMPT, "no 'Consignes visibles par le modèle' section in task.md")
 
         def dequote(line: str) -> str:
             # Remove exactly one "> " (or bare ">") quote prefix, nothing else
@@ -182,18 +197,38 @@ def redact_http_body(text: str) -> str:
 
 
 def normalize_cost_usd(usage: Any) -> float | None:
-    """Normalize provider cost fields to a float USD amount when present"""
+    """Coût réel de l'appel, en dollars.
+
+    `cost` vaut 0 sur les routes facturées en direct par le fournisseur plutôt
+    qu'en crédits OpenRouter (`is_byok`). Le coût réel est alors dans
+    `cost_details.upstream_inference_cost`, et retenir le zéro fausserait le
+    diagnostic de coût publié au titre de R-021. Observé le 2026-08-05 sur la
+    route de premier rang de DeepSeek : `cost = 0` pour 0,0176 $ réellement dus
+    """
     if not isinstance(usage, dict):
         return None
+    facture = None
     for key in ("cost", "total_cost", "cost_usd"):
         val = usage.get(key)
         if val is None:
             continue
         try:
-            return float(val)
+            facture = float(val)
+            break
         except (TypeError, ValueError):
             continue
-    return None
+    amont = None
+    details = usage.get("cost_details")
+    if isinstance(details, dict):
+        try:
+            amont = float(details.get("upstream_inference_cost"))
+        except (TypeError, ValueError):
+            amont = None
+    if facture is not None and facture > 0:
+        return facture
+    if amont is not None and amont > 0:
+        return amont
+    return facture
 
 
 def extract_provider_served(data: dict[str, Any]) -> str | None:
@@ -210,9 +245,11 @@ def extract_provider_served(data: dict[str, Any]) -> str | None:
 
 
 def validate_response(data: Any) -> tuple[str, dict[str, Any]]:
-    """Require choices and extract content; empty/whitespace is infrastructure-invalid
-    unless finish_reason=length (envelope says the budget ran out: the empty
-    output is recorded and attribution stays with the human judge)
+    """Exiger choices et extraire content
+
+    Une sortie vide est un défaut d’infrastructure, sauf si finish_reason vaut
+    length. Dans ce cas, elle est conservée et son imputabilité est décidée par
+    le contrôle de conformité selon R-013 et R-025
     """
     if not isinstance(data, dict):
         die(EXIT_VALIDATION, "response is not a JSON object")
@@ -234,7 +271,7 @@ def validate_response(data: Any) -> tuple[str, dict[str, Any]]:
         die(EXIT_API_ERROR, "finish_reason=error (HTTP 200 masking a failure)")
     content = message.get("content")
     finish_reason = first.get("finish_reason")
-    # finish_reason=length with null/empty content: model-attributable FAIL, still COMPLETE
+    # Une sortie vide avec finish_reason=length reste COMPLETE ; R-013 décide l’imputabilité
     if content is None:
         if finish_reason == "length":
             return "", first
@@ -288,6 +325,183 @@ def cleanup_or_fail(out: Path, reason: str, detail: str | None = None) -> None:
     mark_failed(out, reason, detail)
 
 
+def marquer_etat(out: Path, etat: str, motif: str, detail: dict[str, Any]) -> None:
+    """Poser un marqueur d'état terminal R-013, lisible par machine.
+
+    `FAILED` reste la preuve brute d'un appel qui a mal tourné ; il ne dit pas
+    dans quel état R-013 termine le run attendu. `INELIGIBLE` et `INFRA_ERROR`
+    sont ces états, et ils se distinguent : le premier signifie que la route
+    était non conforme avant toute tentative et vaut pour tous les runs du
+    couple carte-configuration, le second qu'aucune tentative autorisée n'a
+    abouti. Le corps est du JSON pour que l'agrégateur n'ait rien à deviner
+    """
+    corps = {"etat": etat, "motif": motif, "date": datetime.now(timezone.utc).isoformat()}
+    corps.update(detail)
+    try:
+        (out / etat).write_text(
+            json.dumps(corps, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        print(f"warning: could not write {etat} receipt: {exc}", file=sys.stderr)
+
+
+def regime_de_la_carte(task_md: Path) -> str | None:
+    """Régime de confidentialité déclaré par la carte, s'il l'est.
+
+    Le régime est une propriété de la carte, pas de la ligne de commande : une
+    carte du jeu retenu ne doit pas pouvoir être collectée sous un régime
+    permissif par oubli d'un drapeau. La ligne de commande ne peut que durcir
+    """
+    try:
+        texte = task_md.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r"^-\s*\*\*Régime de confidentialité\*\*\s*:\s*(\w+)", texte, re.M)
+    if not m:
+        return None
+    valeur = m.group(1).lower()
+    return {"exposé": "expose", "expose": "expose", "retenu": "retenu"}.get(valeur)
+
+
+def version_de_la_carte(task_md: Path) -> str | None:
+    """Étiquette `task-vN` déclarée par la carte (R-015).
+
+    Le reçu de collecte doit la conserver : sans elle, deux campagnes séparées
+    par une réécriture des consignes se comparent sans que rien ne le signale
+    """
+    try:
+        texte = task_md.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r"\btask-v(\d+)\b", texte)
+    return f"task-v{m.group(1)}" if m else None
+
+
+# Le budget de sortie doit laisser de la place au prompt : sur certaines routes
+# `max_completion_tokens` égale `context_length`, et demander tout le budget en
+# sortie fait dépasser le contexte total. Constaté le 2026-08-05 sur tencent/hy3,
+# qui déclare 262144 pour les deux : quatre runs perdus
+MARGE_PROMPT = 8192
+
+
+def _endpoint_epingle(endpoints: list[dict[str, Any]], provider: str) -> dict[str, Any] | None:
+    """Retrouver l'endpoint réellement épinglé parmi ceux du modèle.
+
+    Le pin de `models.toml` est un slug (`modal`, `xai`) ; l'API rend un nom
+    d'affichage (`Modal`, `xAI`) et une étiquette éventuellement suffixée par
+    la quantification (`modal/mxfp4`). Les trois formes sont rapprochées
+    """
+    cible = re.sub(r"[\s_]+", "-", provider.strip().lower())
+    for e in endpoints:
+        noms = {
+            re.sub(r"[\s_]+", "-", str(e.get("provider_name") or "").strip().lower()),
+            str(e.get("tag") or "").strip().lower(),
+            str(e.get("tag") or "").strip().lower().split("/")[0],
+        }
+        if cible in noms:
+            return e
+    return None
+
+
+def resoudre_budget(
+    model: str, provider: str, plancher: int, plafond: int, tentatives: int, pause: float = 3.0
+) -> dict[str, Any]:
+    """Budget de sortie résolu avant l'appel depuis ce que la route déclare (R-025).
+
+    Rend un verdict, jamais un nombre nu, parce que trois issues sont possibles
+    et qu'une seule autorise l'appel :
+
+    - `ok` : la route déclare une limite exploitable, bornée par le plafond
+    - `ineligible` : la route déclare moins que le plancher, ou n'existe pas.
+      R-025 l'exige sans appel. La version précédente faisait `max(plancher,
+      brut)` puis appelait quand même, ce qui envoyait au modèle un budget que
+      sa route n'accorde pas : le stimulus mesuré n'était plus celui déclaré
+    - `infra` : les métadonnées de route sont restées inatteignables après les
+      tentatives autorisées. Retomber sur le plancher reviendrait à inventer un
+      nombre sans source, ce que R-025 interdit tout autant
+
+    La résolution porte sur l'endpoint épinglé et sur lui seul. Prendre le
+    maximum sur tous les endpoints, comme le faisait la version précédente,
+    pouvait tirer le budget d'un fournisseur que l'appel ne traverse jamais
+    """
+    url = f"https://openrouter.ai/api/v1/models/{model}/endpoints"
+    dernier = ""
+    for essai in range(1, max(1, tentatives) + 1):
+        try:
+            r = requests.get(url, headers={"Accept": "application/json"}, timeout=15)
+            # Un 4xx autre que 429 est une non-conformité permanente, pas une
+            # panne : le modèle n'existe pas sous cet identifiant, et relancer
+            # trois fois ne le fera pas apparaître. R-004 en fait un INELIGIBLE
+            # au pré-vol, pas un INFRA_ERROR
+            if 400 <= r.status_code < 500 and r.status_code != 429:
+                return {"etat": "ineligible", "motif": "modele_inconnu_du_backend",
+                        "detail": f"HTTP {r.status_code} sur {model}"}
+            r.raise_for_status()
+            data = r.json().get("data", {})
+            break
+        except Exception as e:
+            dernier = f"{type(e).__name__}: {str(e)[:120]}"
+            if essai < tentatives:
+                print(f"  métadonnées de route indisponibles ({dernier}), "
+                      f"tentative {essai}/{tentatives}", file=sys.stderr)
+                time.sleep(pause * essai)
+    else:
+        # Cette requête est une lecture de métadonnées publiques : elle ne
+        # consomme aucun jeton et ne coûte rien. La borne protège la durée de
+        # la campagne, pas son budget
+        return {"etat": "infra", "motif": "metadonnees_route_inatteignables",
+                "detail": dernier, "tentatives": tentatives}
+
+    endpoints = data.get("endpoints") or []
+    ep = _endpoint_epingle(endpoints, provider)
+    if ep is None:
+        connus = sorted({str(e.get("tag") or e.get("provider_name")) for e in endpoints})
+        return {"etat": "ineligible", "motif": "provider_epingle_absent_de_la_route",
+                "detail": f"pin {provider!r} introuvable ; endpoints déclarés : {connus}"}
+
+    mc, ctx = ep.get("max_completion_tokens"), ep.get("context_length")
+    if isinstance(mc, int) and mc > 0:
+        brut, origine = mc, "max_completion_tokens"
+    elif isinstance(ctx, int) and ctx > 0:
+        # Source secondaire assumée et nommée : certains endpoints ne déclarent
+        # pas de limite de complétion mais bien un contexte total. Le nombre a
+        # alors une source vérifiable, ce que le plancher n'avait pas
+        brut, origine = ctx, "context_length"
+    else:
+        return {"etat": "ineligible", "motif": "route_sans_limite_declaree",
+                "detail": f"{ep.get('tag')} ne déclare ni max_completion_tokens ni context_length"}
+
+    if isinstance(ctx, int) and ctx > 0:
+        brut = min(brut, ctx - MARGE_PROMPT)
+
+    # `model_id` de l'endpoint est le seul identifiant daté qu'OpenRouter expose
+    # (`moonshotai/kimi-k3-20260715`) : c'est ce qui se rapproche le plus d'une
+    # révision au sens R-004. Il ne prouve pas un binaire, seulement un endpoint
+    # observé sous cette étiquette à cette date
+    # Quand l'endpoint répète l'identifiant demandé, il n'apporte aucune
+    # révision : consigner cette chaîne la ferait passer pour une information
+    # que le fournisseur n'a pas donnée
+    mid = ep.get("model_id")
+    # La quantification servie est une propriété structurelle de la route, au
+    # même titre que l'effort de raisonnement : elle change les poids réellement
+    # évalués. Elle entre donc au manifeste d'exécution, sans quoi deux mesures
+    # du même modèle en `bf16` et en `mxfp4` porteraient la même identité de
+    # configuration
+    commun = {"endpoint": ep.get("tag") or ep.get("provider_name"),
+              "quantization": ep.get("quantization") or "non déclarée",
+              "revision": mid if (mid and mid != model) else "opaque",
+              "declare": {"max_completion_tokens": mc, "context_length": ctx},
+              "marge_prompt": MARGE_PROMPT}
+    if brut < plancher:
+        return {"etat": "ineligible", "motif": "budget_de_route_sous_le_plancher",
+                "detail": f"la route accorde {brut} jetons de sortie, plancher {plancher}",
+                **commun}
+    budget = min(brut, plafond)
+    source = (f"route/{origine} ({brut})" if budget == brut
+              else f"plafond de campagne (la route accorde {brut} via {origine})")
+    return {"etat": "ok", "budget": budget, "source": source, **commun}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="benchmark-lab-x call collector")
     ap.add_argument("task_dir", type=Path)
@@ -304,12 +518,35 @@ def main() -> None:
         default=Path("models.toml"),
         help="registry used by --alias (default: ./models.toml)",
     )
-    ap.add_argument("--run", type=int, default=1, help="run number (1 or 2)")
+    ap.add_argument("--run", type=int, default=1, help="numéro de run, de 1 à 4")
     ap.add_argument("--attempt", type=int, default=1, help="attempt number after a FAILED run (evidence is never deleted)")
     ap.add_argument("--temperature", type=float, default=0.0)
-    # 16384: reasoning models spend their budget on reasoning tokens first;
-    # 4096 starved content on long cards (finish_reason=length, content null)
-    ap.add_argument("--max-tokens", type=int, default=16384)
+    # Le budget de sortie n'est plus une constante. À 16384 puis à 65536, des
+    # modèles ont consommé tout le budget en raisonnement et rendu zéro octet :
+    # le classement mesurait le plafond, pas les modèles. Or aucune route du
+    # panel ne descend en dessous de 128000 jetons de complétion, et deux en
+    # déclarent 1048576. Le plafond ne protégeait donc rien, il bloquait
+    # `auto` résout le budget avant l'appel, depuis ce que la route déclare :
+    # pas de relance, pas d'escalade, et le modèle reçoit d'emblée le maximum
+    # que son fournisseur autorise, borné par --plafond-tokens
+    ap.add_argument("--max-tokens", default="auto",
+                    help="budget de sortie : 'auto' (défaut, résolu depuis la route) ou un entier")
+    ap.add_argument("--plancher-tokens", type=int, default=65536,
+                    help="budget minimal exigé de la route ; en dessous, INELIGIBLE (défaut: 65536)")
+    ap.add_argument("--budget-tentatives", type=int, default=3,
+                    help="lectures des métadonnées de route avant INFRA_ERROR ; "
+                         "requête gratuite, la borne protège la durée (défaut: 3)")
+    # Régime de confidentialité, R-005 scindée le 2026-08-05
+    # `retenu` (défaut) : seules les routes qui ne s'entraînent pas sur les
+    # requêtes sont acceptables. C'est le régime des cartes du jeu retenu, dont
+    # une fuite ne coûte pas une carte mais toute la série de régression
+    # `expose` : les routes qui s'entraînent sur les requêtes sont acceptées,
+    # parce que la carte est déjà publique dans le dépôt et que la protection
+    # serait une ligne Maginot. Le provider servi reste consigné
+    ap.add_argument("--regime", choices=("retenu", "expose"), default="retenu",
+                    help="régime de confidentialité de la carte (défaut: retenu, le plus strict)")
+    ap.add_argument("--plafond-tokens", type=int, default=262144,
+                    help="budget maximal, borne le coût du pire cas (défaut: 262144)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument(
         "--timeout",
@@ -326,6 +563,7 @@ def main() -> None:
     args = ap.parse_args()
 
     reasoning_max_tokens: int | None = None
+    reasoning_effort: str | None = None
     if args.alias:
         if args.model or args.provider:
             die(EXIT_USAGE, "--alias replaces --model/--provider; do not mix them")
@@ -353,23 +591,52 @@ def main() -> None:
             if not isinstance(raw_rmt, int) or isinstance(raw_rmt, bool) or raw_rmt < 1:
                 die(EXIT_USAGE, "reasoning_max_tokens must be a positive integer")
             reasoning_max_tokens = raw_rmt
+        raw_eff = entry.get("reasoning_effort")
+        if raw_eff is not None:
+            # Liste blanche retirée le 2026-08-05 : elle refusait `max`, une
+            # valeur que certains fournisseurs exposent réellement, et le refus
+            # venait de nous et non de l'API. Une liste blanche locale sur un
+            # espace de valeurs que nous ne contrôlons pas rend certains
+            # candidats intestables sans qu'aucune mesure le justifie
+            # Le vrai garde-fou est ailleurs : une valeur peut être acceptée
+            # puis ignorée en silence, et seule la comparaison de consommation
+            # de jetons de raisonnement entre deux efforts le montre (R-003)
+            if not isinstance(raw_eff, str) or not raw_eff.strip():
+                die(EXIT_USAGE, "reasoning_effort must be a non-empty string")
+            reasoning_effort = raw_eff.strip()
     else:
         omit_params = []
     if not args.model or not args.provider:
         die(EXIT_USAGE, "--model and --provider are required (or --alias)")
 
-    if args.run not in (1, 2):
-        die(EXIT_USAGE, "--run must be 1 or 2 (campaign invariant)")
+    # Quatre runs par candidat depuis le 2026-08-05 : le niveau retenu est le
+    # troisième meilleur des quatre (R-019), ce qui tolère un mauvais tirage
+    if args.run not in (1, 2, 3, 4):
+        die(EXIT_USAGE, "--run must be between 1 and 4 (campaign invariant)")
     if args.attempt < 1:
         die(EXIT_USAGE, "--attempt must be >= 1")
     if args.timeout < 1:
         die(EXIT_USAGE, "--timeout must be >= 1")
-    if reasoning_max_tokens is not None and reasoning_max_tokens >= args.max_tokens:
-        die(EXIT_USAGE, "reasoning_max_tokens must be lower than --max-tokens")
-    if args.temperature != 0.0 or args.seed != 42 or args.max_tokens != 16384:
+    declare = regime_de_la_carte(Path(args.task_dir) / "task.md")
+    if declare == "retenu" and args.regime == "expose":
+        die(EXIT_USAGE, "la carte déclare le régime retenu : --regime expose est refusé (R-005a)")
+    if declare and args.regime == "retenu":
+        args.regime = declare
+    print(f"régime de confidentialité: {args.regime}"
+          f"{' (déclaré par la carte)' if declare else ' (défaut, la carte ne déclare rien)'}",
+          file=sys.stderr)
+
+    if args.max_tokens != "auto":
+        try:
+            int(args.max_tokens)
+        except ValueError:
+            die(EXIT_USAGE, "--max-tokens must be 'auto' or an integer")
+    if args.budget_tentatives < 1:
+        die(EXIT_USAGE, "--budget-tentatives must be >= 1")
+    if args.temperature != 0.0 or args.seed != 42:
         print(
-            "warning: sampling parameters deviate from campaign invariants "
-            "(temp 0, seed 42, max_tokens 16384) — recorded in meta.json",
+            "avertissement : les paramètres d'échantillonnage divergent du contrat "
+            "de campagne (température 0, seed 42) ; l'écart est consigné dans meta.json",
             file=sys.stderr,
         )
 
@@ -391,7 +658,11 @@ def main() -> None:
         print(f"warning: {w}", file=sys.stderr)
 
     slug = args.task_dir.name
-    model_slug = re.sub(r"[^a-zA-Z0-9.-]+", "-", args.model)
+    # Le candidat est le couple (modèle, route, effort de raisonnement), pas le
+    # seul modèle : deux alias du même modèle à des efforts différents sont deux
+    # candidats. Nommer le dossier sur le modèle seul les faisait entrer en
+    # collision et le second run était refusé
+    model_slug = re.sub(r"[^a-zA-Z0-9.-]+", "-", args.alias or args.model)
     suffix = f"__a{args.attempt}" if args.attempt > 1 else ""
     out = args.out_root / f"{slug}__{model_slug}__r{args.run}{suffix}"
     if out.exists():
@@ -409,6 +680,44 @@ def main() -> None:
     except OSError as exc:
         die(EXIT_IO, f"could not reserve {out}: {exc}")
 
+    # Le budget se résout après la réservation du dossier et avant l'appel : les
+    # deux verdicts d'arrêt de R-025 sont des états terminaux R-013 et doivent
+    # laisser un reçu quelque part. « Avant toute tentative » qualifie l'appel
+    # au modèle, pas la création du dossier
+    if args.max_tokens == "auto":
+        verdict = resoudre_budget(args.model, args.provider, args.plancher_tokens,
+                                  args.plafond_tokens, args.budget_tentatives)
+        if verdict["etat"] == "ineligible":
+            marquer_etat(out, "INELIGIBLE", verdict["motif"],
+                         {"regle": "R-025", "modele": args.model, "provider": args.provider,
+                          **{k: v for k, v in verdict.items() if k not in ("etat", "motif")}})
+            die(EXIT_INELIGIBLE,
+                f"route inéligible sans appel : {verdict['motif']} — {verdict.get('detail')}")
+        if verdict["etat"] == "infra":
+            marquer_etat(out, "INFRA_ERROR", verdict["motif"],
+                         {"regle": "R-013", "modele": args.model, "provider": args.provider,
+                          **{k: v for k, v in verdict.items() if k not in ("etat", "motif")}})
+            die(EXIT_INFRA,
+                f"métadonnées de route inatteignables après {args.budget_tentatives} "
+                f"tentatives : {verdict.get('detail')}")
+        budget, source_budget = verdict["budget"], verdict["source"]
+        budget_route = {k: verdict.get(k) for k in
+                        ("endpoint", "quantization", "revision", "declare", "marge_prompt")}
+    else:
+        budget, source_budget = int(args.max_tokens), "imposé en ligne de commande"
+        budget_route = {"endpoint": None, "quantization": "opaque", "revision": "opaque",
+                        "declare": None, "marge_prompt": None}
+    args.max_tokens = budget
+    print(f"budget de sortie: {budget} jetons, source: {source_budget}", file=sys.stderr)
+
+    if reasoning_max_tokens is not None and reasoning_max_tokens >= args.max_tokens:
+        marquer_etat(out, "INELIGIBLE", "reasoning_max_tokens_superieur_au_budget",
+                     {"regle": "R-025", "reasoning_max_tokens": reasoning_max_tokens,
+                      "max_tokens": args.max_tokens, "source_budget": source_budget})
+        die(EXIT_INELIGIBLE,
+            f"reasoning_max_tokens ({reasoning_max_tokens}) >= budget résolu "
+            f"({args.max_tokens}) : la configuration ne laisse aucun jeton de réponse")
+
     body: dict[str, Any] = {
         "model": args.model,
         "messages": [{"role": "user", "content": prompt}],
@@ -420,11 +729,16 @@ def main() -> None:
             "only": [args.provider],
             "allow_fallbacks": False,
             "require_parameters": True,
+            "data_collection": "allow" if args.regime == "expose" else "deny",
         },
         "usage": {"include": True},
     }
     if reasoning_max_tokens is not None:
         body["reasoning"] = {"max_tokens": reasoning_max_tokens}
+    # effort and max_tokens are mutually exclusive on OpenRouter's reasoning
+    # object: effort wins when the registry sets it
+    if reasoning_effort is not None:
+        body["reasoning"] = {"effort": reasoning_effort}
     # Documented deviation: some pinned endpoints reject require_parameters
     # when a sampling knob is unsupported (e.g. seed); the registry may omit
     # those knobs explicitly and the omission is recorded in meta.json
@@ -445,9 +759,11 @@ def main() -> None:
         {
             "model": args.model,
             "provider": args.provider,
-            "params": {k: body[k] for k in ("temperature", "top_p", "max_tokens", "seed", "reasoning") if k in body},
+            "regime_confidentialite": args.regime,
+        "params": {k: body[k] for k in ("temperature", "top_p", "max_tokens", "seed", "reasoning") if k in body},
             "timeout_s": args.timeout,
-            "payload_hash": payload_hash[:16],
+            "budget_sortie": {"max_tokens": args.max_tokens, "source": source_budget},
+            "payload_hash": payload_hash,
         },
         ensure_ascii=False,
     )
@@ -544,7 +860,7 @@ def main() -> None:
             (
                 f"route mismatch: model_served={model_served!r} "
                 f"(wanted {args.model!r}), provider_served={provider_served!r} "
-                f"(wanted {args.provider!r}); run invalid — "
+                f"(wanted {args.provider!r}); run invalid: "
                 f"folder marked FAILED under {out}"
             ),
         )
@@ -552,8 +868,10 @@ def main() -> None:
     finish_reason = first_choice.get("finish_reason")
     if finish_reason == "length":
         print(
-            "warning: finish_reason=length (output may be truncated; "
-            "attribution is the judge's call — see usage token split in meta.json)",
+            "warning: finish_reason=length; R-013 tranche à la notation en "
+            "comparant completion_tokens au budget RÉSOLU, pas au plancher : "
+            "au-dessus ou égal, le budget est prouvé épuisé et le run vaut FAIL ; "
+            "en dessous, le fournisseur a coupé tôt et le run vaut UNKNOWN",
             file=sys.stderr,
         )
 
@@ -587,17 +905,85 @@ def main() -> None:
     if "reasoning" in body:
         params["reasoning"] = body["reasoning"]
 
+    # Politique de données : R-004 demande de la consigner, mais l'API
+    # `/endpoints` d'OpenRouter n'expose plus `data_policy` par endpoint. Nous
+    # consignons donc ce que nous contrôlons réellement, la valeur demandée, et
+    # marquons `opaque` ce que le fournisseur ne publie plus. Voir le point
+    # ouvert de l'audit du 2026-08-06 : c'est la règle qui doit bouger, pas le
+    # code, si l'on veut mieux qu'un `opaque` ici
+    politique_donnees = {
+        "demandee": body["provider"]["data_collection"],
+        "route": "opaque",
+        "regime": args.regime,
+    }
+    # Chaque paramètre porte sa provenance (ARD §2.2) : `campaign` pour un
+    # réglage de campagne, `candidate` pour ce que le registre attache au
+    # candidat, `route_default` pour ce que la route impose
+    def provenance(nom: str) -> str:
+        if nom == "max_tokens":
+            return "route_default" if source_budget.startswith("route/") else "campaign"
+        return "candidate" if nom == "reasoning" else "campaign"
+
+    manifeste = {
+        "schema_version": SCHEMA_MANIFESTE,
+        "mode": "direct",
+        "model": {
+            "requested": args.model,
+            "served": model_served,
+            "revision": budget_route.get("revision") or "opaque",
+        },
+        "route": {
+            "backend": BACKEND,
+            "provider_requested": args.provider,
+            "provider_served": provider_served,
+            "quantization": budget_route.get("quantization") or "opaque",
+        },
+        "reasoning": {
+            "effort": reasoning_effort,
+            "max_tokens": reasoning_max_tokens,
+        },
+        "system_prompt_hash": None,  # aucun message système en mode direct
+        "parameters": {k: {"value": v, "source": provenance(k)} for k, v in params.items()},
+        "data_policy": politique_donnees,
+        "runner_version": COLLECTEUR_VERSION,
+        "protocol_version": PROTOCOLE_VERSION,
+        # L'environnement d'exécution du candidat est celui du fournisseur : il
+        # n'est pas observable depuis ici. `opaque` est la valeur prévue par
+        # l'ARD pour une information non publiée, et vaut mieux qu'un descripteur
+        # de notre hôte, qui décrirait la mauvaise machine
+        "environment_hash": "opaque",
+        "tools": [],
+        "agent": None,
+    }
+
     meta = {
         "task": slug,
+        "task_version": version_de_la_carte(args.task_dir / "task.md") or "inconnue",
         "run": args.run,
         "date": started.isoformat(),
         "duration_s": round(duration, 2),
+        "backend": BACKEND,
         "model_requested": args.model,
         "model_served": model_served,
+        "revision": budget_route.get("revision") or "opaque",
         "provider_pinned": args.provider,
         "provider_served": provider_served,
+        "quantization_servie": budget_route.get("quantization") or "opaque",
+        "regime_confidentialite": args.regime,
+        "politique_donnees": politique_donnees,
         "params": params,
         "params_omitted": sorted(omit_params),
+        # R-025 : la valeur ne suffit pas, sa provenance fait partie du reçu.
+        # Sans elle, un budget égal au plancher est indiscernable d'un budget
+        # relevé de force, et douze runs de la campagne de référence sont
+        # restés ambigus pour cette seule raison
+        "budget_sortie": {
+            "max_tokens": args.max_tokens,
+            "source": source_budget,
+            "plancher": args.plancher_tokens,
+            "plafond": args.plafond_tokens,
+            **budget_route,
+        },
         "timeout_s": args.timeout,
         "usage": usage,
         "cost_usd": cost_usd,
@@ -605,8 +991,16 @@ def main() -> None:
         "input_manifest": input_manifest,
         # Kept for older grid readers; same hashes as input_manifest
         "input_hashes": {name: info["sha256_16"] for name, info in input_manifest.items()},
-        "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
-        "payload_hash": payload_hash[:16],
+        # Empreintes complètes, 64 hexadécimaux, comme l'exige l'ARD §2.2. Les
+        # reçus antérieurs au 2026-08-06 les portent tronquées à 16 : elles ne
+        # se comparent pas entre les deux formats, ce que la version de
+        # protocole signale
+        "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "payload_hash": payload_hash,
+        "execution_manifest": manifeste,
+        "execution_manifest_hash": empreinte(manifeste),
+        "protocol_version": PROTOCOLE_VERSION,
+        "runner_version": COLLECTEUR_VERSION,
         "files_sent": sorted(input_manifest.keys()),
         "assembly": (
             "prompt.txt override"
@@ -643,6 +1037,6 @@ if __name__ == "__main__":
         main()
     except SystemExit:
         raise
-    except Exception as exc:  # noqa: BLE001 — last-resort path for reserved dirs
+    except Exception as exc:  # noqa: BLE001, voie ultime pour les dossiers réservés
         print(f"error: unexpected: {exc}", file=sys.stderr)
         raise SystemExit(EXIT_IO) from exc
