@@ -1,0 +1,89 @@
+{
+  "_lisez_moi": "Provenance des témoins au sens R-016. Un témoin ne qualifie un prédicat que si son producteur n'avait pas accès au vérificateur. Les sept témoins ci-dessous ont été écrits par l'auteur du vérificateur : ils sont déclarés tels quels, donc non qualifiants. Les remplacer par des témoins indépendants est un prérequis de la page validée, pas une formalité. Les niveaux attendus ne sont pas renseignés : ils n'ont pas été déclarés au moment où les témoins ont été écrits, et les poser aujourd'hui reviendrait à les déduire de ce que le vérificateur rend déjà, ce que R-016 interdit précisément.",
+  "_regle": "R-016",
+  "_etat": "incomplet, assumé",
+  "temoins": {
+    "anchor-T0-sans-simulate.md": {
+      "producteur": "auteur du vérificateur",
+      "acces_au_verificateur": true,
+      "consignes": "page sans fonction simulate, pour vérifier que l'absence d'interface est détectée",
+      "resultat_attendu": null,
+      "predicats_couverts": [
+        "A1_api_totale"
+      ],
+      "polarite": "negatif",
+      "_note_resultat_attendu": "non déclaré à la création du témoin ; aucun niveau attendu ne peut être reconstitué après coup sans le réinventer"
+    },
+    "anchor-T1-parabole.md": {
+      "producteur": "auteur du vérificateur",
+      "acces_au_verificateur": true,
+      "consignes": "trajectoire parabolique sans rebond, pour vérifier que le confinement est détecté",
+      "resultat_attendu": null,
+      "predicats_couverts": [
+        "C2_confinement"
+      ],
+      "polarite": "negatif",
+      "_note_resultat_attendu": "non déclaré à la création du témoin ; aucun niveau attendu ne peut être reconstitué après coup sans le réinventer"
+    },
+    "anchor-T2-mur-fixe.md": {
+      "producteur": "auteur du vérificateur",
+      "acces_au_verificateur": true,
+      "consignes": "murs immobiles au lieu du pentagone en rotation",
+      "resultat_attendu": null,
+      "predicats_couverts": [
+        "C10_confinement",
+        "C20_confinement"
+      ],
+      "polarite": "negatif",
+      "_note_resultat_attendu": "non déclaré à la création du témoin ; aucun niveau attendu ne peut être reconstitué après coup sans le réinventer"
+    },
+    "anchor-T3-pas-fixe.md": {
+      "producteur": "auteur du vérificateur",
+      "acces_au_verificateur": true,
+      "consignes": "intégration à pas fixe sans détection d'événement",
+      "resultat_attendu": null,
+      "predicats_couverts": [
+        "P_precision_ref"
+      ],
+      "polarite": "negatif",
+      "_note_resultat_attendu": "non déclaré à la création du témoin ; aucun niveau attendu ne peut être reconstitué après coup sans le réinventer"
+    },
+    "anchor-T4-bissection-grossiere.md": {
+      "producteur": "auteur du vérificateur",
+      "acces_au_verificateur": true,
+      "consignes": "bissection d'événement à tolérance grossière",
+      "resultat_attendu": null,
+      "predicats_couverts": [
+        "P_precision_ref"
+      ],
+      "polarite": "negatif",
+      "_note_resultat_attendu": "non déclaré à la création du témoin ; aucun niveau attendu ne peut être reconstitué après coup sans le réinventer"
+    },
+    "anchor-T4b-bissection-1e-8.md": {
+      "producteur": "auteur du vérificateur",
+      "acces_au_verificateur": true,
+      "consignes": "bissection d'événement à 1e-8, frontière attendue vers le milieu de l'échelle",
+      "resultat_attendu": null,
+      "predicats_couverts": [
+        "P_precision_ref"
+      ],
+      "polarite": "positif",
+      "_note_resultat_attendu": "non déclaré à la création du témoin ; aucun niveau attendu ne peut être reconstitué après coup sans le réinventer"
+    },
+    "anchor-T5-reference.md": {
+      "producteur": "auteur du vérificateur",
+      "acces_au_verificateur": true,
+      "consignes": "implémentation de référence, événementielle, précision maximale attendue",
+      "resultat_attendu": null,
+      "predicats_couverts": [
+        "P_precision_ref",
+        "C35_confinement",
+        "C55_confinement",
+        "C75_confinement"
+      ],
+      "polarite": "positif",
+      "_note_resultat_attendu": "non déclaré à la création du témoin ; aucun niveau attendu ne peut être reconstitué après coup sans le réinventer"
+    }
+  },
+  "_observation": "Au 2026-08-06, `anchor-T5-reference.md`, présenté comme l'implémentation de référence, atteint 20 paliers sur 51, sous les 43 du meilleur candidat mesuré. Soit ce témoin n'est pas une implémentation de haute précision, soit le haut de l'échelle verify-v3 n'est atteignable par aucun témoin connu. À trancher avant toute page validée."
+}
