@@ -33,11 +33,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import sys
 import time
 from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -45,6 +47,22 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent))
 from empreintes import empreinte  # noqa: E402
+from protocole_v2 import (  # noqa: E402
+    PROTOCOLE_VERSION as PROTOCOLE_V2,
+    SCHEMA_ATTEMPT,
+    SCHEMA_COLLECTION,
+    ContratV2Invalide,
+    RegistreBudget,
+    assembler_prompt_verrouille,
+    cellule_du_lock,
+    charger_json,
+    descripteur_environnement_runner,
+    empreinte_lock,
+    resultat_acquis_v2,
+    valider_autorisation_payante,
+    valider_environnement_observe,
+    valider_lock,
+)
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 # Judge-side files never sent to the model
@@ -301,6 +319,60 @@ def atomic_write_text(path: Path, text: str) -> None:
 # parameters (timeout, reasoning cap, hashes); set once in main after the
 # request body is final, empty before that point
 REQUEST_NOTE: str = ""
+V2_ATTEMPT_CONTEXT: dict[str, Any] | None = None
+
+
+def _cout_microdollars(cost_usd: float | None) -> int | None:
+    if cost_usd is None:
+        return None
+    try:
+        valeur = Decimal(str(cost_usd)) * Decimal(1_000_000)
+    except (InvalidOperation, ValueError):
+        return None
+    if valeur < 0:
+        return None
+    return math.ceil(valeur)
+
+
+def _compteur_jetons(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _recu_tentative(reason: str, result: str = "FAILED", cost_usd: float | None = None) -> dict[str, Any] | None:
+    if V2_ATTEMPT_CONTEXT is None:
+        return None
+    cause = {
+        "http_transport": "TRANSPORT_NO_HTTP_RESPONSE",
+        "http_429": "HTTP_429",
+        "http_503": "HTTP_503",
+    }.get(reason, reason.upper())
+    cout = _cout_microdollars(cost_usd)
+    http_recu = reason != "http_transport"
+    contenu_recu = result == "COMPLETE" or reason in {
+        "route_mismatch", "validation", "api_error", "empty_body", "invalid_json",
+        "length_without_usage", "key_leak_guard", "write_failed",
+    }
+    receipt = {
+        "schema_version": SCHEMA_ATTEMPT,
+        "protocol_version": PROTOCOLE_V2,
+        "campaign_lock_hash": V2_ATTEMPT_CONTEXT["campaign_lock_hash"],
+        "paid_authorization_sha256": V2_ATTEMPT_CONTEXT["paid_authorization_sha256"],
+        "collection_id": V2_ATTEMPT_CONTEXT["collection_id"],
+        "attempt": V2_ATTEMPT_CONTEXT["attempt"],
+        "result": result,
+        "cause_code": None if result == "COMPLETE" else cause,
+        "route_hash": V2_ATTEMPT_CONTEXT["route_hash"],
+        "http_response_received": http_recu,
+        "candidate_content_received": contenu_recu,
+        "cost_accounting": {
+            "status": "known" if cout is not None else "unknown",
+            "cost_microdollars": cout,
+            "reservation_id": V2_ATTEMPT_CONTEXT["reservation_id"],
+        },
+    }
+    if V2_ATTEMPT_CONTEXT.get("retry_after_seconds") is not None:
+        receipt["retry_after_seconds"] = V2_ATTEMPT_CONTEXT["retry_after_seconds"]
+    return receipt
 
 
 def mark_failed(out: Path, reason: str, detail: str | None = None) -> None:
@@ -316,6 +388,12 @@ def mark_failed(out: Path, reason: str, detail: str | None = None) -> None:
         if REQUEST_NOTE:
             body += "\nrequest: " + REQUEST_NOTE + "\n"
         (out / "FAILED").write_text(body, encoding="utf-8")
+        recu = _recu_tentative(reason)
+        if recu is not None:
+            atomic_write_text(
+                out / "attempt-receipt.json",
+                json.dumps(recu, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            )
     except OSError as exc:
         print(f"warning: could not write FAILED receipt: {exc}", file=sys.stderr)
 
@@ -560,11 +638,98 @@ def main() -> None:
         help="expected provider display name when it differs from the pin slug (e.g. pin google-vertex, served Google)",
     )
     ap.add_argument("--out-root", type=Path, default=Path("runs") / date.today().isoformat())
+    ap.add_argument("--campaign-lock", type=Path,
+                    help="campaign.lock.json v2, source directe d’exécution")
+    ap.add_argument("--collection-id",
+                    help="cellule exacte du campaign.lock v2")
+    ap.add_argument("--paid-authorization", type=Path,
+                    help="autorisation payante distincte liée au hash du lock")
+    ap.add_argument("--budget-ledger", type=Path,
+                    help="registre atomique où la tentative est déjà réservée")
+    ap.add_argument("--reservation-id",
+                    help="réservation exacte de cette tentative")
     args = ap.parse_args()
 
     reasoning_max_tokens: int | None = None
     reasoning_effort: str | None = None
-    if args.alias:
+    lock_v2: dict[str, Any] | None = None
+    cellule_v2: dict[str, Any] | None = None
+    lock_hash: str | None = None
+    locked_alias: str | None = None
+    task_file = "task.md"
+    protocol_version = PROTOCOLE_VERSION
+    runner_version = COLLECTEUR_VERSION
+    v2_demande = any((args.campaign_lock, args.collection_id, args.paid_authorization,
+                      args.budget_ledger, args.reservation_id))
+    if v2_demande:
+        if not all((args.campaign_lock, args.collection_id, args.paid_authorization,
+                    args.budget_ledger, args.reservation_id)):
+            die(EXIT_USAGE, "le mode v2 exige lock, collection-id, autorisation, registre et réservation")
+        if args.alias or args.model or args.provider:
+            die(EXIT_USAGE, "le mode v2 refuse alias, modèle et provider en ligne de commande")
+        try:
+            if args.campaign_lock.is_symlink() or args.paid_authorization.is_symlink() or args.budget_ledger.is_symlink():
+                raise ContratV2Invalide("lien symbolique interdit pour les artefacts de campagne")
+            campaign_dir_v2 = args.campaign_lock.resolve().parent
+            if args.paid_authorization.resolve().parent != campaign_dir_v2:
+                raise ContratV2Invalide("autorisation payante hors du dossier de campagne")
+            if args.budget_ledger.resolve().parent != campaign_dir_v2:
+                raise ContratV2Invalide("registre budget hors du dossier de campagne")
+            if args.out_root.resolve() != campaign_dir_v2:
+                raise ContratV2Invalide("out-root différent du dossier du campaign.lock")
+            lock_v2 = valider_lock(charger_json(args.campaign_lock), Path(__file__).parent.parent)
+            valider_environnement_observe(
+                lock_v2, "runner", descripteur_environnement_runner()
+            )
+            lock_hash = empreinte_lock(lock_v2)
+            valider_autorisation_payante(
+                charger_json(args.paid_authorization), lock_hash,
+                lock_v2["budget"]["cap_microdollars"],
+            )
+            cellule_v2 = cellule_du_lock(lock_v2, args.collection_id)
+            acquis = resultat_acquis_v2(campaign_dir_v2, args.collection_id)
+            if acquis is not None:
+                raise ContratV2Invalide(f"tentative interdite après résultat acquis: {acquis}")
+            attendu_task = (Path(__file__).parent.parent / lock_v2["task"]["task_dir"]).resolve()
+            if args.task_dir.resolve() != attendu_task:
+                raise ContratV2Invalide("task_dir différent du lock")
+            if args.attempt not in (1, 2, 3):
+                raise ContratV2Invalide("tentative v2 hors de la borne 1 à 3")
+            reservation_attendue = f"{args.collection_id}__a{args.attempt}"
+            if args.reservation_id != reservation_attendue:
+                raise ContratV2Invalide("reservation_id différent de la cellule et de la tentative")
+            ledger = RegistreBudget(
+                args.budget_ledger, lock_v2["budget"]["cap_microdollars"], lock_hash
+            ).etat()
+            reservation = ledger.get("reservations", {}).get(args.reservation_id)
+            if ledger.get("hold"):
+                raise ContratV2Invalide("registre budgétaire en HOLD")
+            if not isinstance(reservation, dict) or reservation.get("status") != "reserved":
+                raise ContratV2Invalide("réservation budgétaire absente ou non active")
+            if reservation.get("max_microdollars") != cellule_v2["max_cost_microdollars"]:
+                raise ContratV2Invalide("montant réservé différent du lock")
+        except ContratV2Invalide as exc:
+            die(EXIT_USAGE, f"HOLD v2 avant appel: {exc}")
+        locked_alias = cellule_v2["alias"]
+        args.model = cellule_v2["model"]
+        args.provider = cellule_v2["route"]["provider"]
+        args.expect_provider = cellule_v2["route"].get("expect_provider")
+        args.run = cellule_v2["run"]
+        args.max_tokens = str(cellule_v2["max_tokens"])
+        args.plafond_tokens = cellule_v2["max_tokens"]
+        params_v2 = cellule_v2["parameters"]
+        args.temperature = params_v2.get("temperature", 0.0)
+        args.seed = params_v2.get("seed", 42)
+        omit_params = [p for p in ("temperature", "top_p", "seed") if p not in params_v2]
+        reasoning_v2 = params_v2.get("reasoning")
+        if isinstance(reasoning_v2, dict):
+            reasoning_effort = reasoning_v2.get("effort")
+            reasoning_max_tokens = reasoning_v2.get("max_tokens")
+        args.regime = "expose" if cellule_v2["execution_manifest"]["data_policy"] == "allow" else "retenu"
+        task_file = lock_v2["task"]["task_file"]
+        protocol_version = PROTOCOLE_V2
+        runner_version = "collect.py/v3"
+    elif args.alias:
         if args.model or args.provider:
             die(EXIT_USAGE, "--alias replaces --model/--provider; do not mix them")
         if not args.models_file.is_file():
@@ -611,13 +776,14 @@ def main() -> None:
 
     # Quatre runs par candidat depuis le 2026-08-05 : le niveau retenu est le
     # troisième meilleur des quatre (R-019), ce qui tolère un mauvais tirage
-    if args.run not in (1, 2, 3, 4):
-        die(EXIT_USAGE, "--run must be between 1 and 4 (campaign invariant)")
+    runs_valides = (1, 2, 3, 4, 5, 6) if lock_v2 else (1, 2, 3, 4)
+    if args.run not in runs_valides:
+        die(EXIT_USAGE, f"--run must be in {runs_valides}")
     if args.attempt < 1:
         die(EXIT_USAGE, "--attempt must be >= 1")
     if args.timeout < 1:
         die(EXIT_USAGE, "--timeout must be >= 1")
-    declare = regime_de_la_carte(Path(args.task_dir) / "task.md")
+    declare = regime_de_la_carte(Path(args.task_dir) / task_file)
     if declare == "retenu" and args.regime == "expose":
         die(EXIT_USAGE, "la carte déclare le régime retenu : --regime expose est refusé (R-005a)")
     if declare and args.regime == "retenu":
@@ -640,15 +806,19 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    key = preflight_key()
-
     if not args.task_dir.is_dir():
         die(EXIT_BAD_TASK, f"{args.task_dir} is not a directory")
-    if not (args.task_dir / "task.md").exists():
-        die(EXIT_BAD_TASK, f"{args.task_dir} is not a task folder (missing task.md)")
+    if not (args.task_dir / task_file).exists():
+        die(EXIT_BAD_TASK, f"{args.task_dir} is not a task folder (missing {task_file})")
 
     try:
-        prompt, inputs, warnings = assemble_prompt(args.task_dir)
+        if lock_v2:
+            prompt, inputs = assembler_prompt_verrouille(
+                Path(__file__).parent.parent, lock_v2["task"], verifier_arbre=True
+            )
+            warnings = []
+        else:
+            prompt, inputs, warnings = assemble_prompt(args.task_dir)
     except SystemExit:
         raise
     except OSError as exc:
@@ -657,14 +827,19 @@ def main() -> None:
     for w in warnings:
         print(f"warning: {w}", file=sys.stderr)
 
+    key = preflight_key()
+
     slug = args.task_dir.name
     # Le candidat est le couple (modèle, route, effort de raisonnement), pas le
     # seul modèle : deux alias du même modèle à des efforts différents sont deux
     # candidats. Nommer le dossier sur le modèle seul les faisait entrer en
     # collision et le second run était refusé
-    model_slug = re.sub(r"[^a-zA-Z0-9.-]+", "-", args.alias or args.model)
-    suffix = f"__a{args.attempt}" if args.attempt > 1 else ""
-    out = args.out_root / f"{slug}__{model_slug}__r{args.run}{suffix}"
+    model_slug = re.sub(r"[^a-zA-Z0-9.-]+", "-", locked_alias or args.alias or args.model)
+    if lock_v2:
+        out = args.out_root / "collections" / args.collection_id / f"attempt-{args.attempt}"
+    else:
+        suffix = f"__a{args.attempt}" if args.attempt > 1 else ""
+        out = args.out_root / f"{slug}__{model_slug}__r{args.run}{suffix}"
     if out.exists():
         hint = (
             "previous attempt is FAILED evidence, keep it and pass --attempt "
@@ -680,6 +855,19 @@ def main() -> None:
     except OSError as exc:
         die(EXIT_IO, f"could not reserve {out}: {exc}")
 
+    global V2_ATTEMPT_CONTEXT
+    if lock_v2:
+        V2_ATTEMPT_CONTEXT = {
+            "campaign_lock_hash": lock_hash,
+            "collection_id": args.collection_id,
+            "attempt": args.attempt,
+            "route_hash": cellule_v2["execution_manifest_hash"],
+            "reservation_id": args.reservation_id,
+            "paid_authorization_sha256": hashlib.sha256(
+                args.paid_authorization.read_bytes()
+            ).hexdigest(),
+        }
+
     # Le budget se résout après la réservation du dossier et avant l'appel : les
     # deux verdicts d'arrêt de R-025 sont des états terminaux R-013 et doivent
     # laisser un reçu quelque part. « Avant toute tentative » qualifie l'appel
@@ -692,7 +880,7 @@ def main() -> None:
                          {"regle": "R-025", "modele": args.model, "provider": args.provider,
                           **{k: v for k, v in verdict.items() if k not in ("etat", "motif")}})
             die(EXIT_INELIGIBLE,
-                f"route inéligible sans appel : {verdict['motif']} — {verdict.get('detail')}")
+                f"route inéligible sans appel : {verdict['motif']} - {verdict.get('detail')}")
         if verdict["etat"] == "infra":
             marquer_etat(out, "INFRA_ERROR", verdict["motif"],
                          {"regle": "R-013", "modele": args.model, "provider": args.provider,
@@ -704,9 +892,20 @@ def main() -> None:
         budget_route = {k: verdict.get(k) for k in
                         ("endpoint", "quantization", "revision", "declare", "marge_prompt")}
     else:
-        budget, source_budget = int(args.max_tokens), "imposé en ligne de commande"
-        budget_route = {"endpoint": None, "quantization": "opaque", "revision": "opaque",
-                        "declare": None, "marge_prompt": None}
+        budget = int(args.max_tokens)
+        if lock_v2:
+            source_budget = "campaign.lock v2"
+            budget_route = {
+                "endpoint": cellule_v2["route"]["provider"],
+                "quantization": cellule_v2["route"]["quantization"],
+                "revision": cellule_v2["route"]["revision"],
+                "declare": {"max_completion_tokens": budget},
+                "marge_prompt": None,
+            }
+        else:
+            source_budget = "imposé en ligne de commande"
+            budget_route = {"endpoint": None, "quantization": "opaque", "revision": "opaque",
+                            "declare": None, "marge_prompt": None}
     args.max_tokens = budget
     print(f"budget de sortie: {budget} jetons, source: {source_budget}", file=sys.stderr)
 
@@ -748,6 +947,11 @@ def main() -> None:
             die(EXIT_USAGE, f"omit_params entry {name!r} not allowed (only {sorted(allowed_omissions)})")
         body.pop(name, None)
         print(f"warning: parameter {name!r} omitted for this endpoint (declared in registry)", file=sys.stderr)
+    if lock_v2:
+        reels = {k: body[k] for k in ("temperature", "top_p", "seed", "reasoning") if k in body}
+        if reels != cellule_v2["parameters"]:
+            cleanup_or_fail(out, "lock_parameter_mismatch")
+            die(EXIT_USAGE, "paramètres du payload différents du campaign.lock")
     # Canonical JSON for payload hash (stable separators, sorted keys)
     payload_bytes = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
@@ -792,6 +996,12 @@ def main() -> None:
     duration = time.monotonic() - t0
 
     if not resp.ok:
+        if lock_v2 and resp.status_code in (429, 503):
+            retry_after = resp.headers.get("Retry-After")
+            try:
+                V2_ATTEMPT_CONTEXT["retry_after_seconds"] = max(0.0, float(retry_after))
+            except (TypeError, ValueError):
+                V2_ATTEMPT_CONTEXT["retry_after_seconds"] = 30.0
         cleanup_or_fail(
             out,
             f"http_{resp.status_code}",
@@ -892,6 +1102,7 @@ def main() -> None:
     input_manifest = {
         name: {
             "sha256_16": hashlib.sha256(text.encode("utf-8")).hexdigest()[:16],
+            "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             "bytes": len(text.encode("utf-8")),
         }
         for name, text in inputs.items()
@@ -924,7 +1135,7 @@ def main() -> None:
             return "route_default" if source_budget.startswith("route/") else "campaign"
         return "candidate" if nom == "reasoning" else "campaign"
 
-    manifeste = {
+    manifeste_calcule = {
         "schema_version": SCHEMA_MANIFESTE,
         "mode": "direct",
         "model": {
@@ -945,8 +1156,8 @@ def main() -> None:
         "system_prompt_hash": None,  # aucun message système en mode direct
         "parameters": {k: {"value": v, "source": provenance(k)} for k, v in params.items()},
         "data_policy": politique_donnees,
-        "runner_version": COLLECTEUR_VERSION,
-        "protocol_version": PROTOCOLE_VERSION,
+        "runner_version": runner_version,
+        "protocol_version": protocol_version,
         # L'environnement d'exécution du candidat est celui du fournisseur : il
         # n'est pas observable depuis ici. `opaque` est la valeur prévue par
         # l'ARD pour une information non publiée, et vaut mieux qu'un descripteur
@@ -955,10 +1166,16 @@ def main() -> None:
         "tools": [],
         "agent": None,
     }
+    manifeste = cellule_v2["execution_manifest"] if lock_v2 else manifeste_calcule
+    if lock_v2 and empreinte(manifeste) != cellule_v2["execution_manifest_hash"]:
+        cleanup_or_fail(out, "lock_manifest_mismatch")
+        die(EXIT_USAGE, "manifeste d’exécution différent du campaign.lock")
 
     meta = {
         "task": slug,
-        "task_version": version_de_la_carte(args.task_dir / "task.md") or "inconnue",
+        "task_version": lock_v2["task"]["task_version"] if lock_v2 else (
+            version_de_la_carte(args.task_dir / task_file) or "inconnue"
+        ),
         "run": args.run,
         "date": started.isoformat(),
         "duration_s": round(duration, 2),
@@ -999,18 +1216,67 @@ def main() -> None:
         "payload_hash": payload_hash,
         "execution_manifest": manifeste,
         "execution_manifest_hash": empreinte(manifeste),
-        "protocol_version": PROTOCOLE_VERSION,
-        "runner_version": COLLECTEUR_VERSION,
+        "protocol_version": protocol_version,
+        "runner_version": runner_version,
         "files_sent": sorted(input_manifest.keys()),
         "assembly": (
             "prompt.txt override"
             if (args.task_dir / "prompt.txt").exists()
-            else "task.md instructions block + FILE sections"
+            else (f"{task_file} instructions block + locked FILE sections" if lock_v2
+                  else "task.md instructions block + FILE sections")
         ),
     }
+    if lock_v2:
+        if meta["prompt_hash"] != lock_v2["task"]["prompt_sha256"]:
+            cleanup_or_fail(out, "lock_prompt_mismatch")
+            die(EXIT_USAGE, "prompt_hash différent du campaign.lock")
+        meta.update({
+            "campaign_lock_hash": lock_hash,
+            "paid_authorization_sha256": V2_ATTEMPT_CONTEXT["paid_authorization_sha256"],
+            "collection_id": args.collection_id,
+            "attempt": args.attempt,
+            "reservation_id": args.reservation_id,
+        })
     # Invariant: meta/raw never hold the API key
-    meta_text = json.dumps(meta, indent=2, ensure_ascii=False)
     raw_text = json.dumps(data, indent=2, ensure_ascii=False)
+    collection_receipt = None
+    attempt_receipt = None
+    if lock_v2:
+        cout_micro = _cout_microdollars(cost_usd)
+        collection_receipt = {
+            "schema_version": SCHEMA_COLLECTION,
+            "protocol_version": PROTOCOLE_V2,
+            "campaign_lock_hash": lock_hash,
+            "paid_authorization_sha256": V2_ATTEMPT_CONTEXT["paid_authorization_sha256"],
+            "collection_id": args.collection_id,
+            "attempt": args.attempt,
+            "result": "COMPLETE",
+            "task_version": lock_v2["task"]["task_version"],
+            "prompt_sha256": lock_v2["task"]["prompt_sha256"],
+            "payload_sha256": payload_hash,
+            "execution_manifest_hash": cellule_v2["execution_manifest_hash"],
+            "response_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+            "raw_sha256": hashlib.sha256((raw_text + "\n").encode("utf-8")).hexdigest(),
+            "served": {"model": model_served, "provider": provider_served},
+            "finish_reason": finish_reason,
+            "token_usage": {
+                "prompt_tokens": _compteur_jetons(usage.get("prompt_tokens"))
+                if isinstance(usage, dict) else None,
+                "completion_tokens": _compteur_jetons(usage.get("completion_tokens"))
+                if isinstance(usage, dict) else None,
+                "reasoning_tokens": _compteur_jetons(
+                    (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+                ) if isinstance(usage, dict) else None,
+            },
+            "cost_accounting": {
+                "status": "known" if cout_micro is not None else "unknown",
+                "cost_microdollars": cout_micro,
+                "reservation_id": args.reservation_id,
+            },
+        }
+        meta["collection_receipt_hash"] = empreinte(collection_receipt)
+        attempt_receipt = _recu_tentative("COMPLETE", result="COMPLETE", cost_usd=cost_usd)
+    meta_text = json.dumps(meta, indent=2, ensure_ascii=False)
     if key in meta_text or key in raw_text or key in content:
         cleanup_or_fail(out, "key_leak_guard", "API key appeared in payload to write")
         die(EXIT_IO, "refusing to write: API key would appear in run artifacts")
@@ -1019,6 +1285,15 @@ def main() -> None:
         atomic_write_text(out / "response.md", content)
         atomic_write_text(out / "raw.json", raw_text + "\n")
         atomic_write_text(out / "meta.json", meta_text + "\n")
+        if collection_receipt is not None and attempt_receipt is not None:
+            atomic_write_text(
+                out / "collection-receipt.json",
+                json.dumps(collection_receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            )
+            atomic_write_text(
+                out / "attempt-receipt.json",
+                json.dumps(attempt_receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            )
         # Run-level commit marker, written last: a folder without COMPLETE
         # was interrupted and must not be judged
         atomic_write_text(out / "COMPLETE", started.isoformat() + "\n")

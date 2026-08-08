@@ -1,6 +1,8 @@
 # Registre des modèles pour les campagnes : choisir avec :
 #   uv run tools/collect.py tasks/dev/<slug> --alias <name> --run N
-# Champs : model (identifiant OpenRouter), provider (slug du pin),
+# Champs : model (identifiant OpenRouter), nom_public (nom commercial affiché
+# sur la page, sans le niveau de raisonnement que la page ajoute elle-même),
+# provider (slug du pin),
 # expect_provider optionnel (nom d'affichage servi quand il diffère du slug),
 # reasoning_effort ou reasoning_max_tokens optionnel. Une valeur différente
 # exige un alias distinct
@@ -31,13 +33,21 @@
 # Novita servait déjà en `fp8`, comme l'éditeur : à précision égale, la route
 # de celui qui publie le modèle fait référence. Aucune route en pleine
 # précision n'existe pour ce modèle, `fp8` est ce que tout le monde obtient
+# `omit_params` établi par pré-vol le 2026-08-06, pas par la déclaration de
+# l'API : sans lui, la route rend un 404 « aucun endpoint ne peut traiter ces
+# paramètres ». La déclaration n'est fiable dans aucun des deux sens (xAI,
+# Mistral et Alibaba ont accepté `top_p` qu'ils ne déclaraient pas), donc seul
+# un appel réel établit ce qu'une route accepte
 [deepseek-v4-flash]
 model = "deepseek/deepseek-v4-flash-0731"
+nom_public = "DeepSeek V4 Flash"
 provider = "deepseek"
+omit_params = ["top_p", "seed"]
 
 # reasoning supporté chez Alibaba (vérifié /endpoints 2026-08-04)
 [qwen3-8-max]
 model = "qwen/qwen3.8-max"
+nom_public = "Qwen3.8 Max"
 provider = "alibaba"
 
 # [laguna-s-2-1]
@@ -54,6 +64,7 @@ provider = "alibaba"
 # d'efforts aura identifié le niveau réellement appliqué, cet alias prend son nom
 [reference-gpt-5-6]
 model = "openai/gpt-5.6-sol"
+nom_public = "GPT 5.6-sol"
 provider = "openai"
 omit_params = ["temperature", "top_p"]
 
@@ -61,6 +72,7 @@ omit_params = ["temperature", "top_p"]
 # ambigu reference-gpt-5-6-max ; le registre courant nomme la valeur réelle
 [reference-gpt-5-6-high]
 model = "openai/gpt-5.6-sol"
+nom_public = "GPT 5.6-sol"
 provider = "openai"
 omit_params = ["temperature", "top_p"]
 reasoning_effort = "high"
@@ -71,6 +83,7 @@ reasoning_effort = "high"
 # l'effort n'a pas été appliqué et l'alias doit être retiré
 [reference-gpt-5-6-xhigh]
 model = "openai/gpt-5.6-sol"
+nom_public = "GPT 5.6-sol"
 provider = "openai"
 omit_params = ["temperature", "top_p"]
 reasoning_effort = "xhigh"
@@ -92,6 +105,7 @@ reasoning_effort = "xhigh"
 # inconnu, donc l'alias reste sans suffixe
 [grok-4-5]
 model = "x-ai/grok-4.5"
+nom_public = "Grok 4.5"
 provider = "xai"
 
 # CN, sorti le 2026-06-16
@@ -136,36 +150,42 @@ provider = "xai"
 # effort ; jamais d'effort implicite sur un modèle qui expose ce paramètre
 [fable-5-high]
 model = "anthropic/claude-fable-5"
+nom_public = "Claude Fable 5"
 provider = "anthropic"
 omit_params = ["seed", "temperature", "top_p"]
 reasoning_effort = "high"
 
 [fable-5-medium]
 model = "anthropic/claude-fable-5"
+nom_public = "Claude Fable 5"
 provider = "anthropic"
 omit_params = ["seed", "temperature", "top_p"]
 reasoning_effort = "medium"
 
 [fable-5-xhigh]
 model = "anthropic/claude-fable-5"
+nom_public = "Claude Fable 5"
 provider = "anthropic"
 omit_params = ["seed", "temperature", "top_p"]
 reasoning_effort = "xhigh"
 
 [grok-4-5-high]
 model = "x-ai/grok-4.5"
+nom_public = "Grok 4.5"
 provider = "xai"
 reasoning_effort = "high"
 
 # Opus 5, ajouté le 2026-08-05 pour compléter la couverture Anthropic
 [opus-5-high]
 model = "anthropic/claude-opus-5"
+nom_public = "Claude Opus 5"
 provider = "anthropic"
 omit_params = ["seed", "temperature", "top_p"]
 reasoning_effort = "high"
 
 [opus-5-xhigh]
 model = "anthropic/claude-opus-5"
+nom_public = "Claude Opus 5"
 provider = "anthropic"
 omit_params = ["seed", "temperature", "top_p"]
 reasoning_effort = "xhigh"
@@ -174,17 +194,20 @@ reasoning_effort = "xhigh"
 # ils seront testés sur des cartes dédiées à leur catégorie de poids
 [mistral-medium-3-5]
 model = "mistralai/mistral-medium-3-5"
+nom_public = "Mistral Medium 3.5"
 provider = "mistral"
 
 # Les quatre suivants : provider épinglé sur le fournisseur de premier rang du
 # modèle, et `seed` omis parce que leurs endpoints ne l'exposent pas
 [mimo-v2-5]
 model = "xiaomi/mimo-v2.5"
+nom_public = "MiMo V2.5"
 provider = "xiaomi"
 omit_params = ["seed"]
 
 [minimax-m3]
 model = "minimax/minimax-m3"
+nom_public = "MiniMax M3"
 provider = "minimax"
 omit_params = ["seed"]
 
@@ -193,6 +216,7 @@ omit_params = ["seed"]
 # le seul régime des cartes déjà publiques (R-005 scindée le 2026-08-05)
 [deepseek-v4-pro]
 model = "deepseek/deepseek-v4-pro"
+nom_public = "DeepSeek V4 Pro"
 provider = "deepseek"
 omit_params = ["seed"]
 
@@ -205,6 +229,7 @@ omit_params = ["seed"]
 # le critère place après la précision, précisément pour ce cas
 [hy3]
 model = "tencent/hy3"
+nom_public = "Hy3"
 provider = "gmicloud"
 
 # Kimi K3 sur routes alternatives, ajoutées le 2026-08-05. La route Morph rend
@@ -225,25 +250,42 @@ provider = "gmicloud"
 # a consommé 23 207 puis 43 422 jetons de raisonnement sur deux runs identiques.
 # Un effort qui varie du simple au double n'est pas un candidat, c'est un tirage
 #
-# Route : Wafer depuis le 2026-08-06, sur critère `selection-route/v2`.
-# Modal avait été retenue pour son débit, sans voir qu'elle sert le modèle en
-# `mxfp4`, une quantification sur quatre bits : le débit ne compte pas ici, la
-# précision des poids si. Wafer déclare `fp8` et accepte tous les paramètres du
-# contrat, seed compris. Aucune route non quantifiée n'existe pour ce modèle,
-# `moonshotai` sert lui-même en `mxfp4` : `fp8` est le mieux disponible et
-# l'écart au modèle de référence est assumé, pas ignoré.
-# Les douze 429 de Morph du 2026-08-05 n'étaient pas une route morte : le reçu
-# annonçait `retry_after_seconds: 2` sur un pool partagé, et le lanceur a
-# renvoyé les trois tentatives en quelques secondes. Corrigé le 2026-08-06
+# CORRECTION DU 2026-08-06, SOIR. J'avais écrit le matin même que Modal servait
+# ce modèle « en mxfp4, quatre bits » et qu'il fallait donc lui préférer une
+# route fp8. C'était faux, et l'erreur venait d'appliquer une échelle absolue de
+# bits à un modèle qui n'en relève pas.
 #
-# Un seul alias, `max`. `kimi-k3-high` a été retiré le 2026-08-06 : sa collecte
-# n'a abouti que sur deux runs sur quatre là où `max` en a complété quatre, sur
-# la même route et au même moment. Le motif du retrait est le rythme que ce
-# fournisseur impose, pas un résultat observé : aucun des deux alias n'était
-# noté au moment de la décision (R-013a)
+# Kimi K3 est entraîné avec quantification dans la boucle : les poids publiés
+# par Moonshot SONT en MXFP4 pour les experts, avec activations MXFP8 et BF16
+# pour le reste. Aucun checkpoint BF16 de référence n'existe. MXFP4 est donc le
+# format natif, celui que l'éditeur publie et sert lui-même ; `wafer/fp8` et
+# `baseten/fp8` sont des requantifications qui s'en écartent, dans un sens
+# comme dans l'autre.
+#
+# Route retenue : `moonshotai`, celle de l'éditeur, format publié, 100 % de
+# disponibilité. Les deux routes fp8 vers lesquelles mon erreur nous avait
+# menés sont précisément les deux qui saturent : testées le 2026-08-06, wafer
+# et baseten rendent 429 quand moonshotai, modal, morph, together, fireworks et
+# digitalocean répondent.
+#
+# Elle refuse `temperature`, `top_p` et `seed`, ce qui concorde exactement avec
+# la documentation de Moonshot : ces trois réglages sont fixés côté modèle et
+# doivent être omis. Cette concordance entre l'API directe et la route
+# OpenRouter confirme qu'on est sur le service de référence.
+#
+# R-005 : la route accepte `data_collection: deny`, vérifié le 2026-08-06. Elle
+# est donc conforme au régime retenu, contrairement à l'API Moonshot directe
+# dont les conditions prévoient l'entraînement sur les requêtes sans retrait.
 [kimi-k3-max]
 model = "moonshotai/kimi-k3"
-provider = "wafer"
+nom_public = "Kimi K3"
+provider = "moonshotai"
+# OpenRouter sert cette route sous le nom d'affichage « Moonshot AI » alors que
+# le slug du pin est « moonshotai » : le contrôle de route les compare après
+# normalisation et les voyait différents. Le champ existe pour ce cas
+expect_provider = "Moonshot AI"
+format_reference = "mxfp4"
+omit_params = ["temperature", "top_p", "seed"]
 reasoning_effort = "max"
 
 # --- Muse Spark 1.2, ajouté le 2026-08-06 ---
@@ -275,6 +317,7 @@ reasoning_effort = "max"
 
 [muse-spark-1-2-max]
 model = "meta/muse-spark-1.2"
+nom_public = "Muse Spark 1.2"
 provider = "meta"
 omit_params = ["seed"]
 reasoning_effort = "max"

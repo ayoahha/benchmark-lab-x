@@ -5,10 +5,9 @@
 """Choisir la meilleure route d'un modèle selon un critère déclaré et versionné.
 
 Pourquoi cet outil existe. Le pin de `models.toml` était choisi à la main, et
-un choix à la main s'oublie : Kimi K3 a été épinglé sur Modal pour son débit,
-sans que personne ne remarque que cette route sert le modèle en `mxfp4`, une
-quantification sur quatre bits. Mesurer un modèle quantifié et publier le
-résultat sous le nom du modèle est une erreur de mesure, pas une préférence.
+un choix à la main s'oublie : Kimi K3 avait été épinglé sur Modal pour son
+débit, alors que le débit ne compte pas dans une campagne qui n'est pas
+chronométrée. Un critère écrit rend ce genre d'arbitrage visible et rejouable.
 
 Ce que l'outil ne fait pas. Il ne bascule jamais de provider en cours de
 campagne. R-003 fait de la route une composante de l'identité du candidat :
@@ -19,10 +18,11 @@ le résultat est un pin écrit dans `models.toml` avant la collecte.
 Le critère, dans cet ordre strict :
 
 1. la route doit accorder au moins le plancher de budget (R-025) ;
-2. fidélité numérique décroissante : une route qui quantifie sert des poids
-   dégradés, et mesurer `mxfp4` puis publier sous le nom du modèle est une
-   erreur de mesure. `bf16` et au-dessus valent mieux que `fp8`, qui vaut
-   mieux que `fp4` ou `mxfp4` ;
+2. fidélité au format de référence du modèle. Quand la carte déclare
+   `format_reference`, la route qui sert ce format est fidèle et toute autre
+   s'en écarte. Sans déclaration, une échelle absolue de bits s'applique par
+   défaut — `bf16` et au-dessus devant `fp8`, devant `fp4` ou `mxfp4` — et
+   cette échelle reste une hypothèse, pas un fait ;
 3. endpoint de l'éditeur du modèle d'abord : à égalité de précision, la route
    de celui qui publie le modèle est l'implémentation de référence, et un
    revendeur peut différer par des réglages que les métadonnées n'exposent pas ;
@@ -31,8 +31,17 @@ Le critère, dans cet ordre strict :
    déclarée dans `models.toml` puis consignée au reçu ;
 5. étiquette d'endpoint par ordre alphabétique, faute de mieux.
 
-L'ordre place la précision numérique en tête : perdre `seed` coûte de la
-répétabilité, servir le modèle sur quatre bits change le modèle.
+L'ordre place la fidélité en tête : perdre `seed` coûte de la répétabilité,
+servir des poids qui ne sont pas ceux du modèle change le modèle.
+
+`format_reference` existe parce que l'échelle absolue s'est trompée. Elle
+suppose qu'un modèle est publié en pleine précision et requantifié par ses
+hébergeurs. Kimi K3 dément cette supposition : il est entraîné avec
+quantification dans la boucle et publié en MXFP4, sans checkpoint BF16. Les
+routes `fp8` n'y sont donc pas moins dégradées, elles sont requantifiées à
+partir du format publié. Le critère avait, pour cette raison, écarté la route
+de l'éditeur au profit de deux routes qui se sont révélées être les seules à
+saturer. Voir le bloc `kimi-k3-max` de `models.toml`.
 
 L'éditeur passe devant les paramètres depuis le 2026-08-06, sur objection de la
 revue d'implémentation. La version précédente faisait l'inverse et recommandait
@@ -101,8 +110,23 @@ def norm(v: Any) -> str:
     return re.sub(r"[\s_]+", "-", str(v or "").strip().lower())
 
 
-def rang_fidelite(q: Any, editeur: bool) -> int:
+def rang_fidelite(q: Any, editeur: bool, reference: str | None = None) -> int:
+    """Rang de fidélité d'une route, relatif au format de référence quand il est connu.
+
+    L'échelle absolue de bits ci-dessus suppose que moins de bits vaut moins
+    bien. C'est vrai d'un modèle publié en pleine précision et requantifié par
+    des hébergeurs ; c'est faux d'un modèle entraîné avec quantification dans
+    la boucle. Kimi K3 est publié en MXFP4, sans checkpoint BF16 : une route
+    `fp8` n'y est pas moins dégradée, elle est requantifiée à partir du format
+    publié, donc plus loin de la référence.
+
+    Quand la carte déclare `format_reference`, avec sa source, c'est lui qui
+    ordonne : la route qui sert ce format est fidèle, toute autre s'en écarte.
+    Sans déclaration, l'échelle absolue s'applique et reste une hypothèse
+    """
     cle = norm(q).replace("-", "")
+    if reference:
+        return 0 if cle == norm(reference).replace("-", "") else 4
     rang = FIDELITE.get(cle, 2)
     if rang == 2 and not editeur:
         return RANG_NON_DECLARE_REVENDEUR
@@ -129,7 +153,7 @@ def est_editeur(ep: dict, model: str) -> bool:
                        norm(str(ep.get("tag") or "").split("/")[0])}
 
 
-def evaluer(ep: dict, plancher: int, model: str) -> dict:
+def evaluer(ep: dict, plancher: int, model: str, reference: str | None = None) -> dict:
     """Rendre la clé de tri d'un endpoint et les motifs qui l'écartent"""
     budget = budget_de(ep)
     supportes = {norm(p) for p in (ep.get("supported_parameters") or [])}
@@ -155,7 +179,7 @@ def evaluer(ep: dict, plancher: int, model: str) -> dict:
     if dispo is not None and dispo < 95:
         reserves.append(f"disponibilité {dispo:.1f}% sur 30 jours")
     editeur = est_editeur(ep, model)
-    fidelite = rang_fidelite(ep.get("quantization"), editeur)
+    fidelite = rang_fidelite(ep.get("quantization"), editeur, reference)
     return {
         "tag": ep.get("tag") or ep.get("provider_name"),
         "provider_name": ep.get("provider_name"),
@@ -181,19 +205,20 @@ def evaluer(ep: dict, plancher: int, model: str) -> dict:
     }
 
 
-def classer(model: str, plancher: int) -> dict:
+def classer(model: str, plancher: int, reference: str | None = None) -> dict:
     url = f"https://openrouter.ai/api/v1/models/{model}/endpoints"
     r = requests.get(url, headers={"Accept": "application/json"}, timeout=20)
     if r.status_code >= 400:
         return {"modele": model, "erreur": f"HTTP {r.status_code}", "routes": []}
     eps = (r.json().get("data") or {}).get("endpoints") or []
-    routes = [evaluer(e, plancher, model) for e in eps]
+    routes = [evaluer(e, plancher, model, reference) for e in eps]
     eligibles = sorted((x for x in routes if not x["exclusions"]), key=lambda x: x["_cle"])
     for x in routes:
         x.pop("_cle")
     return {
         "modele": model,
         "critere_version": CRITERE_VERSION,
+        "format_reference": reference,
         "plancher": plancher,
         "recommande": eligibles[0]["tag"] if eligibles else None,
         "routes": routes,
@@ -212,6 +237,7 @@ def main() -> int:
     args = ap.parse_args()
 
     pins: dict[str, str] = {}
+    references: dict[str, str] = {}
     cibles = list(args.modeles)
     if args.tous or not cibles:
         if not args.models_file.is_file():
@@ -223,8 +249,10 @@ def main() -> int:
                 if e["model"] not in cibles:
                     cibles.append(e["model"])
                 pins.setdefault(e["model"], e["provider"])
+                if e.get("format_reference"):
+                    references.setdefault(e["model"], e["format_reference"])
 
-    resultats = [classer(m, args.plancher_tokens) for m in cibles]
+    resultats = [classer(m, args.plancher_tokens, references.get(m)) for m in cibles]
 
     if args.json:
         print(json.dumps({"critere_version": CRITERE_VERSION, "modeles": resultats},

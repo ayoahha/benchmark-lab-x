@@ -25,8 +25,10 @@ Usage :
 
 import hashlib
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -36,12 +38,22 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 from empreintes import empreinte  # noqa: E402
+from protocole_v2 import (  # noqa: E402
+    PROTOCOLE_VERSION as PROTOCOLE_V2,
+    ContratV2Invalide,
+    agreger_scores,
+    charger_json,
+    empreinte_lock,
+    valider_lock,
+    valider_recu_couverture,
+    valider_recu_score,
+)
 
 CHAMPS_RUN = ("task", "task_version", "run", "date", "backend", "model_requested",
               "model_served", "revision", "provider_pinned", "provider_served",
               "finish_reason", "duration_s", "cost_usd", "prompt_hash",
               "payload_hash", "execution_manifest_hash", "regime_confidentialite",
-              "protocol_version")
+              "protocol_version", "params_omitted", "quantization_servie")
 
 SCHEMA_CONTEXTE = "benchmark-lab-x/measurement-context/v1"
 PROTOCOLE_VERSION = "benchmark-lab-x/protocol/v1"
@@ -77,6 +89,42 @@ def actifs_cote_juge(carte: str, verificateur: Path) -> list[dict]:
     return sorted(manifeste, key=lambda x: x["path"])
 
 
+def instrument_qualifie(carte: str) -> tuple[bool, list[str]]:
+    """La matrice de témoins de la carte est-elle qualifiée au sens R-016 ?
+
+    Le contrôle lit `temoins/provenance.json` et **ne rejoue pas le
+    vérificateur** : le rejouer ajouterait un lancement de Chromium par témoin
+    à chaque rapport, pour une information qui ne change qu'avec le calibrage.
+
+    Ce qui est vérifié ici est la condition nécessaire et la moins chère :
+    chaque témoin déclare une provenance, et son producteur n'avait pas accès
+    au vérificateur. Un témoin écrit par l'auteur du vérificateur prouve
+    seulement la cohérence du code avec lui-même. La couverture palier par
+    palier, elle, reste dans `tools/qualifier_temoins.py`, qui doit exécuter
+    les témoins pour connaître leur niveau ; elle rejoindra ce contrôle le jour
+    où des témoins réellement indépendants existeront, puisqu'aujourd'hui aucun
+    ne franchit cette première condition.
+
+    Échoue du côté sûr : pas de fichier de provenance, pas de qualification
+    """
+    f = Path(__file__).parent.parent / "tasks" / "dev" / carte / "temoins" / "provenance.json"
+    if not f.is_file():
+        return False, ["aucun fichier de provenance de témoins (R-016)"]
+    try:
+        temoins = (json.loads(f.read_text(encoding="utf-8")) or {}).get("temoins") or {}
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, [f"provenance de témoins illisible : {type(exc).__name__}"]
+    if not temoins:
+        return False, ["provenance de témoins vide (R-016)"]
+    motifs = []
+    for nom, t in sorted(temoins.items()):
+        if t.get("acces_au_verificateur") is not False:
+            motifs.append(f"{nom} : producteur non aveugle au vérificateur")
+        elif not t.get("producteur"):
+            motifs.append(f"{nom} : producteur non nommé")
+    return (not motifs), motifs
+
+
 def version_verificateur(carte: str) -> str:
     """Étiquette `verify-vM` déclarée par la carte"""
     md = Path(__file__).parent.parent / "tasks" / "dev" / carte / "task.md"
@@ -93,6 +141,34 @@ def descripteur_environnement() -> dict:
     from moteur_rendu import descripteur
 
     return descripteur()
+
+
+def executer_borne(cmd: list[str], delai: int) -> subprocess.CompletedProcess:
+    """Exécuter une commande sous délai, en tuant TOUTE sa descendance au dépassement.
+
+    `subprocess.run(timeout=...)` ne tue que le processus lancé, pas ses enfants.
+    Le vérificateur lance `uv`, qui lance Python, qui lance Chromium : au
+    dépassement, seul `uv` mourait et le navigateur restait à tourner. Mesuré
+    le 2026-08-06 sur cette machine : douze Chromium orphelins consommaient
+    chacun un cœur entier, l'un depuis plus de vingt-quatre heures, pour une
+    charge moyenne de 18 sur 18 cœurs. Chaque notation d'une page qui ne rend
+    pas la main en laissait un de plus.
+
+    Le groupe de processus règle le problème : `start_new_session` en crée un
+    nouveau, et le signal frappe le groupe entier plutôt qu'un seul membre
+    """
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, start_new_session=True)
+    try:
+        sortie, erreur = proc.communicate(timeout=delai)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, sortie, erreur)
 
 
 def noter_aveugle(dossier: Path, verificateur: Path, delai: int = 180) -> dict | None:
@@ -117,8 +193,7 @@ def noter_aveugle(dossier: Path, verificateur: Path, delai: int = 180) -> dict |
         neutre = Path(tmp) / NOM_NEUTRE
         shutil.copyfile(source, neutre)
         try:
-            out = subprocess.run(["uv", "run", str(verificateur), str(neutre)],
-                                 capture_output=True, text=True, timeout=delai)
+            out = executer_borne(["uv", "run", str(verificateur), str(neutre)], delai)
         except subprocess.TimeoutExpired:
             return {"niveau_atteint": 0, "niveaux": {}, "frontiere": "A1_api_totale",
                     "mesures": {"depassement_temps_s": delai},
@@ -196,11 +271,150 @@ def runs_attendus(racine: Path, conf: dict | None, carte: str, alias_vus: set[st
             "alias": sorted(alias_vus), "runs": [1, 2, 3, 4]}
 
 
+def _score_v2(
+    campaign_dir: Path,
+    lock: dict,
+    lock_hash: str,
+    card: dict,
+    alias: str,
+    run: int,
+) -> dict:
+    collection_id = f"{alias}__r{run}"
+    tentatives = sorted((campaign_dir / "collections" / collection_id).glob("attempt-*"))
+    recus = [d / "collection-receipt.json" for d in tentatives
+            if (d / "collection-receipt.json").is_file() and (d / "COMPLETE").is_file()]
+    if len(recus) != 1:
+        return {"alias": alias, "run": run, "etat": "MISSING",
+                "cause_code": "COLLECTION_UNAVAILABLE"}
+    collection = charger_json(recus[0])
+    response_path = recus[0].parent / "response.md"
+    if (not response_path.is_file() or response_path.is_symlink()
+            or hashlib.sha256(response_path.read_bytes()).hexdigest()
+            != collection.get("response_sha256")):
+        raise ContratV2Invalide(f"preuve response.md absente ou modifiée: {collection_id}")
+    collection_hash = empreinte(collection)
+    score_path = (campaign_dir / "scores" / collection_hash / card["id"]
+                  / f"{card['verify_hash']}.json")
+    if not score_path.is_file():
+        return {"alias": alias, "run": run, "etat": "MISSING",
+                "cause_code": "SCORE_RECEIPT_MISSING",
+                "collection_receipt_hash": collection_hash}
+    score = charger_json(score_path)
+    cellule = next(
+        c for c in lock["collections"]
+        if c["collection_id"] == collection_id
+    )
+    valider_recu_score(score, lock, lock_hash, card, cellule, collection, collection_hash)
+    return {
+        "alias": alias,
+        "run": run,
+        "etat": score.get("etat"),
+        "cause_code": score.get("cause_code"),
+        "verdict": score.get("verdict"),
+        "niveau": score.get("niveau"),
+        "frontiere": score.get("frontiere"),
+        "predicats": score.get("predicats") or {},
+        "mesures": score.get("mesures") or {},
+        "measurement_context_hash": score.get("measurement_context_hash"),
+        "collection_receipt_hash": collection_hash,
+    }
+
+
+def _rangs_competition(candidats: list[dict], kind: str) -> None:
+    def valeur(candidat: dict) -> int | None:
+        agregat = candidat["agregat"]
+        if not agregat.get("classement_valide"):
+            return None
+        if kind == "binary":
+            return 1 if agregat.get("verdict_retenu") == "PASS" else 0
+        return agregat.get("niveau_retenu")
+    valeurs = [v for c in candidats if (v := valeur(c)) is not None]
+    for candidat in candidats:
+        v = valeur(candidat)
+        candidat["rang_provisoire"] = None if v is None else 1 + sum(x > v for x in valeurs)
+
+
+def rapport_v2(campaign_dir: Path, conf: dict) -> int:
+    lock_path = campaign_dir / conf.get("campaign_lock", "campaign.lock.json")
+    try:
+        lock = valider_lock(charger_json(lock_path), Path(__file__).parent.parent)
+        lock_hash = empreinte_lock(lock)
+        couverture_path = campaign_dir / conf.get(
+            "coverage_receipt", "witness-coverage-receipt.json"
+        )
+        if couverture_path.is_file():
+            couverture = charger_json(couverture_path)
+            instrument_qualifie_v2, motifs_r016 = valider_recu_couverture(
+                couverture, lock, lock_hash, Path(__file__).parent.parent
+            )
+        else:
+            couverture = None
+            instrument_qualifie_v2 = False
+            motifs_r016 = ["reçu de couverture R-016 absent"]
+
+        cartes = []
+        for card in lock["score_cards"]:
+            candidats = []
+            blocages = []
+            contextes = set()
+            for alias in lock["panel"]:
+                scores = [
+                    _score_v2(campaign_dir, lock, lock_hash, card, alias, run)
+                    for run in range(1, 7)
+                ]
+                contextes.update(s["measurement_context_hash"] for s in scores
+                                  if s.get("measurement_context_hash"))
+                agregat = agreger_scores(card["kind"], scores)
+                if not agregat.get("classement_valide"):
+                    blocages.append({"alias": alias, "runs": agregat.get("blocages")})
+                candidats.append({"alias": alias, "scores": scores, "agregat": agregat})
+            _rangs_competition(candidats, card["kind"])
+            contexte_unique = len(contextes) == 1
+            if not contexte_unique:
+                blocages.append({"measurement_context_hashes": sorted(contextes)})
+            classement_valide = not blocages and instrument_qualifie_v2
+            cartes.append({
+                "id": card["id"],
+                "kind": card["kind"],
+                "verify_version": card["verify_version"],
+                "verify_hash": card["verify_hash"],
+                "measurement_context_hash": next(iter(contextes)) if contexte_unique else None,
+                "classement_valide": classement_valide,
+                "blocages": blocages + ([] if instrument_qualifie_v2 else [{"R-016": motifs_r016}]),
+                "candidats": candidats,
+            })
+        resultat = {
+            "schema_version": "benchmark-lab-x/results-data/v2",
+            "protocol_version": PROTOCOLE_V2,
+            "campaign_id": lock["campaign_id"],
+            "campaign_lock_hash": lock_hash,
+            "task_version": lock["task"]["task_version"],
+            "prompt_sha256": lock["task"]["prompt_sha256"],
+            "notation_source": "reçus de score immuables, sans rejeu Chromium",
+            "conformite": {
+                "instrument_qualifie": instrument_qualifie_v2,
+                "page_validee": all(c["classement_valide"] for c in cartes),
+                "blocages": {"R-016": motifs_r016} if motifs_r016 else {},
+            },
+            "coverage_receipt": couverture,
+            "cartes": cartes,
+        }
+    except ContratV2Invalide as exc:
+        print(f"HOLD: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(resultat, ensure_ascii=False, indent=1))
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) < 3:
         print(__doc__, file=sys.stderr)
         return 2
     carte, dossiers = sys.argv[1], [Path(d) for d in sys.argv[2:]]
+    if len(dossiers) == 1 and (dossiers[0] / "campaign.toml").is_file():
+        conf_v2 = tomllib.loads((dossiers[0] / "campaign.toml").read_text(encoding="utf-8"))
+        if conf_v2.get("protocol_version") == PROTOCOLE_V2:
+            return rapport_v2(dossiers[0], conf_v2)
     verificateur = Path(__file__).parent / f"verifier_{carte.split('-')[0]}.py"
     if not verificateur.exists():
         print(f"vérificateur introuvable : {verificateur}", file=sys.stderr)
@@ -397,14 +611,29 @@ def main() -> int:
             continue
         if r["etat"] not in ("SCORED", "INELIGIBLE", "RETIRE"):
             non_termines.setdefault(r["etat"], []).append(f"{r['alias']}/r{r['run']}")
+    # Deux conditions indépendantes, séparées pour que le lecteur voie laquelle
+    # manque. Les fondre dans un seul booléen était le défaut d'origine : la
+    # campagne du 2026-08-06 s'est déclarée validée alors que l'instrument ne
+    # l'était pas, parce que seuls les états de runs étaient regardés
+    runs_termines = not non_termines and plan["source"] == "campaign.toml"
+    qualifie, motifs_instrument = instrument_qualifie(carte)
+    blocages = dict(non_termines)
+    if motifs_instrument:
+        blocages["R-016"] = motifs_instrument
+    if plan["source"] != "campaign.toml":
+        blocages["plan"] = ["plan de campagne absent, un run manquant serait invisible"]
     conformite = {
-        "page_validee": not non_termines and plan["source"] == "campaign.toml",
-        "blocages": non_termines,
+        "runs_termines": runs_termines,
+        "instrument_qualifie": qualifie,
+        "page_validee": runs_termines and qualifie,
+        "blocages": blocages,
         "plan": plan,
-        "motif": ("aucun" if not non_termines and plan["source"] == "campaign.toml"
-                  else ("plan de campagne absent, un run manquant serait invisible"
-                        if plan["source"] != "campaign.toml"
-                        else "des runs attendus ne sont pas dans un état terminal scoré")),
+        "motif": ("aucun" if runs_termines and qualifie
+                  else "; ".join(filter(None, [
+                      None if runs_termines else "des runs attendus ne sont pas dans un état terminal",
+                      None if qualifie else "l'instrument n'est pas qualifié : les témoins de la carte "
+                                            "ne sont pas produits sans accès au vérificateur (R-016)",
+                  ]))),
     }
 
     # R-017 : compteurs dérivés des reçus, jamais saisis à la main. Un prompt est

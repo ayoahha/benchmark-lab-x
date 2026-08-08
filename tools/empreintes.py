@@ -3,7 +3,7 @@
 Ce module existe parce que la fonction vivait en double, dans `collect.py` et
 `rapport_campagne.py`. Deux copies d'une fonction de hachage sont une dérive qui
 attend : le jour où l'une des deux change, deux manifestes sémantiquement
-identiques rendent deux empreintes différentes, et rien ne le signale — c'est
+identiques rendent deux empreintes différentes, et rien ne le signale : c'est
 exactement le genre de panne silencieuse que les empreintes sont censées
 empêcher. Signalé par la revue d'implémentation du 2026-08-06.
 

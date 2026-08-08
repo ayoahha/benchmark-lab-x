@@ -1,10 +1,10 @@
 # Règles de mesure
 
-Version 2.0, mise à jour le 5 août 2026
+Version 2.1, mise à jour le 8 août 2026
 
 Ce fichier définit les invariants qui rendent une mesure éligible et un classement défendable. Il prévaut uniquement sur l’éligibilité, la notation et la validité des résultats. Le [PRD](PRD.md) gouverne le produit et ses jalons ; l’[ARD](ARD.md) gouverne l’architecture et les preuves techniques.
 
-Une règle peut précéder son automatisation de plusieurs versions : ces règles couvrent tout le développement à venir, pas seulement la V0. La matrice de conformité du §5 dit pour chaque règle à quelle version son automatisation est due et où elle en est. Un écart n'est un défaut que si la version cible est atteinte. Tant que la preuve d'une règle manque, le résultat concerné reste provisoire.
+Une règle peut précéder son automatisation de plusieurs versions : ces règles couvrent tout le développement à venir, pas seulement la V0. La matrice de conformité du §5 dit pour chaque règle à quelle version son automatisation est due et où elle en est. Un écart n’est un défaut que si la version cible est atteinte ou dépassée. Tant que la preuve d’une règle manque, le résultat concerné reste provisoire.
 
 ## 1. Périmètre et identité
 
@@ -14,7 +14,7 @@ Une règle peut précéder son automatisation de plusieurs versions : ces règle
 
 - **R-003. Candidat et configuration explicites.** Le candidat lisible est le triplet modèle, route d’exécution épinglée et effort de raisonnement déclaré. La route comprend le backend et le provider réellement servi. Chaque run conserve aussi un `execution_manifest_hash` couvrant les paramètres et composants qui influencent l’exécution. Deux valeurs d’effort, deux providers ou deux backends constituent des candidats distincts.
 
-- **R-003a. Route choisie par un critère déclaré.** La route épinglée résulte d’un critère écrit, versionné et rejouable, appliqué avant la campagne et consigné avec elle. Le critère n’ordonne que des propriétés stables de la route, dans cet ordre : précision numérique servie, puis appartenance à l’éditeur du modèle, puis paramètres du contrat acceptés. L’éditeur précède les paramètres parce qu’un critère qui privilégie la route acceptant le harnais laisse l’outillage choisir l’objet mesuré ; un paramètre refusé se déclare et se consigne, une route qui n’est pas celle de l’éditeur ne se rattrape pas. Une quantification non déclarée par l’éditeur vaut précision native ; non déclarée par un revendeur, elle passe derrière toute précision déclarée. Disponibilité, statut et débit sont observés et signalés, jamais ordonnants : un critère qui en dépend rend un verdict différent d’un jour à l’autre. Une route qui sert le modèle sous une quantification plus dégradée qu’une autre route disponible ne peut être épinglée sans que la carte le justifie par écrit. Le changement de pin est un acte préalable qui crée un candidat distinct ; aucun basculement de route ne peut avoir lieu pendant un run ni entre les runs d’un même candidat.
+- **R-003a. Route choisie par un critère déclaré.** La route épinglée résulte d’un critère écrit, versionné et rejouable, appliqué avant la campagne et consigné avec elle. Le critère n’ordonne que des propriétés stables de la route, dans cet ordre : fidélité au format de référence du modèle, puis appartenance à l’éditeur, puis paramètres du contrat acceptés. La fidélité se mesure par rapport au format que l’éditeur publie, jamais sur une échelle absolue de bits : un modèle entraîné avec quantification dans la boucle a pour référence son format quantifié, et une route qui le requantifie s’en écarte même vers une précision supérieure. Le format de référence est déclaré avec sa source ; à défaut, l’échelle absolue s’applique et le résultat est une hypothèse, non un fait. L’éditeur précède les paramètres parce qu’un critère qui privilégie la route acceptant le harnais laisse l’outillage choisir l’objet mesuré ; un paramètre refusé se déclare et se consigne, une route qui n’est pas celle de l’éditeur ne se rattrape pas. Une quantification non déclarée par l’éditeur vaut précision native ; non déclarée par un revendeur, elle passe derrière toute précision déclarée. Disponibilité, statut et débit sont observés et signalés, jamais ordonnants : un critère qui en dépend rend un verdict différent d’un jour à l’autre. Une route qui sert le modèle sous une quantification plus dégradée qu’une autre route disponible ne peut être épinglée sans que la carte le justifie par écrit. Le changement de pin est un acte préalable qui crée un candidat distinct ; aucun basculement de route ne peut avoir lieu pendant un run ni entre les runs d’un même candidat.
 
 - **R-003b. Reprise après limite de débit.** Une limite de débit annoncée par le fournisseur est une condition transitoire, pas une non-conformité de route. Le délai qu’il publie est respecté avant toute nouvelle tentative, et le nombre de tentatives reste borné par la campagne. Renvoyer le même appel après ce délai ne modifie ni le budget, ni la route, ni le stimulus : ce n’est pas une relance au sens de R-025.
 
@@ -42,14 +42,16 @@ Une règle peut précéder son automatisation de plusieurs versions : ces règle
 
 - **R-012. Pas de jugement sémantique noté.** Une recommandation ouverte, un lien causal, la pertinence d’une citation, le style ou l’esthétique peuvent être observés, mais ne reçoivent aucun score mécanique.
 
-- **R-013. États terminaux explicites.** Chaque run attendu termine dans un état unique :
+- **R-013. États terminaux explicites.** Sous `benchmark-lab-x/protocol/v1`, chaque run attendu termine dans un état unique. Sous `benchmark-lab-x/protocol/v2`, lorsqu’un même artefact collecté alimente plusieurs cartes de score, l’unité terminale est le triplet `(carte, candidat, run)` et chaque triplet termine dans un état unique :
   - `SCORED`, avec un verdict `PASS`, `PARTIAL` ou `FAIL`
   - `UNKNOWN`, lorsque l’instrument ou la preuve est ambigu
   - `INELIGIBLE`, lorsque la route ou la configuration est non conforme avant mesure ; ce statut s’applique à tous les runs attendus du couple carte-configuration, sans appel
   - `INFRA_ERROR`, lorsque les tentatives autorisées sont épuisées sans sortie scoreable à cause d’un défaut de collecte ou de fournisseur
   - `MISSING`, lorsqu’un run planifié pour une configuration par ailleurs conforme n’a jamais été tenté à la clôture
 
-- **R-013a. Retrait de candidat.** Un candidat retiré du panel après le gel du plan est consigné `RETIRE` avec son motif écrit. Ses runs déjà collectés restent publiés comme preuves. Un retrait ne peut jamais être motivé par le résultat observé. `RETIRE` est une décision consignée, non une panne : il ne bloque pas une page validée, là où `INFRA_ERROR` et `MISSING` accusent l’un une défaillance et l’autre un oubli.
+  Chaque état autre que `SCORED`, et chaque résultat `SCORED` qui n’est pas un succès complet, porte un `cause_code` fermé par le protocole. Un défaut de collecte commun peut déterminer l’état de plusieurs cartes, mais une erreur de notation, un dépassement du garde-fou ou une preuve ambiguë ne réécrit que la carte concernée.
+
+- **R-013a. Retrait de candidat.** Un candidat retiré du panel après le gel du plan est consigné `RETIRE` avec son motif écrit. Ses runs déjà collectés restent publiés comme preuves. Un retrait ne peut jamais être motivé par le résultat observé. `RETIRE` est une décision consignée : il ne bloque pas une page validée, contrairement à `INFRA_ERROR` qui signale une défaillance et à `MISSING` qui signale un oubli.
 
   Un refus produit après appel vaut par défaut `FAIL`. Le diagnostic informatif `model_refusal`, hors score, n’est ajouté que sur un signal structuré du fournisseur ou un constat humain consigné ; le vérificateur ne l’infère jamais du sens du texte. Il ne peut être un succès que si le refus est le comportement correct inscrit dans la tâche et l’oracle versionnés avant collecte. Pour `finish_reason=length`, une valeur `completion_tokens` absente ou inférieure au `max_tokens` résolu indique un arrêt prématuré du fournisseur et donne `UNKNOWN` ; une valeur supérieure ou égale prouve l’épuisement du budget préenregistré et donne `FAIL`.
 
@@ -72,11 +74,11 @@ Une règle peut précéder son automatisation de plusieurs versions : ces règle
 
 - **R-018. Structure explicite.** Une carte à checklist marque chaque item `[C]` critique ou `[S]` secondaire. Une carte à paliers utilise des prédicats ordonnés ; elle ne leur ajoute pas une seconde criticité. Les erreurs éliminatoires restent annoncées dans la tâche.
 
-- **R-019. Verdict et répétabilité.** Sur une checklist, un `[C]` échoué donne `FAIL`; tous les items réussis donnent `PASS`; seuls des `[S]` échoués donnent `PARTIAL`. La clé de classement est alors l’ordre `PASS` > `PARTIAL` > `FAIL`. Sur une carte à paliers, le niveau atteint est le plus grand `k` tel que les paliers 1 à `k` passent tous ; le run vaut `PASS` si toute l’échelle passe et `FAIL` sinon, le niveau conservant le gradient de classement. Un défaut de sortie imputable au candidat reste `FAIL` au niveau 0.
+- **R-019. Verdict et répétabilité.** Sur une checklist, un `[C]` échoué donne `FAIL` ; tous les items réussis donnent `PASS` ; seuls des `[S]` échoués donnent `PARTIAL`. La clé de classement est alors l’ordre `PASS` > `PARTIAL` > `FAIL`. Sur une carte à paliers, le niveau atteint est le plus grand `k` tel que les paliers 1 à `k` passent tous ; le run vaut `PASS` si toute l’échelle passe et `FAIL` sinon, le niveau conservant le gradient de classement. Un défaut de sortie imputable au candidat reste `FAIL` au niveau 0.
 
-  Une carte fermée utilise un run par candidat et retient son verdict ou son niveau. Une carte générative en utilise quatre. Pour une checklist, son verdict retenu est le troisième meilleur des quatre dans l’ordre défini ci-dessus. Pour une carte à paliers, son niveau retenu est le troisième meilleur des quatre. La page publie la distribution complète et parle de répétabilité observée sur les runs planifiés, sans inférence statistique générale.
+  Une carte fermée utilise un run par candidat et retient son verdict ou son niveau. Sous `benchmark-lab-x/protocol/v1`, une carte générative utilise quatre runs et retient le troisième meilleur. Sous `benchmark-lab-x/protocol/v2`, elle utilise six runs et retient le quatrième meilleur. Une carte binaire sous protocole v2 retient `PASS` si au moins quatre runs sur six valent `PASS`, sinon `FAIL`. Une carte à paliers retient le quatrième niveau dans l’ordre décroissant, soit le niveau franchi dans au moins quatre runs sur six. La page publie la distribution complète et parle de répétabilité observée sur les runs planifiés, sans inférence statistique générale.
 
-- **R-020. Classement situé.** Chaque carte classe les candidats dont tous les runs attendus sont `SCORED`. Une checklist utilise le verdict retenu dans l’ordre `PASS` > `PARTIAL` > `FAIL` ; une carte à paliers utilise le niveau retenu décroissant. Les ex æquo restent ex æquo, sauf diagnostic de départage préenregistré. Les candidats `INELIGIBLE` sont affichés hors classement. Un `UNKNOWN`, `INFRA_ERROR` ou `MISSING` laisse la page provisoire et bloque le classement validé.
+- **R-020. Classement situé.** Chaque carte classe les candidats dont tous les runs attendus sont `SCORED`. Une checklist utilise le verdict retenu dans l’ordre `PASS` > `PARTIAL` > `FAIL` ; une carte à paliers utilise le niveau retenu décroissant. Les ex æquo restent ex æquo, sauf diagnostic de départage préenregistré. Les candidats `INELIGIBLE` sont affichés hors classement. Sous le protocole v1, un `UNKNOWN`, `INFRA_ERROR` ou `MISSING` laisse la page provisoire et bloque le classement validé. Sous le protocole v2, ce blocage porte sur la carte concernée : il ne modifie ni les scores ni le statut des autres cartes. Une vue réunissant plusieurs cartes affiche leur statut séparément et ne présente aucun classement global comme validé.
 
 - **R-021. Diagnostics séparés du score.** Coût, durée, dispersion et jetons ne modifient jamais la note. Ils peuvent ordonner une recommandation uniquement si la contrainte correspondante a été déclarée avant collecte.
 
@@ -102,18 +104,18 @@ Une règle peut précéder son automatisation de plusieurs versions : ces règle
 
 ## 5. Matrice de conformité
 
-Une règle peut précéder son automatisation de plusieurs versions. Ce tableau dit, pour chaque règle, à quelle version son automatisation est **due** et où elle en est aujourd'hui. Un écart n'est un défaut que si la version cible est atteinte ou dépassée.
+Ce tableau dit, pour chaque règle, à quelle version son automatisation est **due** et où elle en est aujourd’hui.
 
-**Niveaux** : `écrit` la règle existe et est appliquée à la main ; `partiel` une partie est automatisée ; `outillé` le code l'applique ; `prouvé` un test ou un témoin le vérifie à chaque campagne.
+**Niveaux** : `écrit` la règle existe et est appliquée à la main ; `partiel` une partie est automatisée ; `outillé` le code l’applique ; `prouvé` un test ou un témoin le vérifie à chaque campagne.
 
-| Règle | Objet | Due en | État au 2026-08-06 | Ce qui manque |
+| Règle | Objet | Due en | État au 2026-08-08 | Ce qui manque |
 |---|---|---|---|---|
 | R-001 | Données synthétiques | V0 | écrit | contrôle humain à la création de carte, jamais automatisable seul |
 | R-002 | Jeu retenu confidentiel | **V4** | écrit | rien à faire avant V4 |
 | R-003 | Candidat et configuration | V0 | **outillé** | `execution_manifest_hash` et backend au reçu depuis le 2026-08-06 |
-| R-003a | Route choisie par un critère déclaré | V0 | **outillé** | `tools/choisir_provider.py`, critère `selection-route/v2` ; trois pins restent à réviser |
+| R-003a | Route choisie par un critère déclaré | V0 | **outillé** | `tools/choisir_provider.py`, critère `selection-route/v2` ; les dix-neuf pins du registre y correspondent |
 | R-003b | Reprise après limite de débit | V0 | **outillé** | le lanceur lit `retry_after_seconds` du reçu et attend avant de retenter |
-| R-004 | Route et opacité | V1 | partiel | politique de données par route non publiée par le backend, voir le point ouvert ci-dessous |
+| R-004 | Route et opacité | V1 | partiel | politique de route éprouvable en demandant `data_collection: deny` ; voie trouvée le 2026-08-06, pas encore outillée, voir le point ouvert ci-dessous |
 | R-005 | Deux régimes | V0 | **prouvé** | témoin rejoué le 2026-08-05, régime porté par la carte |
 | R-006 | Score par code | V0 | **outillé** | |
 | R-007 | Classements séparés | V1 | écrit | agrégateur par domaine |
@@ -122,31 +124,37 @@ Une règle peut précéder son automatisation de plusieurs versions. Ce tableau 
 | R-010 | Vérificateur aveugle | V1 | **outillé** | notation par chemin neutre temporaire depuis le 2026-08-06 |
 | R-011 | Prédicat fermé | V0 | **outillé** | |
 | R-012 | Pas de jugement sémantique | V0 | **outillé** | |
-| R-013 | États terminaux | V1 | **outillé** | les cinq états et la règle `length` sont produits et agrégés ; reste le diagnostic `model_refusal`, sans cas connu |
+| R-013 | États terminaux | V1 | **outillé** | v1 par run ; v2 par triplet `(carte, candidat, run)`, reçu contrôlé et cause structurée |
 | R-013a | Retrait de candidat | V0 | **outillé** | `retraits` déclarés dans `campaign.toml`, lus par le rapport |
 | R-014 | Un défaut par item | V0 | écrit | |
 | R-015 | Versions, empreintes, reçus | V1 | **outillé** | empreintes complètes, `task-vN`, `verify-vM`, `measurement_context_hash` et Chromium épinglé au 2026-08-06 |
-| R-016 | Calibrage indépendant | V1 | partiel | `tools/qualifier_temoins.py` refuse la qualification tant que la provenance manque ou déclare un producteur non aveugle ; les sept témoins actuels sont dans ce cas et le disent |
+| R-016 | Calibrage indépendant | V1 | partiel | le reçu v2 lie provenance verrouillée, fichiers, attentes et observations ; les sept témoins actuels restent non aveugles et aucune couverture indépendante n'est acquise |
 | R-017 | Cycle de vie des cartes | V1 | **outillé** | compteurs dérivés des reçus dans le rapport de campagne |
 | R-018 | Structure explicite | V0 | écrit | |
-| R-019 | Verdict et répétabilité | V0 | **outillé** | quatre runs, troisième meilleur |
-| R-020 | Classement situé | V1 | **outillé** | seuls les candidats tout-`SCORED` sont classés, les autres présentés hors classement |
+| R-019 | Verdict et répétabilité | V0 | **outillé** | v1 au troisième meilleur sur quatre ; v2 au quatrième meilleur sur six, distribution complète testée |
+| R-020 | Classement situé | V1 | **outillé** | rang de compétition et blocage isolé par carte ; le rapport v2 lit les reçus sans rejeu Chromium |
 | R-021 | Diagnostics séparés | V0 | **outillé** | |
 | R-022 | Catalogue noté fermé | V0 | écrit | |
 | R-023 | Mécanisme discriminant | V1 | partiel | `trap_triggered`, seuil de retrait versionné ; dû seulement pour une carte adversariale |
 | R-024 | Harnais avant candidat | V0 | écrit | discipline ; douze artefacts trouvés par elle en deux jours |
 | R-025 | Budget non discriminant | V0 | **outillé** | `INELIGIBLE` avant appel et provenance au reçu depuis le 2026-08-06 |
-| R-026 | Audit humain de l'instrument | V1 | partiel | `tools/audit_instrument.py` produit le tirage aveugle ; l'audit lui-même reste un acte humain non tenu |
+| R-026 | Audit humain de l’instrument | V1 | partiel | `tools/audit_instrument.py` produit le tirage aveugle ; l’audit lui-même reste un acte humain non tenu |
 | R-027 | Publication fail-closed | V1 | **outillé** | le rapport énumère ses blocages et refuse le statut de page validée |
-| R-028 | Français | V0 | **outillé** | contrôle d'accents au pré-envoi |
+| R-028 | Français | V0 | **outillé** | contrôle d’accents au pré-envoi |
 | R-029 | Exécution outillée isolée | **V3** | écrit | rien à faire avant V3 |
 | R-030 | Aucune carte auto-approuvée | V0 | écrit | |
 
-**Lecture au 2026-08-06, après la session d'outillage.** Toutes les règles dues en V0 sont désormais outillées ou prouvées, à l'exception de celles qui relèvent d'un acte humain et ne seront jamais tenues par du code seul : R-001 le contrôle des données à la création d'une carte, R-008 la discipline de version, R-014, R-018, R-022, R-024 et R-030. R-024 en particulier restera toujours une discipline, et c'est elle qui a trouvé douze artefacts de harnais en deux jours.
+**Lecture au 2026-08-08.** Les chemins historiques v1 restent outillés. Les contrats locaux v2 de R-013, R-019 et R-020 sont implémentés et couverts par les tests purs. Les autres règles dues en V0 qui relèvent d'un acte humain restent R-001, R-008, R-014, R-018, R-022, R-024 et R-030.
 
-Les règles dues en V1 sont en avance sur leur jalon : R-010, R-013, R-015, R-017, R-020 et R-027 sont outillées alors que rien ne l'exigeait encore. Trois restent ouvertes et le sont légitimement : R-007 attend un second domaine, R-016 attend des témoins produits sans accès au vérificateur, R-026 attend un auditeur humain — l'outil de tirage existe, l'audit non.
+Les règles R-010, R-013, R-015, R-017, R-019, R-020 et R-027 sont outillées. Cette qualification du code ne vaut pas qualification de l'instrument : R-016 attend des témoins produits sans accès au vérificateur, le préflight Chromium reste en HOLD dans cet environnement et R-026 attend une future campagne puis un audit humain.
 
-**Point ouvert, R-004.** La règle demande de consigner la politique de données de la route. L'API du backend ne publie plus cette information par endpoint : aucun outillage ne peut satisfaire la règle telle qu'elle est écrite. Ce que le collecteur consigne aujourd'hui est la politique **demandée**, qu'il contrôle, et `opaque` pour celle de la route. Trois issues possibles, à trancher et à écrire : un registre versionné épinglé à la main, la même sémantique `opaque` que pour la révision, ou un filtre de compte documenté avec sa preuve hors API. Tant que ce choix n'est pas fait, R-004 reste `partiel` par défaut de la règle et non par défaut du code.
+**Point ouvert, R-004 — voie trouvée le 2026-08-06, pas encore outillée.** La règle demande de consigner la politique de données de la route. L’API du backend ne publie plus cette information par endpoint, et l’on en avait conclu qu’aucun outillage ne pouvait satisfaire la règle. C’était une erreur de raisonnement : la politique ne se **lit** pas, mais elle se **met à l’épreuve**. Une requête portant `data_collection: deny` est refusée par le backend, avec un 404 « aucun endpoint ne peut traiter ces paramètres », lorsque la route s’entraîne sur les requêtes ; elle passe sinon. C’est une observation, du même ordre que le pré-vol qui a révélé les paramètres refusés par DeepSeek, et non une déclaration.
+
+Vérifié à la main sur les huit routes de Kimi K3 : `moonshotai`, `modal`, `morph`, `together`, `fireworks` et `digitalocean` servent sous `deny` ; `wafer` et `baseten` étaient saturées, donc non concluantes. Une route saturée reste non testée, jamais présumée conforme.
+
+Ce que le collecteur consigne aujourd’hui reste la politique **demandée**, qu’il contrôle, et `opaque` pour celle de la route. Deux implémentations manquent : une colonne « refuse l’entraînement » dans le sélecteur de route, et un pré-vol R-005a rendant `INELIGIBLE` toute route incapable de servir sous `deny` quand la carte est retenue. Tant qu’elles n’existent pas, R-004 reste `partiel` — désormais par défaut du code et non plus par défaut de la règle.
+
+La réserve tient : ce contrôle éprouve un engagement contractuel relayé par le backend, il ne prouve pas ce que le fournisseur fait de ses octets. C’est le même niveau de preuve que pour tous les autres fournisseurs du panel.
 
 ## 6. Hors périmètre du POC V0
 

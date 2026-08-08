@@ -21,6 +21,23 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+from protocole_v2 import (  # noqa: E402
+    PROTOCOLE_VERSION as PROTOCOLE_V2,
+    SCHEMA_ATTEMPT,
+    ContratV2Invalide,
+    PlafondDepasse,
+    RegistreBudget,
+    cellule_du_lock,
+    charger_json,
+    decision_reprise,
+    descripteur_environnement_runner,
+    empreinte_lock,
+    valider_autorisation_payante,
+    valider_environnement_observe,
+    valider_lock,
+)
+
 COLLECT = Path(__file__).parent / "collect.py"
 
 # Codes de sortie de collect.py qui portent un état terminal R-013
@@ -153,6 +170,205 @@ def cout_engage(racine: Path) -> float:
     return total
 
 
+def _tentatives_v2(racine: Path, collection_id: str) -> list[Path]:
+    dossier = racine / "collections" / collection_id
+    return sorted(
+        [p for p in dossier.glob("attempt-*") if p.is_dir()],
+        key=lambda p: int(p.name.split("-")[-1]),
+    )
+
+
+def _dernier_recu_v2(racine: Path, collection_id: str) -> dict | None:
+    for dossier in reversed(_tentatives_v2(racine, collection_id)):
+        path = dossier / "attempt-receipt.json"
+        if path.is_file():
+            return charger_json(path)
+    return None
+
+
+def _collecte_complete_v2(racine: Path, collection_id: str) -> bool:
+    return any((d / "collection-receipt.json").is_file() and (d / "COMPLETE").is_file()
+               for d in _tentatives_v2(racine, collection_id))
+
+
+def _reconcilier_budget_v2(racine: Path, ledger: RegistreBudget) -> dict:
+    state = ledger.etat()
+    for reservation_id, reservation in list(state.get("reservations", {}).items()):
+        if reservation.get("status") != "reserved":
+            continue
+        trouve = None
+        for path in (racine / "collections").glob("*/attempt-*/attempt-receipt.json"):
+            receipt = charger_json(path)
+            accounting = receipt.get("cost_accounting") or {}
+            if accounting.get("reservation_id") == reservation_id:
+                trouve = accounting
+                break
+        if trouve is None:
+            ledger.finaliser(reservation_id, None)
+        elif trouve.get("status") == "known":
+            ledger.finaliser(reservation_id, trouve.get("cost_microdollars"))
+        else:
+            ledger.finaliser(reservation_id, None)
+    return ledger.etat()
+
+
+def _collecter_v2(
+    runner: dict,
+    racine: Path,
+    lock_path: Path,
+    auth_path: Path,
+    ledger_path: Path,
+    cellule: dict,
+    tentative: int,
+) -> dict:
+    dernier = _dernier_recu_v2(racine, cellule["collection_id"])
+    if tentative > 1 and dernier:
+        pause = dernier.get("retry_after_seconds")
+        if not isinstance(pause, (int, float)) or pause < 0:
+            pause = 30
+        time.sleep(min(240, max(0, float(pause))))
+    reservation_id = f"{cellule['collection_id']}__a{tentative}"
+    cmd = [
+        "uv", "run", str(COLLECT),
+        str(Path(__file__).parent.parent / "tasks/dev/pentagone-rotatif"),
+        "--campaign-lock", str(lock_path),
+        "--collection-id", cellule["collection_id"],
+        "--paid-authorization", str(auth_path),
+        "--budget-ledger", str(ledger_path),
+        "--reservation-id", reservation_id,
+        "--attempt", str(tentative),
+        "--out-root", str(racine),
+    ]
+    cmd += ["--timeout", str(runner["transport_timeout_s"])]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    receipt_path = (racine / "collections" / cellule["collection_id"]
+                    / f"attempt-{tentative}" / "attempt-receipt.json")
+    receipt = charger_json(receipt_path) if receipt_path.is_file() else None
+    return {
+        "collection_id": cellule["collection_id"],
+        "attempt": tentative,
+        "reservation_id": reservation_id,
+        "code": out.returncode,
+        "receipt": receipt,
+        "error": (out.stderr.strip().splitlines() or [""])[-1],
+    }
+
+
+def lancer_v2(args, conf: dict) -> int:
+    racine = args.campaign.parent
+    def artefact_local(cle: str, defaut: str) -> Path:
+        brut = conf.get(cle, defaut)
+        path = Path(brut)
+        if path.is_absolute() or ".." in path.parts or "." in path.parts:
+            raise ContratV2Invalide(f"chemin non local dans {cle}")
+        resolu = (racine / path).resolve()
+        if racine.resolve() not in resolu.parents:
+            raise ContratV2Invalide(f"chemin hors campagne dans {cle}")
+        return resolu
+    try:
+        lock_path = artefact_local("campaign_lock", "campaign.lock.json")
+        auth_path = artefact_local("paid_authorization", "paid-authorization.json")
+        ledger_path = artefact_local("budget_ledger", "budget-ledger.json")
+        lock = valider_lock(charger_json(lock_path), Path(__file__).parent.parent)
+        valider_environnement_observe(lock, "runner", descripteur_environnement_runner())
+        runner = lock["runner"]
+        lock_hash = empreinte_lock(lock)
+        valider_autorisation_payante(
+            charger_json(auth_path), lock_hash, lock["budget"]["cap_microdollars"]
+        )
+        ledger = RegistreBudget(ledger_path, lock["budget"]["cap_microdollars"], lock_hash)
+        state = _reconcilier_budget_v2(racine, ledger)
+        if state.get("hold"):
+            raise ContratV2Invalide("registre budgétaire en HOLD après réconciliation")
+    except (ContratV2Invalide, OSError) as exc:
+        print(f"HOLD avant tout appel v2: {exc}", file=sys.stderr)
+        return 2
+
+    travaux: list[tuple[dict, int]] = []
+    bloquants: list[str] = []
+    for cellule in lock["collections"]:
+        cid = cellule["collection_id"]
+        if _collecte_complete_v2(racine, cid):
+            continue
+        dernier = _dernier_recu_v2(racine, cid)
+        if dernier is None:
+            tentative = 1 + len(_tentatives_v2(racine, cid))
+            if tentative != 1:
+                bloquants.append(f"{cid}: tentative sans reçu structuré")
+            else:
+                travaux.append((cellule, tentative))
+            continue
+        decision = decision_reprise(dernier, cellule, lock["attempts_max"])
+        if decision["action"] == "retry":
+            travaux.append((cellule, int(dernier["attempt"]) + 1))
+        elif decision["action"] == "hold":
+            bloquants.append(f"{cid}: {decision['reason']}")
+        elif dernier.get("result") != "COMPLETE":
+            bloquants.append(f"{cid}: {decision['reason']}")
+    if bloquants:
+        print("HOLD: reprises non autorisées", file=sys.stderr)
+        for motif in bloquants:
+            print(f"  - {motif}", file=sys.stderr)
+        return 2
+
+    concurrence = runner["concurrency"]
+    futurs = {}
+    arrete = False
+    with ThreadPoolExecutor(max_workers=concurrence) as pool:
+        restants = list(travaux)
+        while restants or futurs:
+            while restants and len(futurs) < concurrence and not arrete:
+                cellule, tentative = restants.pop(0)
+                reservation_id = f"{cellule['collection_id']}__a{tentative}"
+                try:
+                    ledger.reserver(reservation_id, cellule["max_cost_microdollars"])
+                except (PlafondDepasse, ContratV2Invalide) as exc:
+                    print(f"HOLD budget avant soumission: {exc}", file=sys.stderr)
+                    arrete = True
+                    break
+                futur = pool.submit(
+                    _collecter_v2, runner, racine, lock_path, auth_path, ledger_path,
+                    cellule, tentative,
+                )
+                futurs[futur] = cellule
+            if not futurs:
+                break
+            for futur in as_completed(list(futurs)):
+                cellule = futurs.pop(futur)
+                result = futur.result()
+                receipt = result["receipt"]
+                if receipt is None or receipt.get("schema_version") != SCHEMA_ATTEMPT:
+                    ledger.finaliser(result["reservation_id"], None)
+                    print(f"HOLD {cellule['collection_id']}: reçu de tentative absent", file=sys.stderr)
+                    arrete = True
+                    break
+                accounting = receipt.get("cost_accounting") or {}
+                cout = accounting.get("cost_microdollars") if accounting.get("status") == "known" else None
+                ledger.finaliser(result["reservation_id"], cout)
+                if ledger.etat().get("hold"):
+                    print(f"HOLD {cellule['collection_id']}: coût non opposable", file=sys.stderr)
+                    arrete = True
+                    break
+                decision = decision_reprise(receipt, cellule, lock["attempts_max"])
+                if decision["action"] == "retry":
+                    restants.append((cellule, int(receipt["attempt"]) + 1))
+                elif receipt.get("result") != "COMPLETE":
+                    print(f"HOLD {cellule['collection_id']}: {decision['reason']}", file=sys.stderr)
+                    arrete = True
+                break
+    state = ledger.etat()
+    print(json.dumps({
+        "protocol_version": PROTOCOLE_V2,
+        "collections_complete": sum(_collecte_complete_v2(racine, c["collection_id"])
+                                    for c in lock["collections"]),
+        "collections_expected": len(lock["collections"]),
+        "engaged_microdollars": state["engaged_microdollars"],
+        "reserved_microdollars": RegistreBudget._reserve_total(state),
+        "hold": bool(arrete or state.get("hold")),
+    }, ensure_ascii=False, indent=2), file=sys.stderr)
+    return 2 if arrete or state.get("hold") else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("campaign", type=Path)
@@ -161,6 +377,8 @@ def main() -> int:
     args = ap.parse_args()
 
     conf = tomllib.load(args.campaign.open("rb"))
+    if conf.get("protocol_version") == PROTOCOLE_V2:
+        return lancer_v2(args, conf)
     racine = args.campaign.parent
     for champ in ("question", "cartes", "candidats", "runs"):
         if champ not in conf:
