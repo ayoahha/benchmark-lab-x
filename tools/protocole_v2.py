@@ -1740,6 +1740,47 @@ def valider_resultat_carte(
                 f"cause d'échec incohérente pour {card['id']}")
 
 
+def valider_diagnostic_processus_r016(observation: dict[str, Any]) -> None:
+    """Valider un diagnostic de vérificateur sans interpréter son stderr"""
+    diagnostic = observation.get("process_diagnostic")
+    if diagnostic is None:
+        return
+    _exiger(
+        observation.get("etat") == "UNKNOWN"
+        and observation.get("cause_code") in {"VERIFY_TIMEOUT", "VERIFY_PROCESS_ERROR"},
+        "diagnostic de processus R-016 interdit hors erreur de vérification",
+    )
+    _exiger(
+        isinstance(diagnostic, dict)
+        and set(diagnostic) == {
+            "failure_stage", "verifier_exit_code", "stderr_redacted",
+        },
+        "diagnostic de processus R-016 invalide",
+    )
+    stage = diagnostic.get("failure_stage")
+    _exiger(stage in {"spawn", "timeout", "exit", "output"},
+            "phase de diagnostic R-016 invalide")
+    code = diagnostic.get("verifier_exit_code")
+    _exiger(code is None or (isinstance(code, int) and not isinstance(code, bool)),
+            "code de sortie du vérificateur R-016 invalide")
+    _exiger(isinstance(diagnostic.get("stderr_redacted"), str),
+            "stderr expurgé R-016 invalide")
+    if stage == "spawn":
+        _exiger(code is None, "code de sortie incohérent avec la phase R-016")
+    elif stage == "output":
+        _exiger(code == 0, "code de sortie incohérent avec la phase R-016")
+    elif stage == "exit":
+        _exiger(code is not None and code != 0,
+                "code de sortie incohérent avec la phase R-016")
+    else:
+        _exiger(code is not None,
+                "code de sortie incohérent avec la phase R-016")
+    _exiger(
+        (observation.get("cause_code") == "VERIFY_TIMEOUT") == (stage == "timeout"),
+        "cause de vérification incohérente avec la phase R-016",
+    )
+
+
 def valider_recu_collecte(
     collection: dict[str, Any], lock_hash: str, cellule: dict[str, Any]
 ) -> dict[str, Any]:
@@ -2317,6 +2358,7 @@ def valider_recu_couverture(
                     observation, card,
                     champ_predicats="predicates", champ_mesures="measurements",
                 )
+                valider_diagnostic_processus_r016(observation)
             except ContratV2Invalide as exc:
                 motifs.append(f"{nom}/{cid}: {exc}")
                 attentes_conformes = False

@@ -54,6 +54,7 @@ from protocole_v2 import (  # noqa: E402
     resultat_acquis_v2,
     valider_autorisation_payante,
     valider_chaine_collecte,
+    valider_diagnostic_processus_r016,
     valider_etat_collecte,
     valider_evenements_panel,
     valider_environnement_observe,
@@ -1931,6 +1932,77 @@ class ProtocolV2Tests(unittest.TestCase):
             resultat["measurements"]["absolute_error"],
             "8.465638021306306e-05",
         )
+
+    def test_qualifier_conserve_le_diagnostic_processus_expurge(self):
+        erreur = (
+            'début\n"Authorization": "Bearer bearer-secret"\n'
+            'Authorization: Basic basic-secret\n'
+            'Authorization: Token token-scheme-secret\n'
+            'Authorization:\ntrace utile\n'
+            'OPENROUTER_API_KEY=env-secret\n"api_key": "json-secret"\n'
+            'token: plain-secret\nsk-route-secret\n'
+            'https://example.invalid/?access_token=query-secret\nfin'
+        )
+
+        class Processus:
+            returncode = 23
+
+            def communicate(self, timeout=None):
+                return "", erreur
+
+        with tempfile.TemporaryDirectory() as tmp:
+            temoin = Path(tmp) / "temoin.md"
+            temoin.write_text("témoin\n", encoding="utf-8")
+            with patch("qualifier_temoins.subprocess.Popen", return_value=Processus()):
+                resultat = noter_v5(temoin, Path("verify.py"), "carte", delai=1)
+        diagnostic = resultat["process_diagnostic"]
+        self.assertEqual(diagnostic["failure_stage"], "exit")
+        self.assertEqual(diagnostic["verifier_exit_code"], 23)
+        self.assertEqual(len(diagnostic["stderr_redacted"].splitlines()),
+                         len(erreur.splitlines()))
+        self.assertIn("trace utile", diagnostic["stderr_redacted"])
+        for secret in (
+            "bearer-secret", "basic-secret", "token-scheme-secret", "env-secret",
+            "json-secret", "plain-secret", "sk-route-secret", "query-secret",
+        ):
+            self.assertNotIn(secret, diagnostic["stderr_redacted"])
+
+    def test_diagnostic_r016_est_lie_a_une_erreur_de_verification(self):
+        observation = {
+            "etat": "UNKNOWN",
+            "cause_code": "VERIFY_PROCESS_ERROR",
+            "process_diagnostic": {
+                "failure_stage": "exit",
+                "verifier_exit_code": -5,
+                "stderr_redacted": "échec expurgé",
+            },
+        }
+        valider_diagnostic_processus_r016(observation)
+        observation["etat"] = "SCORED"
+        with self.assertRaises(ContratV2Invalide):
+            valider_diagnostic_processus_r016(observation)
+        observation["etat"] = "UNKNOWN"
+        observation["process_diagnostic"]["verifier_exit_code"] = 0
+        with self.assertRaises(ContratV2Invalide):
+            valider_diagnostic_processus_r016(observation)
+        observation["process_diagnostic"].update({
+            "failure_stage": "output",
+            "verifier_exit_code": 7,
+        })
+        with self.assertRaises(ContratV2Invalide):
+            valider_diagnostic_processus_r016(observation)
+        observation.update({
+            "cause_code": "VERIFY_TIMEOUT",
+            "process_diagnostic": {
+                "failure_stage": "timeout",
+                "verifier_exit_code": 0,
+                "stderr_redacted": "",
+            },
+        })
+        valider_diagnostic_processus_r016(observation)
+        observation["process_diagnostic"]["verifier_exit_code"] = None
+        with self.assertRaises(ContratV2Invalide):
+            valider_diagnostic_processus_r016(observation)
 
     def test_recu_r016_recalcule_la_couverture_depuis_les_observations(self):
         with tempfile.TemporaryDirectory() as tmp:

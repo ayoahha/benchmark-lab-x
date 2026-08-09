@@ -52,6 +52,7 @@ Usage :
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -140,15 +141,58 @@ def noter_aveugle(temoin: Path, verificateur: Path, delai: int = 180) -> dict | 
         return None
 
 
+def _expurger_diagnostic_processus(texte: str) -> str:
+    substitutions = (
+        (
+            r"(?im)([\"']?authorization[\"']?[ \t]*[:=][ \t]*[\"']?)[^\r\n\"']*",
+            r"\1[EXPURGÉ]",
+        ),
+        (
+            r"(?i)([\"']?(?:[A-Z0-9_-]*api[_-]?key|access_token|refresh_token|"
+            r"id_token|token)[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;}\]]+",
+            r"\1[EXPURGÉ]",
+        ),
+        (r"\bsk-[A-Za-z0-9_-]+\b", "[EXPURGÉ]"),
+    )
+    resultat = texte
+    for motif, remplacement in substitutions:
+        resultat = re.sub(motif, remplacement, resultat)
+    return resultat
+
+
+def _resultat_processus_inobservable(
+    cause_code: str,
+    failure_stage: str,
+    verifier_exit_code: int | None,
+    stderr: str,
+) -> dict:
+    return {
+        "etat": "UNKNOWN",
+        "cause_code": cause_code,
+        "predicates": {},
+        "process_diagnostic": {
+            "failure_stage": failure_stage,
+            "verifier_exit_code": verifier_exit_code,
+            "stderr_redacted": _expurger_diagnostic_processus(stderr),
+        },
+    }
+
+
 def noter_v5(temoin: Path, verificateur: Path, card_id: str, delai: int = 180) -> dict:
     """Noter une seule carte v5 sous le même chemin neutre que la campagne"""
     with tempfile.TemporaryDirectory(prefix="temoin-v5-") as tmp:
         neutre = Path(tmp) / "response.md"
         shutil.copyfile(temoin, neutre)
-        proc = subprocess.Popen(
-            ["uv", "run", str(verificateur), "--card", card_id, str(neutre)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
-        )
+        try:
+            proc = subprocess.Popen(
+                ["uv", "run", str(verificateur), "--card", card_id, str(neutre)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            return _resultat_processus_inobservable(
+                "VERIFY_PROCESS_ERROR", "spawn", None, str(exc)
+            )
         try:
             sortie, erreur = proc.communicate(timeout=delai)
         except subprocess.TimeoutExpired:
@@ -156,18 +200,23 @@ def noter_v5(temoin: Path, verificateur: Path, card_id: str, delai: int = 180) -
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 proc.kill()
-            proc.communicate()
-            return {"etat": "UNKNOWN", "cause_code": "VERIFY_TIMEOUT", "predicates": {}}
+            _, erreur = proc.communicate()
+            return _resultat_processus_inobservable(
+                "VERIFY_TIMEOUT", "timeout", proc.returncode, erreur
+            )
     if proc.returncode != 0:
-        return {"etat": "UNKNOWN", "cause_code": "VERIFY_PROCESS_ERROR",
-                "predicates": {}, "detail": erreur[-200:]}
+        return _resultat_processus_inobservable(
+            "VERIFY_PROCESS_ERROR", "exit", proc.returncode, erreur
+        )
     try:
         result = json.loads(sortie, parse_float=str)
     except json.JSONDecodeError:
-        return {"etat": "UNKNOWN", "cause_code": "VERIFY_PROCESS_ERROR", "predicates": {}}
-    return result if isinstance(result, dict) else {
-        "etat": "UNKNOWN", "cause_code": "VERIFY_PROCESS_ERROR", "predicates": {}
-    }
+        return _resultat_processus_inobservable(
+            "VERIFY_PROCESS_ERROR", "output", proc.returncode, erreur
+        )
+    return result if isinstance(result, dict) else _resultat_processus_inobservable(
+        "VERIFY_PROCESS_ERROR", "output", proc.returncode, erreur
+    )
 
 
 def qualifier_v2(args) -> int:
@@ -222,6 +271,8 @@ def qualifier_v2(args) -> int:
                     "predicates": (resultat.get("predicates") or {}) if scored else {},
                     "measurements": (resultat.get("measurements") or {}) if scored else {},
                 }
+                if "process_diagnostic" in resultat:
+                    observation["process_diagnostic"] = resultat["process_diagnostic"]
                 valider_resultat_carte(
                     observation, card,
                     champ_predicats="predicates", champ_mesures="measurements",
