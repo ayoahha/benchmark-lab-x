@@ -564,8 +564,9 @@ def construire_lock(draft: dict[str, Any]) -> dict[str, Any]:
             raise ContratV2Invalide("B0-09 reste en HOLD")
         if draft.get("b0_10_status") != "HOLD":
             raise ContratV2Invalide("le brouillon ne peut pas autoriser B0-10")
-        if draft.get("cap_microdollars") != 55_000_000:
-            raise ContratV2Invalide("plafond B0 différent des 55 dollars approuvés")
+        cap = draft.get("cap_microdollars")
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+            raise ContratV2Invalide("plafond B0 invalide")
         if draft.get("campaign_lock") != "campaign.lock.v4.json":
             raise ContratV2Invalide("nom du campaign-lock/v4 invalide")
         for champ in ("paid_authorization", "budget_ledger", "estimate_source"):

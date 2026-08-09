@@ -991,7 +991,7 @@ class ProtocolV2Tests(unittest.TestCase):
                 "approved_by": "Ayo",
                 "approved_at": "2026-08-08T00:00:00+02:00",
                 "estimate_microdollars": 32_226_068,
-                "cap_microdollars": 55_000_000,
+                "cap_microdollars": 100_000_000,
                 "source_snapshot_path": relatif,
                 "source_snapshot_sha256": source_hash,
             }
@@ -1000,6 +1000,7 @@ class ProtocolV2Tests(unittest.TestCase):
                 "b0_09_approval": approbation,
                 "budget_reestimate": {
                     "repriced_estimate_microdollars": 32_226_068,
+                    "approved_cap_microdollars": 100_000_000,
                 },
             }
             lu, source = figer_routes_precollecte._source_proposition(snapshot, RACINE)
@@ -1160,7 +1161,7 @@ class ProtocolV2Tests(unittest.TestCase):
             "criterion_version": route["criterion_version"],
             "observed_at": evidence["observed_at"],
             "budget_estimate_microdollars": 32_226_068,
-            "budget_cap_microdollars": 55_000_000,
+            "budget_cap_microdollars": 100_000_000,
             "b0_09_approval_sha256": "c" * 64,
             "b0_09_proposal_snapshot_sha256": "d" * 64,
         }
@@ -1196,7 +1197,7 @@ class ProtocolV2Tests(unittest.TestCase):
             "campaign_lock": "campaign.lock.v4.json",
             "paid_authorization": "paid-authorization.json",
             "budget_ledger": "budget-ledger.json",
-            "cap_microdollars": 55_000_000,
+            "cap_microdollars": 100_000_000,
             "estimate_microdollars": 32_226_068,
             "estimate_source": "fixture snapshot v3 approuvée",
             "audit_plans": {
@@ -1223,6 +1224,7 @@ class ProtocolV2Tests(unittest.TestCase):
         valider_lock(lock)
         cellule = lock["collections"][0]
         self.assertEqual(lock["schema_version"], SCHEMA_LOCK)
+        self.assertEqual(lock["budget"]["cap_microdollars"], 100_000_000)
         self.assertEqual(lock["task"]["task_version"], "task-v4")
         self.assertEqual({axis["verify_version"] for axis in lock["axes"]}, {"verify-v6"})
         self.assertEqual(sum(len(axis["predicates"]) for axis in lock["axes"]), 50)

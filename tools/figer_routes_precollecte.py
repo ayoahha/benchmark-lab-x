@@ -188,7 +188,17 @@ def chemin_run_historique(racine: Path, run: dict[str, Any]) -> Path:
     return racine / nom / "meta.json"
 
 
-def recalculer_budget(snapshot: dict[str, Any], historique: Path) -> dict[str, Any]:
+def recalculer_budget(
+    snapshot: dict[str, Any],
+    historique: Path,
+    approved_cap_microdollars: int = PLAFOND_APPROUVE,
+) -> dict[str, Any]:
+    if (
+        not isinstance(approved_cap_microdollars, int)
+        or isinstance(approved_cap_microdollars, bool)
+        or approved_cap_microdollars < 1
+    ):
+        raise SnapshotRoutesInvalide("plafond B0-09 invalide")
     results_path = historique / "results-data.json"
     try:
         results_data = results_path.read_bytes()
@@ -271,6 +281,8 @@ def recalculer_budget(snapshot: dict[str, Any], historique: Path) -> dict[str, A
     projection_micro = int(
         (projection * Decimal(1_000_000)).to_integral_value(rounding=ROUND_CEILING)
     )
+    if projection_micro > approved_cap_microdollars:
+        raise SnapshotRoutesInvalide("estimation B0-09 supérieure au plafond")
     delta = projection_micro - ESTIMATION_APPROUVEE
     sources = [sources[0], *sorted(sources[1:], key=lambda entree: entree["path"])]
     sources_hash = empreinte_octets(json.dumps(
@@ -293,8 +305,8 @@ def recalculer_budget(snapshot: dict[str, Any], historique: Path) -> dict[str, A
         "approved_estimate_microdollars": ESTIMATION_APPROUVEE,
         "repriced_estimate_microdollars": projection_micro,
         "delta_microdollars": delta,
-        "approved_cap_microdollars": PLAFOND_APPROUVE,
-        "margin_to_cap_microdollars": PLAFOND_APPROUVE - projection_micro,
+        "approved_cap_microdollars": approved_cap_microdollars,
+        "margin_to_cap_microdollars": approved_cap_microdollars - projection_micro,
         "status": (
             "B0_09_UNCHANGED"
             if delta == 0
@@ -839,6 +851,13 @@ def _valider_budget_cible(snapshot: dict[str, Any]) -> None:
         total * Decimal(6) / Decimal(4) * Decimal(83) / Decimal(76)
         * Decimal(1_000_000)
     ).to_integral_value(rounding=ROUND_CEILING))
+    cap = budget.get("approved_cap_microdollars")
+    if (
+        not isinstance(cap, int)
+        or isinstance(cap, bool)
+        or cap < projection
+    ):
+        raise SnapshotRoutesInvalide("plafond B0-09 invalide")
     if (
         budget.get("historical_runs") != 76
         or budget.get("historical_provider_prompts") != 83
@@ -846,8 +865,7 @@ def _valider_budget_cible(snapshot: dict[str, Any]) -> None:
         or budget.get("repriced_estimate_microdollars") != projection
         or budget.get("approved_estimate_microdollars") != ESTIMATION_APPROUVEE
         or budget.get("delta_microdollars") != projection - ESTIMATION_APPROUVEE
-        or budget.get("approved_cap_microdollars") != PLAFOND_APPROUVE
-        or budget.get("margin_to_cap_microdollars") != PLAFOND_APPROUVE - projection
+        or budget.get("margin_to_cap_microdollars") != cap - projection
     ):
         raise SnapshotRoutesInvalide("recalcul B0-09 incohérent")
     attendu_status = (
@@ -896,7 +914,8 @@ def _source_proposition(
         or not approbation["approved_at"]
         or approbation.get("estimate_microdollars")
         != snapshot["budget_reestimate"]["repriced_estimate_microdollars"]
-        or approbation.get("cap_microdollars") != PLAFOND_APPROUVE
+        or approbation.get("cap_microdollars")
+        != snapshot["budget_reestimate"]["approved_cap_microdollars"]
     ):
         raise SnapshotRoutesInvalide("approbation B0-09 v2 invalide")
     if (
@@ -1270,10 +1289,50 @@ def approuver_snapshot_cible(
         "estimate_microdollars": snapshot["budget_reestimate"][
             "repriced_estimate_microdollars"
         ],
-        "cap_microdollars": PLAFOND_APPROUVE,
+        "cap_microdollars": snapshot["budget_reestimate"][
+            "approved_cap_microdollars"
+        ],
         "source_snapshot_path": relatif,
         "source_snapshot_sha256": source["sha256"],
     }
+    snapshot["hold_reasons"] = _raisons_hold_cible(snapshot)
+    snapshot["status"] = "PREPARED_LOCAL_ONLY" if not snapshot["hold_reasons"] else "HOLD"
+    valider_cible(snapshot, racine)
+    return snapshot
+
+
+def reviser_plafond_proposition(
+    source_path: Path,
+    cap_microdollars: int,
+    racine: Path,
+) -> dict[str, Any]:
+    if source_path.is_symlink() or not source_path.is_file():
+        raise SnapshotRoutesInvalide("snapshot proposé absent ou lié")
+    try:
+        relatif = source_path.resolve().relative_to(racine.resolve()).as_posix()
+        source_resolue = resoudre_sous(racine, relatif)
+    except (ValueError, ContratV2Invalide) as exc:
+        raise SnapshotRoutesInvalide("snapshot proposé hors du dépôt") from exc
+    if source_resolue != source_path.resolve():
+        raise SnapshotRoutesInvalide("snapshot proposé différent du chemin canonique")
+    try:
+        proposition = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SnapshotRoutesInvalide("snapshot proposé illisible") from exc
+    valider_cible(proposition, racine)
+    if proposition.get("b0_09_approval") is not None or proposition.get("proposal_source") is not None:
+        raise SnapshotRoutesInvalide("la source B0-09 doit être une proposition non approuvée")
+    estimation = proposition["budget_reestimate"]["repriced_estimate_microdollars"]
+    if (
+        not isinstance(cap_microdollars, int)
+        or isinstance(cap_microdollars, bool)
+        or cap_microdollars < estimation
+    ):
+        raise SnapshotRoutesInvalide("plafond B0-09 invalide")
+    snapshot = copy.deepcopy(proposition)
+    budget = snapshot["budget_reestimate"]
+    budget["approved_cap_microdollars"] = cap_microdollars
+    budget["margin_to_cap_microdollars"] = cap_microdollars - estimation
     snapshot["hold_reasons"] = _raisons_hold_cible(snapshot)
     snapshot["status"] = "PREPARED_LOCAL_ONLY" if not snapshot["hold_reasons"] else "HOLD"
     valider_cible(snapshot, racine)
@@ -1286,6 +1345,8 @@ def main() -> int:
     mode.add_argument("--out", type=Path)
     mode.add_argument("--check", type=Path)
     ap.add_argument("--approve-from", type=Path)
+    ap.add_argument("--revise-cap-from", type=Path)
+    ap.add_argument("--cap-microdollars", type=int, default=PLAFOND_APPROUVE)
     ap.add_argument("--approved-at")
     ap.add_argument("--models-file", type=Path, default=Path("models.toml"))
     ap.add_argument("--alias", action="append", dest="aliases")
@@ -1299,6 +1360,15 @@ def main() -> int:
     try:
         if args.check:
             snapshot = json.loads(args.check.read_text(encoding="utf-8"))
+        elif args.approve_from and args.revise_cap_from:
+            raise SnapshotRoutesInvalide(
+                "--approve-from et --revise-cap-from sont incompatibles"
+            )
+        elif args.revise_cap_from:
+            snapshot = reviser_plafond_proposition(
+                args.revise_cap_from, args.cap_microdollars, Path.cwd()
+            )
+            ecrire_json_immuable(args.out, snapshot)
         elif args.approve_from:
             if not args.approved_at:
                 raise SnapshotRoutesInvalide("--approved-at requis avec --approve-from")
@@ -1324,7 +1394,9 @@ def main() -> int:
                 "b0_09_approval": None,
                 **selection,
             }
-            snapshot["budget_reestimate"] = recalculer_budget(snapshot, args.historical)
+            snapshot["budget_reestimate"] = recalculer_budget(
+                snapshot, args.historical, args.cap_microdollars
+            )
             snapshot["hold_reasons"] = _raisons_hold_cible(snapshot)
             if not snapshot["hold_reasons"]:
                 snapshot["status"] = "PREPARED_LOCAL_ONLY"
