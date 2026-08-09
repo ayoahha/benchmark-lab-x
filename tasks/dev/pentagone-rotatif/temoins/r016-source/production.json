@@ -2,9 +2,24 @@
   "statut": "LIVRÉ — paquet R-016 préenregistré ; attentes figées sans aucune observation du juge",
   "producteur": {
     "modele": "kimi-k3",
-    "fournisseur": "moonshotai via prime-agent",
-    "session": "019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+    "fournisseur": "moonshotai",
     "date_utc": "2026-08-08T15:04:18.368395+00:00"
+  },
+  "copie_publique": {
+    "assainie": true,
+    "source_originale_sha256": "fc000e827fe9ef171366caf7f65139d4ea52b619ea6e72bd97ff379f00869096",
+    "retraits": [
+      "nom de l’outil d’orchestration local",
+      "identifiants locaux de session et de prompt",
+      "extraits de prompts internes"
+    ],
+    "invariants_conserves": [
+      "modèle et fournisseur",
+      "dates et empreintes de préenregistrement",
+      "sources autorisées",
+      "déclarations de non-accès",
+      "empreintes des fichiers livrés"
+    ]
   },
   "environnement": "environnement techniquement non cloisonné ; aucun contenu interdit consulté",
   "sources_autorisees": {
@@ -36,8 +51,8 @@
       "neg-12-horizon-75s.html": "6603bbbd358dd8874104e05892cc8b61e545f867f7ad6742bb10b8959c97ee92"
     },
     "premiere_livraison_source_derivee_immuable": {
-      "chemin": "/Users/ayo/Downloads/benchmark-2/livraison-r016-PARTIELLE-non-qualifiante",
-      "statut": "tentative partielle non qualifiante ; jamais modifiée après sa création ; empreintes revérifiées dans cette session",
+      "origine": "source temporaire locale hors dépôt",
+      "statut": "tentative partielle non qualifiante ; jamais modifiée après sa création ; empreintes revérifiées lors de cette production",
       "empreintes": {
         "outils/integrateur_reference.py": "a7b8c7f3d5fc9059fcbbd185728a9acec376aef23cb40b32fccbece14f483a97",
         "production-partielle.json": "3ecf306985ca9b87e9b1aa9ee01cd3528ef18f0821db85c9f1b9c4932758ba80"
@@ -45,46 +60,34 @@
     }
   },
   "declaration_non_acces": "Aucun accès au dépôt benchmark-lab-x, au vérificateur verify-v4, à l'oracle, au cache figé, à un résultat de campagne ou à tout fichier non déclaré de /tmp/temoins-r016. _debug.html, _debug2.html et _harnais.js n'ont pas été consultés. Dans /tmp/temoins-r016, seuls manifeste.json et les 13 fichiers témoins déclarés ont été lus. Aucune exécution contre le juge ; aucune attente ajustée après fixation.",
-  "prompts_sha256": [
+  "preuves_de_preenregistrement": [
     {
-      "id": "2c699f11",
       "timestamp": "2026-08-08T10:49:31.294Z",
-      "sha256": "19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782",
-      "debut": "Tu agis comme producteur indépendant de témoins pour la règl"
+      "sha256": "19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782"
     },
     {
-      "id": "285fb6e1",
       "timestamp": "2026-08-08T10:52:57.907Z",
-      "sha256": "558dea5a1c31bf85f921f018f41b47f1fa0a6971c1bf086e41d36cc8e0807b9c",
-      "debut": "Correction de la frontière d’indépendance, qui remplace la s"
+      "sha256": "558dea5a1c31bf85f921f018f41b47f1fa0a6971c1bf086e41d36cc8e0807b9c"
     },
     {
-      "id": "4f411cf3",
       "timestamp": "2026-08-08T10:56:53.455Z",
-      "sha256": "5055eed60c92c9836d0aa65fba55746bcb3aa8adb859013ee2b893bd0010e6d8",
-      "debut": "La source autorisée `task-v3.md` vient d’être remplacée par "
+      "sha256": "5055eed60c92c9836d0aa65fba55746bcb3aa8adb859013ee2b893bd0010e6d8"
     },
     {
-      "id": "3378bcbe",
       "timestamp": "2026-08-08T11:00:01.735Z",
-      "sha256": "5055eed60c92c9836d0aa65fba55746bcb3aa8adb859013ee2b893bd0010e6d8",
-      "debut": "La source autorisée `task-v3.md` vient d’être remplacée par "
+      "sha256": "5055eed60c92c9836d0aa65fba55746bcb3aa8adb859013ee2b893bd0010e6d8"
     },
     {
-      "id": "23aee336",
       "timestamp": "2026-08-08T14:42:36.216Z",
-      "sha256": "01a02f51fd59b8effb85363d39b42add45ae6eb2998411d8dbc67faf9797a2af",
-      "debut": "Arrête immédiatement tout calcul en cours, sans supprimer ni"
+      "sha256": "01a02f51fd59b8effb85363d39b42add45ae6eb2998411d8dbc67faf9797a2af"
     },
     {
-      "id": "1a14be10",
       "timestamp": "2026-08-08T14:54:06.813Z",
-      "sha256": "2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f",
-      "debut": "Nouvelle mission, remplaçant la condition de reprise précéde"
+      "sha256": "2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f"
     }
   ],
   "fichiers_livres": {
-    "provenance.json": "dade38d6ff34e10266c0e0965b85427548fc5c89bd2dbc65c88e856ca0cf7208",
+    "provenance.json": "d4a52ae0501a080eff2a631dc7c8294427b97b7400557e9f14afb8d1a9a898a7",
     "outils/harnais-neg04.js": "b02db58b4e2fa9e7a7c86137d04d368fa5989bf047cb94bca8a8135905542371",
     "temoins/neg-01-page-absente.md": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "temoins/neg-02-api-absente.md": "6f2eb38fb4942504bc6b57f64c502d8875b2b5079855b0dbf4019c0456be0aa8",
@@ -102,7 +105,7 @@
   },
   "outils_personnels_exclus_du_jeu_qualifiant": [
     "outils/harnais-neg04.js (contrôle des 4 propriétés du nouveau neg-04 ; exécuté sous node v26.7.0)",
-    "contrôles statiques menés dans le noyau IPython de la session (diffs, greps, node --check en parse seul)",
+    "contrôles statiques menés dans un noyau IPython local (diffs, greps, node --check en parse seul)",
     "mpmath 1.4.1 dans le venv du noyau (installé lors de la tentative précédente, inutilisé pour ce paquet)"
   ],
   "matrice_de_couverture_prevue": {
@@ -517,20 +520,20 @@
     }
   },
   "incertitudes_et_hypotheses_restantes": [
-    "pos-01 : les 51 attentes true sont des prédictions préenregistrées à éprouver par le qualificateur (conformément à la mission) ; elles n'ont pas été redémontrées par calcul lourd dans cette session",
+    "pos-01 : les 51 attentes true sont des prédictions préenregistrées à éprouver par le qualificateur (conformément à la mission) ; elles n'ont pas été redémontrées par calcul lourd lors de cette production",
     "pos-01 / P24_1e-16 : la faisabilité suppose un oracle quasi exact à 24 s et une erreur de représentation float64 de la position vraie à 24 s inférieure à 1e-16 ; la source dérivée annonce une erreur de conception < 1e-40 m à 24 s (241 chocs, auto-contrôles consignés dans le manifeste) sans re-mesure ici",
     "pos-01 / ordre des appels : l'indépendance à l'ordre repose sur la mémorisation déterministe des chocs ; le raffinage d'une racine part d'un crochet float64 dont la phase dépend de l'historique d'appels — risque résiduel si deux racines tombaient dans un même crochet (espacement moyen mesuré ~0,37 s, crochet ~4e-4 s)",
-    "neg-05 / E35,E55,E75=false : repose sur la décorrélation chaotique d'un écart initial de 0,01 m (λ=1,06 dans donnees.md) et sur les mesures figées de la source dérivée (écarts 0,3 à 1,3 m aux trois horizons) ; non redérivé dans cette session",
+    "neg-05 / E35,E55,E75=false : repose sur la décorrélation chaotique d'un écart initial de 0,01 m (λ=1,06 dans donnees.md) et sur les mesures figées de la source dérivée (écarts 0,3 à 1,3 m aux trois horizons) ; non redérivé lors de cette production",
     "neg-06 à neg-12 : le mécanisme (littéral COUPURE) est confirmé statiquement par diff à un littéral près ; les instants de sortie et erreurs chiffrées proviennent des mesures figées de la source dérivée",
     "neg-09 : les 37 attentes false exigent une erreur > 1e+2 m à 24 s ; la source dérivée mesure ~1,55e+2 m (sortie ~18,745 s) ; une borne statique (chute libre après sortie) soutient un écart très supérieur à 100 m",
     "correspondance prédicats/niveaux des cartes à niveaux adoptée selon le contrat public de la mission ; l'ordre interne des niveaux n'est pas revérifiable depuis les seules sources autorisées"
   ],
-  "fichiers_effectivement_lus_dans_cette_session": [
-    "/Users/ayo/Downloads/benchmark-2/task-v3.md (intégral)",
-    "/Users/ayo/Downloads/benchmark-2/donnees.md (intégral)",
+  "sources_effectivement_lues_lors_de_la_production": [
+    "copie temporaire locale de task-v3.md (intégral)",
+    "copie temporaire locale de donnees.md (intégral)",
     "/tmp/temoins-r016/manifeste.json (intégral)",
     "/tmp/temoins-r016/{les 13 témoins déclarés}.html (intégral, contrôle d'empreintes + revue statique)",
-    "/Users/ayo/Downloads/benchmark-2/livraison-r016-PARTIELLE-non-qualifiante/** (re-hachage uniquement)",
-    "/Users/ayo/.prime/agent/sessions/019fe0fd-dc2b-74e8-868c-9f64cc8930ac.jsonl (journal propre à cette session, pour empreintes des prompts et identité du modèle)"
+    "première livraison temporaire non qualifiante (re-hachage uniquement)",
+    "journal local d’orchestration (empreintes des prompts et identité du modèle ; identifiants retirés de la copie publique)"
   ]
 }

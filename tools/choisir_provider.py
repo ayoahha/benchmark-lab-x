@@ -17,12 +17,14 @@ le résultat est un pin écrit dans `models.toml` avant la collecte.
 
 Le critère, dans cet ordre strict :
 
-1. la route doit accorder au moins le plancher de budget (R-025) ;
-2. fidélité au format de référence du modèle. Quand la carte déclare
-   `format_reference`, la route qui sert ce format est fidèle et toute autre
-   s'en écarte. Sans déclaration, une échelle absolue de bits s'applique par
-   défaut — `bf16` et au-dessus devant `fp8`, devant `fp4` ou `mxfp4` — et
-   cette échelle reste une hypothèse, pas un fait ;
+1. la route doit déclarer un budget de sortie positif (R-025) ;
+2. classe de format. Quand la carte déclare `format_reference`, une route qui
+   déclare exactement ce format passe d'abord. Une API éditeur qui ne divulgue
+   pas sa quantification reste une classe de politique distincte, sans rang
+   numérique supposé. Sans format de référence, cette classe éditeur passe
+   avant les formats tiers déclarés au titre de l'identité de la route, pas
+   d'une précision présumée. Entre formats déclarés, l'échelle absolue place
+   `bf16` et au-dessus devant `fp8`, devant `fp4` ou `mxfp4` ;
 3. endpoint de l'éditeur du modèle d'abord : à égalité de précision, la route
    de celui qui publie le modèle est l'implémentation de référence, et un
    revendeur peut différer par des réglages que les métadonnées n'exposent pas ;
@@ -31,8 +33,9 @@ Le critère, dans cet ordre strict :
    déclarée dans `models.toml` puis consignée au reçu ;
 5. étiquette d'endpoint par ordre alphabétique, faute de mieux.
 
-L'ordre place la fidélité en tête : perdre `seed` coûte de la répétabilité,
-servir des poids qui ne sont pas ceux du modèle change le modèle.
+L'ordre place la classe de format en tête : perdre `seed` coûte de la
+répétabilité, servir des poids déclarés différents change le modèle. Le statut
+`not_disclosed` ne fournit aucune information physique à comparer.
 
 `format_reference` existe parce que l'échelle absolue s'est trompée. Elle
 suppose qu'un modèle est publié en pleine précision et requantifié par ses
@@ -78,26 +81,33 @@ import requests
 
 # Toute évolution de l'ordre ci-dessus change cette valeur : un pin consigné
 # sous `critere/v1` ne se compare pas à un pin choisi sous une autre version
-CRITERE_VERSION = "benchmark-lab-x/selection-route/v2"
+CRITERE_VERSION_HISTORIQUE = "benchmark-lab-x/selection-route/v2"
+CRITERE_VERSION = "benchmark-lab-x/selection-route/v3"
+
+# Correspondance fermée entre l'espace de noms, le slug et les noms d'éditeur
+EDITEURS_CANONIQUES = {
+    "anthropic": ("anthropic", frozenset({"anthropic"})),
+    "deepseek": ("deepseek", frozenset({"deepseek"})),
+    "meta": ("meta", frozenset({"meta"})),
+    "minimax": ("minimax", frozenset({"minimax"})),
+    "mistralai": ("mistral", frozenset({"mistral", "mistral-ai"})),
+    "moonshotai": ("moonshotai", frozenset({"moonshot-ai", "moonshotai"})),
+    "openai": ("openai", frozenset({"openai"})),
+    "qwen": ("alibaba", frozenset({"alibaba"})),
+    "tencent": ("tencent", frozenset({"tencent"})),
+    "x-ai": ("xai", frozenset({"xai"})),
+    "xiaomi": ("xiaomi", frozenset({"xiaomi"})),
+}
 
 # Fidélité numérique, du plus fidèle au plus dégradé
 FIDELITE = {
     "fp32": 0, "float32": 0,
     "bf16": 1, "fp16": 1, "float16": 1, "bfloat16": 1,
-    "unknown": 2, "": 2, "none": 2,
     "fp8": 3, "float8": 3,
     "int8": 4,
     "fp6": 5,
     "fp4": 6, "mxfp4": 6, "nf4": 6, "int4": 6,
 }
-# Une quantification non déclarée ne vaut pas la même chose selon qui sert.
-# L'éditeur qui ne déclare rien sert presque toujours son modèle en précision
-# native, et le supposer quantifié serait aussi faux que le supposer exact : il
-# reste au rang 2. Un revendeur qui ne déclare rien, lui, ne nous apprend rien,
-# et un `fp8` déclaré est une dégradation connue et bornée là où son silence ne
-# l'est pas. Il passe donc DERRIÈRE les précisions déclarées, jamais devant.
-# Distinction demandée par la revue du 2026-08-06
-RANG_NON_DECLARE_REVENDEUR = 5
 # Paramètres du contrat de campagne. Une route qui n'en accepte pas un impose
 # de l'omettre, et un candidat mesuré sans `seed` n'est plus comparable aux
 # autres sur le même pied
@@ -110,7 +120,7 @@ def norm(v: Any) -> str:
     return re.sub(r"[\s_]+", "-", str(v or "").strip().lower())
 
 
-def rang_fidelite(q: Any, editeur: bool, reference: str | None = None) -> int:
+def rang_fidelite(q: Any, reference: str | None = None) -> int | None:
     """Rang de fidélité d'une route, relatif au format de référence quand il est connu.
 
     L'échelle absolue de bits ci-dessus suppose que moins de bits vaut moins
@@ -125,12 +135,29 @@ def rang_fidelite(q: Any, editeur: bool, reference: str | None = None) -> int:
     Sans déclaration, l'échelle absolue s'applique et reste une hypothèse
     """
     cle = norm(q).replace("-", "")
+    if cle in {"", "none", "unknown", "opaque", "notdisclosed"}:
+        return None
     if reference:
         return 0 if cle == norm(reference).replace("-", "") else 4
-    rang = FIDELITE.get(cle, 2)
-    if rang == 2 and not editeur:
-        return RANG_NON_DECLARE_REVENDEUR
-    return rang
+    return FIDELITE.get(cle)
+
+
+def politique_format(q: Any, editeur: bool, reference: str | None = None) -> tuple[str, int, int]:
+    """Classer sans convertir `not_disclosed` en valeur de quantification"""
+    cle = norm(q).replace("-", "")
+    non_divulgue = cle in {"", "none", "unknown", "opaque", "notdisclosed"}
+    if non_divulgue:
+        if not editeur:
+            return ("third_party_undisclosed", 3, 0)
+        return ("publisher_not_disclosed", 1 if reference else 0, 0)
+    rang = rang_fidelite(q, reference)
+    if rang is None:
+        return ("declared_unordered", 2, 0)
+    if reference:
+        if rang == 0:
+            return ("declared_reference_exact", 0, 0)
+        return ("declared_reference_mismatch", 2, 0)
+    return ("declared_ranked", 1, rang)
 
 
 def budget_de(ep: dict) -> int:
@@ -142,18 +169,45 @@ def budget_de(ep: dict) -> int:
     return max(0, brut)
 
 
+def editeur_canonique(model: str) -> str | None:
+    """Résoudre l'éditeur depuis l'espace de noms public du modèle"""
+    contrat = EDITEURS_CANONIQUES.get(norm(model.split("/")[0]))
+    return contrat[0] if contrat else None
+
+
 def est_editeur(ep: dict, model: str) -> bool:
     """L'endpoint est-il servi par celui qui publie le modèle ?
 
     L'identifiant OpenRouter porte l'éditeur en préfixe (`moonshotai/kimi-k3`),
     et l'étiquette d'endpoint reprend ce préfixe quand l'éditeur sert lui-même
     """
-    editeur = norm(model.split("/")[0])
-    return editeur in {norm(ep.get("provider_name")),
-                       norm(str(ep.get("tag") or "").split("/")[0])}
+    contrat = EDITEURS_CANONIQUES.get(norm(model.split("/")[0]))
+    if contrat is None:
+        return False
+    editeur, noms = contrat
+    return (
+        norm(ep.get("provider_name")) in noms
+        and norm(str(ep.get("tag") or "").split("/")[0]) == editeur
+    )
 
 
-def evaluer(ep: dict, plancher: int, model: str, reference: str | None = None) -> dict:
+def contrat_quantification(ep: dict, model: str) -> dict[str, Any]:
+    """Construire le contrat fermé de quantification de selection-route/v3"""
+    brut = ep.get("quantization")
+    if isinstance(brut, str) and brut.strip() and norm(brut) not in {"unknown", "opaque"}:
+        return {"status": "declared", "value": brut.strip()}
+    editeur = editeur_canonique(model)
+    if est_editeur(ep, model) and editeur is not None:
+        return {
+            "status": "not_disclosed",
+            "value": None,
+            "basis": "publisher_managed_api",
+            "publisher": editeur,
+        }
+    raise ValueError("quantification non déclarée sur une route tierce")
+
+
+def evaluer(ep: dict, model: str, reference: str | None = None) -> dict:
     """Rendre la clé de tri d'un endpoint et les motifs qui l'écartent"""
     budget = budget_de(ep)
     supportes = {norm(p) for p in (ep.get("supported_parameters") or [])}
@@ -170,8 +224,8 @@ def evaluer(ep: dict, plancher: int, model: str, reference: str | None = None) -
     dispo = ep.get("uptime_last_30m")
     # Seule une propriété structurelle exclut : elle sera encore vraie demain
     exclusions = []
-    if budget < plancher:
-        exclusions.append(f"budget {budget} sous le plancher {plancher}")
+    if budget < 1:
+        exclusions.append("budget de sortie non positif ou absent")
     # Les réserves n'excluent pas, elles se signalent au moment de collecter
     reserves = []
     if norm(ep.get("status")) not in ("", "0", "none", "null"):
@@ -179,11 +233,24 @@ def evaluer(ep: dict, plancher: int, model: str, reference: str | None = None) -
     if dispo is not None and dispo < 95:
         reserves.append(f"disponibilité {dispo:.1f}% sur 30 jours")
     editeur = est_editeur(ep, model)
-    fidelite = rang_fidelite(ep.get("quantization"), editeur, reference)
+    quantification_declaree = (
+        isinstance(ep.get("quantization"), str)
+        and bool(ep["quantization"].strip())
+        and norm(ep["quantization"]) not in {"unknown", "opaque"}
+    )
+    if not editeur and not quantification_declaree:
+        exclusions.append("quantification non déclarée sur une route tierce")
+    classe_format, ordre_classe, ordre_format = politique_format(
+        ep.get("quantization"), editeur, reference
+    )
+    fidelite = rang_fidelite(ep.get("quantization"), reference)
     return {
         "tag": ep.get("tag") or ep.get("provider_name"),
         "provider_name": ep.get("provider_name"),
-        "quantization": ep.get("quantization") or ("unknown" if editeur else "non déclarée"),
+        "quantization": ep.get("quantization") or ("not_disclosed" if editeur else "non déclarée"),
+        "quantization_status": "declared" if quantification_declaree else "not_disclosed",
+        "publisher": editeur_canonique(model),
+        "format_policy_class": classe_format,
         "rang_fidelite": fidelite,
         "budget": budget,
         "uptime_30j": dispo,
@@ -197,7 +264,8 @@ def evaluer(ep: dict, plancher: int, model: str, reference: str | None = None) -
         # contient que des propriétés stables : deux exécutions à des jours
         # différents rendent le même verdict
         "_cle": (
-            fidelite,
+            ordre_classe,
+            ordre_format,
             0 if editeur else 1,
             len(manquants),
             str(ep.get("tag") or ""),
@@ -205,13 +273,13 @@ def evaluer(ep: dict, plancher: int, model: str, reference: str | None = None) -
     }
 
 
-def classer(model: str, plancher: int, reference: str | None = None) -> dict:
+def classer(model: str, reference: str | None = None) -> dict:
     url = f"https://openrouter.ai/api/v1/models/{model}/endpoints"
     r = requests.get(url, headers={"Accept": "application/json"}, timeout=20)
     if r.status_code >= 400:
         return {"modele": model, "erreur": f"HTTP {r.status_code}", "routes": []}
     eps = (r.json().get("data") or {}).get("endpoints") or []
-    routes = [evaluer(e, plancher, model, reference) for e in eps]
+    routes = [evaluer(e, model, reference) for e in eps]
     eligibles = sorted((x for x in routes if not x["exclusions"]), key=lambda x: x["_cle"])
     for x in routes:
         x.pop("_cle")
@@ -219,7 +287,6 @@ def classer(model: str, plancher: int, reference: str | None = None) -> dict:
         "modele": model,
         "critere_version": CRITERE_VERSION,
         "format_reference": reference,
-        "plancher": plancher,
         "recommande": eligibles[0]["tag"] if eligibles else None,
         "routes": routes,
         "eligibles": [x["tag"] for x in eligibles],
@@ -232,7 +299,6 @@ def main() -> int:
     ap.add_argument("modeles", nargs="*", help="identifiants OpenRouter à classer")
     ap.add_argument("--tous", action="store_true", help="classer tous les alias de models.toml")
     ap.add_argument("--models-file", type=Path, default=Path("models.toml"))
-    ap.add_argument("--plancher-tokens", type=int, default=65536)
     ap.add_argument("--json", action="store_true", help="sortie machine, à consigner avec la campagne")
     args = ap.parse_args()
 
@@ -252,7 +318,7 @@ def main() -> int:
                 if e.get("format_reference"):
                     references.setdefault(e["model"], e["format_reference"])
 
-    resultats = [classer(m, args.plancher_tokens, references.get(m)) for m in cibles]
+    resultats = [classer(m, references.get(m)) for m in cibles]
 
     if args.json:
         print(json.dumps({"critere_version": CRITERE_VERSION, "modeles": resultats},

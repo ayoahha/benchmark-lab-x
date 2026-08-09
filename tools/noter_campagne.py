@@ -42,8 +42,10 @@ from protocole_v2 import (  # noqa: E402
     empreinte_lock,
     resoudre_sous,
     sha256_fichier,
+    valider_chaine_collecte,
     valider_environnement_observe,
     valider_lock,
+    valider_recu_collecte,
     valider_recu_score,
 )
 
@@ -68,12 +70,12 @@ def _recu_collecte(campaign_dir: Path, collection_id: str) -> tuple[Path, dict[s
     recus = sorted(racine.glob("attempt-*/collection-receipt.json"))
     if len(recus) != 1:
         raise ContratV2Invalide(
-            f"{collection_id}: un reçu de collecte COMPLETE exact est requis, trouvé {len(recus)}"
+            f"{collection_id}: un reçu de collecte COLLECTED exact est requis, trouvé {len(recus)}"
         )
     receipt = charger_json(recus[0])
     if receipt.get("schema_version") != SCHEMA_COLLECTION:
         raise ContratV2Invalide(f"{collection_id}: schéma de reçu de collecte invalide")
-    if receipt.get("result") != "COMPLETE":
+    if receipt.get("result") != "COLLECTED":
         raise ContratV2Invalide(f"{collection_id}: reçu non scoreable")
     return recus[0], receipt
 
@@ -84,25 +86,30 @@ def _valider_collecte(
     lock_hash: str,
     cellule: dict[str, Any],
 ) -> Path:
-    if receipt.get("campaign_lock_hash") != lock_hash:
-        raise ContratV2Invalide("reçu de collecte lié à un autre lock")
-    if receipt.get("collection_id") != cellule["collection_id"]:
-        raise ContratV2Invalide("reçu de collecte lié à une autre cellule")
-    if receipt.get("execution_manifest_hash") != cellule["execution_manifest_hash"]:
-        raise ContratV2Invalide("manifeste d’exécution différent du lock")
-    if receipt.get("attempt") not in (1, 2, 3):
-        raise ContratV2Invalide("numéro de tentative invalide")
+    valider_recu_collecte(receipt, lock_hash, cellule)
+    attempt_path = receipt_path.parent / "attempt-receipt.json"
+    if not attempt_path.is_file() or attempt_path.is_symlink():
+        raise ContratV2Invalide("reçu de tentative COMPLETE absent")
+    valider_chaine_collecte(
+        charger_json(attempt_path), receipt, lock_hash, cellule
+    )
     response = receipt_path.parent / "response.md"
     if not response.is_file() or response.is_symlink():
         raise ContratV2Invalide("response.md absent ou lié symboliquement")
-    if sha256_fichier(response) != receipt.get("response_sha256"):
+    if sha256_fichier(response) != receipt["candidate"]["sha256"]:
         raise ContratV2Invalide("empreinte de response.md différente du reçu")
+    response_json = receipt_path.parent / "raw.json"
+    if not response_json.is_file() or response_json.is_symlink():
+        raise ContratV2Invalide("raw.json absent ou lié symboliquement")
+    if sha256_fichier(response_json) != receipt["response_json_sha256"]:
+        raise ContratV2Invalide("empreinte de raw.json différente du reçu")
     served = receipt.get("served")
     if not isinstance(served, dict):
         raise ContratV2Invalide("identité servie absente du reçu")
     attendue = cellule["route"].get("expect_provider") or cellule["route"]["provider"]
     normaliser = lambda x: str(x or "").strip().lower().replace(" ", "-").replace("_", "-")
-    if normaliser(served.get("model")) != normaliser(cellule["model"]):
+    execution = cellule["execution_manifest"]
+    if normaliser(served.get("model")) != normaliser(execution["model_requested"]):
         raise ContratV2Invalide("modèle servi différent du lock")
     if normaliser(served.get("provider")) not in {
         normaliser(cellule["route"]["provider"]), normaliser(attendue)
@@ -172,8 +179,8 @@ def _valider_sortie(result: dict[str, Any], card: dict[str, Any]) -> None:
     predicats = result.get("predicates")
     if not isinstance(predicats, dict):
         raise ContratV2Invalide(f"prédicats absents pour {card['id']}")
-    if etat == "SCORED" and tuple(predicats) != tuple(card["predicates"]):
-        raise ContratV2Invalide(f"ordre ou ensemble des prédicats différent pour {card['id']}")
+    if etat == "SCORED" and set(predicats) != set(card["predicates"]):
+        raise ContratV2Invalide(f"ensemble des prédicats différent pour {card['id']}")
 
 
 def noter_collection(campaign_dir: Path, lock: dict[str, Any], collection_id: str) -> list[Path]:
@@ -186,19 +193,23 @@ def noter_collection(campaign_dir: Path, lock: dict[str, Any], collection_id: st
     valider_environnement_observe(lock, "measurement", environment)
     environment_hash = empreinte(environment)
     produits = []
-    for card in lock["score_cards"]:
+    for card in lock["axes"]:
         result = _noter_une_carte(card, response)
         _valider_sortie(result, card)
         context = {
             "schema_version": SCHEMA_CONTEXT,
             "protocol_version": PROTOCOLE_VERSION,
-            "task_version": lock["task"]["task_version"],
-            "prompt_sha256": lock["task"]["prompt_sha256"],
-            "score_card_id": card["id"],
+            "task": {
+                "id": lock["task"]["task_id"],
+                "version": lock["task"]["task_version"],
+            },
+            "prompt_hash": lock["task"]["prompt_sha256"],
+            "system_prompt_hash": None,
+            "axis_id": card["id"],
             "verify_version": card["verify_version"],
             "verify_hash": card["verify_hash"],
             "measurement_environment_hash": environment_hash,
-            "regime_confidentialite": "expose",
+            "confidentiality_regime": lock["task"]["confidentiality_regime"],
         }
         score = {
             "schema_version": SCHEMA_SCORE,
@@ -206,10 +217,10 @@ def noter_collection(campaign_dir: Path, lock: dict[str, Any], collection_id: st
             "campaign_lock_hash": lock_hash,
             "collection_id": collection_id,
             "collection_receipt_hash": collection_hash,
-            "response_sha256": collection["response_sha256"],
+            "response_sha256": collection["candidate"]["sha256"],
             "alias": cellule["alias"],
             "run": cellule["run"],
-            "score_card_id": card["id"],
+            "axis_id": card["id"],
             "verify_version": card["verify_version"],
             "verify_hash": card["verify_hash"],
             "measurement_context": context,

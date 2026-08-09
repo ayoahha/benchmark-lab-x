@@ -56,12 +56,16 @@ from protocole_v2 import (  # noqa: E402
     assembler_prompt_verrouille,
     cellule_du_lock,
     charger_json,
+    construire_payload,
     descripteur_environnement_runner,
     empreinte_lock,
     resultat_acquis_v2,
     valider_autorisation_payante,
+    valider_chaine_collecte,
     valider_environnement_observe,
     valider_lock,
+    valider_recu_collecte,
+    valider_recu_tentative,
 )
 
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -262,13 +266,8 @@ def extract_provider_served(data: dict[str, Any]) -> str | None:
     return None
 
 
-def validate_response(data: Any) -> tuple[str, dict[str, Any]]:
-    """Exiger choices et extraire content
-
-    Une sortie vide est un défaut d’infrastructure, sauf si finish_reason vaut
-    length. Dans ce cas, elle est conservée et son imputabilité est décidée par
-    le contrôle de conformité selon R-013 et R-025
-    """
+def validate_response(data: Any) -> tuple[str, dict[str, Any], str]:
+    """Adapter une réponse OpenRouter en octets candidats matérialisables"""
     if not isinstance(data, dict):
         die(EXIT_VALIDATION, "response is not a JSON object")
     if "error" in data and data["error"]:
@@ -288,19 +287,16 @@ def validate_response(data: Any) -> tuple[str, dict[str, Any]]:
     if first.get("finish_reason") == "error":
         die(EXIT_API_ERROR, "finish_reason=error (HTTP 200 masking a failure)")
     content = message.get("content")
-    finish_reason = first.get("finish_reason")
-    # Une sortie vide avec finish_reason=length reste COMPLETE ; R-013 décide l’imputabilité
-    if content is None:
-        if finish_reason == "length":
-            return "", first
-        die(EXIT_VALIDATION, "choices[0].message.content is null (infrastructure invalid)")
-    if not isinstance(content, str):
-        die(EXIT_VALIDATION, "choices[0].message.content is not a string")
-    if not content.strip():
-        if finish_reason == "length":
-            return content, first
-        die(EXIT_VALIDATION, "choices[0].message.content is empty or whitespace (infrastructure invalid)")
-    return content, first
+    refusal = message.get("refusal")
+    if isinstance(content, str) and content:
+        return content, first, "content"
+    if isinstance(refusal, str) and refusal:
+        return refusal, first, "refusal"
+    if isinstance(content, str):
+        return content, first, "empty"
+    if content is None and refusal is None:
+        die(EXIT_VALIDATION, "aucune séquence candidate matérialisable dans message")
+    die(EXIT_VALIDATION, "content ou refusal n'est pas une chaîne")
 
 
 def atomic_write_text(path: Path, text: str) -> None:
@@ -338,40 +334,69 @@ def _compteur_jetons(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
-def _recu_tentative(reason: str, result: str = "FAILED", cost_usd: float | None = None) -> dict[str, Any] | None:
+def _recu_tentative(
+    reason: str, result: str = "FAILED", cost_usd: float | None = None
+) -> dict[str, Any] | None:
     if V2_ATTEMPT_CONTEXT is None:
         return None
     cause = {
         "http_transport": "TRANSPORT_NO_HTTP_RESPONSE",
         "http_429": "HTTP_429",
         "http_503": "HTTP_503",
-    }.get(reason, reason.upper())
+        "lock_parameter_mismatch": "LOCK_PARAMETER_MISMATCH",
+        "lock_payload_mismatch": "LOCK_PAYLOAD_MISMATCH",
+        "empty_body": "EMPTY_HTTP_BODY",
+        "invalid_json": "INVALID_JSON",
+        "api_error": "API_ERROR",
+        "validation": "RESPONSE_SCHEMA_INVALID",
+        "route_mismatch": "ROUTE_MISMATCH",
+        "lock_manifest_mismatch": "LOCK_MANIFEST_MISMATCH",
+        "lock_prompt_mismatch": "LOCK_PROMPT_MISMATCH",
+        "key_leak_guard": "KEY_LEAK_GUARD",
+        "write_failed": "WRITE_FAILED",
+    }.get(reason)
+    if cause is None and reason.startswith("http_redirect_"):
+        cause = "HTTP_REDIRECT"
+    if cause is None and reason.startswith("http_"):
+        cause = "HTTP_NON_RETRYABLE"
+    if cause is None:
+        cause = "UNEXPECTED_ERROR"
     cout = _cout_microdollars(cost_usd)
-    http_recu = reason != "http_transport"
-    contenu_recu = result == "COMPLETE" or reason in {
-        "route_mismatch", "validation", "api_error", "empty_body", "invalid_json",
-        "length_without_usage", "key_leak_guard", "write_failed",
-    }
+    if result == "COMPLETE":
+        etat = "COMPLETE"
+    elif cause in {"HTTP_429", "HTTP_503", "TRANSPORT_NO_HTTP_RESPONSE"}:
+        etat = "FAILED_RETRYABLE"
+    else:
+        etat = "FAILED_NON_RETRYABLE"
+    statut_cout = "known" if cout is not None else "upper_bound"
+    if cout is None:
+        cout = V2_ATTEMPT_CONTEXT["max_cost_microdollars"]
+    http_recu = bool(V2_ATTEMPT_CONTEXT.get("http_response_received"))
+    artefact_accepte = bool(V2_ATTEMPT_CONTEXT.get("candidate_artifact_accepted"))
     receipt = {
         "schema_version": SCHEMA_ATTEMPT,
         "protocol_version": PROTOCOLE_V2,
         "campaign_lock_hash": V2_ATTEMPT_CONTEXT["campaign_lock_hash"],
-        "paid_authorization_sha256": V2_ATTEMPT_CONTEXT["paid_authorization_sha256"],
         "collection_id": V2_ATTEMPT_CONTEXT["collection_id"],
         "attempt": V2_ATTEMPT_CONTEXT["attempt"],
-        "result": result,
-        "cause_code": None if result == "COMPLETE" else cause,
-        "route_hash": V2_ATTEMPT_CONTEXT["route_hash"],
+        "result": etat,
+        "cause_code": None if etat == "COMPLETE" else cause,
+        "execution_manifest_hash": V2_ATTEMPT_CONTEXT["execution_manifest_hash"],
+        "payload_hash": V2_ATTEMPT_CONTEXT["payload_hash"],
         "http_response_received": http_recu,
-        "candidate_content_received": contenu_recu,
+        "candidate_artifact_accepted": artefact_accepte,
         "cost_accounting": {
-            "status": "known" if cout is not None else "unknown",
+            "status": statut_cout,
             "cost_microdollars": cout,
             "reservation_id": V2_ATTEMPT_CONTEXT["reservation_id"],
         },
+        "retry_after": V2_ATTEMPT_CONTEXT.get("retry_after"),
     }
-    if V2_ATTEMPT_CONTEXT.get("retry_after_seconds") is not None:
-        receipt["retry_after_seconds"] = V2_ATTEMPT_CONTEXT["retry_after_seconds"]
+    valider_recu_tentative(
+        receipt,
+        V2_ATTEMPT_CONTEXT["cell"],
+        V2_ATTEMPT_CONTEXT["campaign_lock_hash"],
+    )
     return receipt
 
 
@@ -482,7 +507,7 @@ def _endpoint_epingle(endpoints: list[dict[str, Any]], provider: str) -> dict[st
 
 
 def resoudre_budget(
-    model: str, provider: str, plancher: int, plafond: int, tentatives: int, pause: float = 3.0
+    model: str, provider: str, plafond: int, tentatives: int, pause: float = 3.0
 ) -> dict[str, Any]:
     """Budget de sortie résolu avant l'appel depuis ce que la route déclare (R-025).
 
@@ -490,12 +515,9 @@ def resoudre_budget(
     et qu'une seule autorise l'appel :
 
     - `ok` : la route déclare une limite exploitable, bornée par le plafond
-    - `ineligible` : la route déclare moins que le plancher, ou n'existe pas.
-      R-025 l'exige sans appel. La version précédente faisait `max(plancher,
-      brut)` puis appelait quand même, ce qui envoyait au modèle un budget que
-      sa route n'accorde pas : le stimulus mesuré n'était plus celui déclaré
+    - `ineligible` : la route n'existe pas ou ne déclare aucune limite exploitable
     - `infra` : les métadonnées de route sont restées inatteignables après les
-      tentatives autorisées. Retomber sur le plancher reviendrait à inventer un
+      tentatives autorisées. Retomber sur une valeur locale reviendrait à inventer un
       nombre sans source, ce que R-025 interdit tout autant
 
     La résolution porte sur l'endpoint épinglé et sur lui seul. Prendre le
@@ -543,7 +565,7 @@ def resoudre_budget(
     elif isinstance(ctx, int) and ctx > 0:
         # Source secondaire assumée et nommée : certains endpoints ne déclarent
         # pas de limite de complétion mais bien un contexte total. Le nombre a
-        # alors une source vérifiable, ce que le plancher n'avait pas
+        # alors une source vérifiable
         brut, origine = ctx, "context_length"
     else:
         return {"etat": "ineligible", "motif": "route_sans_limite_declaree",
@@ -570,10 +592,9 @@ def resoudre_budget(
               "revision": mid if (mid and mid != model) else "opaque",
               "declare": {"max_completion_tokens": mc, "context_length": ctx},
               "marge_prompt": MARGE_PROMPT}
-    if brut < plancher:
-        return {"etat": "ineligible", "motif": "budget_de_route_sous_le_plancher",
-                "detail": f"la route accorde {brut} jetons de sortie, plancher {plancher}",
-                **commun}
+    if brut < 1:
+        return {"etat": "ineligible", "motif": "budget_de_route_non_positif",
+                "detail": f"la route accorde {brut} jetons de sortie", **commun}
     budget = min(brut, plafond)
     source = (f"route/{origine} ({brut})" if budget == brut
               else f"plafond de campagne (la route accorde {brut} via {origine})")
@@ -599,18 +620,12 @@ def main() -> None:
     ap.add_argument("--run", type=int, default=1, help="numéro de run, de 1 à 4")
     ap.add_argument("--attempt", type=int, default=1, help="attempt number after a FAILED run (evidence is never deleted)")
     ap.add_argument("--temperature", type=float, default=0.0)
-    # Le budget de sortie n'est plus une constante. À 16384 puis à 65536, des
-    # modèles ont consommé tout le budget en raisonnement et rendu zéro octet :
-    # le classement mesurait le plafond, pas les modèles. Or aucune route du
-    # panel ne descend en dessous de 128000 jetons de complétion, et deux en
-    # déclarent 1048576. Le plafond ne protégeait donc rien, il bloquait
-    # `auto` résout le budget avant l'appel, depuis ce que la route déclare :
+    # Le budget de sortie n'est pas une constante. `auto` le résout avant
+    # l'appel depuis ce que la route déclare :
     # pas de relance, pas d'escalade, et le modèle reçoit d'emblée le maximum
     # que son fournisseur autorise, borné par --plafond-tokens
     ap.add_argument("--max-tokens", default="auto",
                     help="budget de sortie : 'auto' (défaut, résolu depuis la route) ou un entier")
-    ap.add_argument("--plancher-tokens", type=int, default=65536,
-                    help="budget minimal exigé de la route ; en dessous, INELIGIBLE (défaut: 65536)")
     ap.add_argument("--budget-tentatives", type=int, default=3,
                     help="lectures des métadonnées de route avant INFRA_ERROR ; "
                          "requête gratuite, la borne protège la durée (défaut: 3)")
@@ -711,13 +726,14 @@ def main() -> None:
         except ContratV2Invalide as exc:
             die(EXIT_USAGE, f"HOLD v2 avant appel: {exc}")
         locked_alias = cellule_v2["alias"]
-        args.model = cellule_v2["model"]
-        args.provider = cellule_v2["route"]["provider"]
-        args.expect_provider = cellule_v2["route"].get("expect_provider")
+        execution_v3 = cellule_v2["execution_manifest"]
+        args.model = execution_v3["model_requested"]
+        args.provider = execution_v3["provider_pinned"]
+        args.expect_provider = execution_v3["provider_expected"]
         args.run = cellule_v2["run"]
-        args.max_tokens = str(cellule_v2["max_tokens"])
-        args.plafond_tokens = cellule_v2["max_tokens"]
-        params_v2 = cellule_v2["parameters"]
+        args.max_tokens = str(execution_v3["max_tokens"])
+        args.plafond_tokens = execution_v3["max_tokens"]
+        params_v2 = execution_v3["request_parameters"]
         args.temperature = params_v2.get("temperature", 0.0)
         args.seed = params_v2.get("seed", 42)
         omit_params = [p for p in ("temperature", "top_p", "seed") if p not in params_v2]
@@ -725,10 +741,10 @@ def main() -> None:
         if isinstance(reasoning_v2, dict):
             reasoning_effort = reasoning_v2.get("effort")
             reasoning_max_tokens = reasoning_v2.get("max_tokens")
-        args.regime = "expose" if cellule_v2["execution_manifest"]["data_policy"] == "allow" else "retenu"
+        args.regime = lock_v2["task"]["confidentiality_regime"]
         task_file = lock_v2["task"]["task_file"]
         protocol_version = PROTOCOLE_V2
-        runner_version = "collect.py/v3"
+        runner_version = execution_v3["request_adapter_version"]
     elif args.alias:
         if args.model or args.provider:
             die(EXIT_USAGE, "--alias replaces --model/--provider; do not mix them")
@@ -861,11 +877,14 @@ def main() -> None:
             "campaign_lock_hash": lock_hash,
             "collection_id": args.collection_id,
             "attempt": args.attempt,
-            "route_hash": cellule_v2["execution_manifest_hash"],
+            "execution_manifest_hash": cellule_v2["execution_manifest_hash"],
+            "payload_hash": cellule_v2["payload_hash"],
+            "max_cost_microdollars": cellule_v2["max_cost_microdollars"],
             "reservation_id": args.reservation_id,
-            "paid_authorization_sha256": hashlib.sha256(
-                args.paid_authorization.read_bytes()
-            ).hexdigest(),
+            "retry_after": None,
+            "http_response_received": False,
+            "candidate_artifact_accepted": False,
+            "cell": cellule_v2,
         }
 
     # Le budget se résout après la réservation du dossier et avant l'appel : les
@@ -873,8 +892,9 @@ def main() -> None:
     # laisser un reçu quelque part. « Avant toute tentative » qualifie l'appel
     # au modèle, pas la création du dossier
     if args.max_tokens == "auto":
-        verdict = resoudre_budget(args.model, args.provider, args.plancher_tokens,
-                                  args.plafond_tokens, args.budget_tentatives)
+        verdict = resoudre_budget(
+            args.model, args.provider, args.plafond_tokens, args.budget_tentatives
+        )
         if verdict["etat"] == "ineligible":
             marquer_etat(out, "INELIGIBLE", verdict["motif"],
                          {"regle": "R-025", "modele": args.model, "provider": args.provider,
@@ -894,7 +914,7 @@ def main() -> None:
     else:
         budget = int(args.max_tokens)
         if lock_v2:
-            source_budget = "campaign.lock v2"
+            source_budget = "campaign.lock v3"
             budget_route = {
                 "endpoint": cellule_v2["route"]["provider"],
                 "quantization": cellule_v2["route"]["quantization"],
@@ -947,16 +967,22 @@ def main() -> None:
             die(EXIT_USAGE, f"omit_params entry {name!r} not allowed (only {sorted(allowed_omissions)})")
         body.pop(name, None)
         print(f"warning: parameter {name!r} omitted for this endpoint (declared in registry)", file=sys.stderr)
+    # Les octets v3 viennent du manifeste verrouillé. La reconstruction locale
+    # est comparée avant tout appel, elle ne peut pas corriger le lock
+    payload_calcule = json.dumps(
+        body, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
     if lock_v2:
-        reels = {k: body[k] for k in ("temperature", "top_p", "seed", "reasoning") if k in body}
-        if reels != cellule_v2["parameters"]:
+        payload_bytes = construire_payload(cellule_v2["execution_manifest"], prompt)
+        if payload_calcule != payload_bytes:
             cleanup_or_fail(out, "lock_parameter_mismatch")
-            die(EXIT_USAGE, "paramètres du payload différents du campaign.lock")
-    # Canonical JSON for payload hash (stable separators, sorted keys)
-    payload_bytes = json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+            die(EXIT_USAGE, "payload construit différent du manifeste v3")
+    else:
+        payload_bytes = payload_calcule
     payload_hash = hashlib.sha256(payload_bytes).hexdigest()
+    if lock_v2 and payload_hash != cellule_v2["payload_hash"]:
+        cleanup_or_fail(out, "lock_payload_mismatch")
+        die(EXIT_USAGE, "payload_hash différent du campaign.lock")
 
     global REQUEST_NOTE
     REQUEST_NOTE = json.dumps(
@@ -973,7 +999,7 @@ def main() -> None:
     )
 
     started = datetime.now(timezone.utc)
-    t0 = time.monotonic()
+    t0_ns = time.monotonic_ns()
     try:
         resp = requests.post(
             API_URL,
@@ -989,19 +1015,20 @@ def main() -> None:
         cleanup_or_fail(out, "http_transport", redact_http_body(str(exc)))
         die(EXIT_HTTP, f"HTTP transport failed: {redact_http_body(str(exc))}")
 
+    if lock_v2:
+        V2_ATTEMPT_CONTEXT["http_response_received"] = True
+
     if resp.is_redirect or resp.is_permanent_redirect:
         cleanup_or_fail(out, f"http_redirect_{resp.status_code}")
         die(EXIT_HTTP, f"unexpected redirect HTTP {resp.status_code} (single-request contract)")
 
-    duration = time.monotonic() - t0
+    duration_ns = time.monotonic_ns() - t0_ns
+    duration = duration_ns / 1_000_000_000
 
     if not resp.ok:
         if lock_v2 and resp.status_code in (429, 503):
             retry_after = resp.headers.get("Retry-After")
-            try:
-                V2_ATTEMPT_CONTEXT["retry_after_seconds"] = max(0.0, float(retry_after))
-            except (TypeError, ValueError):
-                V2_ATTEMPT_CONTEXT["retry_after_seconds"] = 30.0
+            V2_ATTEMPT_CONTEXT["retry_after"] = retry_after if retry_after else None
         cleanup_or_fail(
             out,
             f"http_{resp.status_code}",
@@ -1027,19 +1054,10 @@ def main() -> None:
         cleanup_or_fail(out, "api_error", detail)
         die(EXIT_API_ERROR, "API returned error object (see FAILED receipt)")
 
-    try:
-        content, first_choice = validate_response(data)
-    except SystemExit:
-        # Full raw payload preserved as evidence (redacted), no truncation
-        cleanup_or_fail(
-            out,
-            "validation",
-            redact_http_body(json.dumps(data, ensure_ascii=False, indent=2)),
-        )
-        raise
-
     model_served = data.get("model") if isinstance(data.get("model"), str) else None
     provider_served = extract_provider_served(data)
+    usage = data.get("usage")
+    cost_usd = normalize_cost_usd(usage)
 
     # OpenRouter returns the provider as a display name ("OpenAI") while the
     # pin is a slug ("openai"): compare on a normalized form, still fail-closed
@@ -1075,27 +1093,30 @@ def main() -> None:
             ),
         )
 
+    try:
+        content, first_choice, candidate_kind = validate_response(data)
+    except SystemExit:
+        # Full raw payload preserved as evidence (redacted), no truncation
+        cleanup_or_fail(
+            out,
+            "validation",
+            redact_http_body(json.dumps(data, ensure_ascii=False, indent=2)),
+        )
+        raise
+    if lock_v2:
+        # The route adapter accepts candidate bytes only after the served
+        # identity matches the pin. A payload from another route is evidence
+        # of a routing failure, never an accepted benchmark artifact
+        V2_ATTEMPT_CONTEXT["candidate_artifact_accepted"] = True
+
     finish_reason = first_choice.get("finish_reason")
     if finish_reason == "length":
         print(
             "warning: finish_reason=length; R-013 tranche à la notation en "
-            "comparant completion_tokens au budget RÉSOLU, pas au plancher : "
+            "comparant completion_tokens au budget RÉSOLU : "
             "au-dessus ou égal, le budget est prouvé épuisé et le run vaut FAIL ; "
             "en dessous, le fournisseur a coupé tôt et le run vaut UNKNOWN",
             file=sys.stderr,
-        )
-
-    usage = data.get("usage")
-    cost_usd = normalize_cost_usd(usage)
-
-    # An empty output can only be attributed with the usage token split as
-    # evidence; without it the run is infrastructure-invalid, not judgeable
-    if finish_reason == "length" and not content.strip() and not isinstance(usage, dict):
-        cleanup_or_fail(out, "length_without_usage")
-        die(
-            EXIT_VALIDATION,
-            "empty output with finish_reason=length but no usage data: "
-            "attribution cannot be evidenced (infrastructure invalid)",
         )
 
     # Input fidelity manifest: every file body actually placed in the prompt
@@ -1190,14 +1211,10 @@ def main() -> None:
         "politique_donnees": politique_donnees,
         "params": params,
         "params_omitted": sorted(omit_params),
-        # R-025 : la valeur ne suffit pas, sa provenance fait partie du reçu.
-        # Sans elle, un budget égal au plancher est indiscernable d'un budget
-        # relevé de force, et douze runs de la campagne de référence sont
-        # restés ambigus pour cette seule raison
+        # R-025 : la valeur et sa source restent distinctes
         "budget_sortie": {
             "max_tokens": args.max_tokens,
             "source": source_budget,
-            "plancher": args.plancher_tokens,
             "plafond": args.plafond_tokens,
             **budget_route,
         },
@@ -1232,7 +1249,6 @@ def main() -> None:
             die(EXIT_USAGE, "prompt_hash différent du campaign.lock")
         meta.update({
             "campaign_lock_hash": lock_hash,
-            "paid_authorization_sha256": V2_ATTEMPT_CONTEXT["paid_authorization_sha256"],
             "collection_id": args.collection_id,
             "attempt": args.attempt,
             "reservation_id": args.reservation_id,
@@ -1243,23 +1259,30 @@ def main() -> None:
     attempt_receipt = None
     if lock_v2:
         cout_micro = _cout_microdollars(cost_usd)
+        statut_cout = "known" if cout_micro is not None else "upper_bound"
+        if cout_micro is None:
+            cout_micro = cellule_v2["max_cost_microdollars"]
+        candidate_bytes = content.encode("utf-8")
         collection_receipt = {
             "schema_version": SCHEMA_COLLECTION,
             "protocol_version": PROTOCOLE_V2,
             "campaign_lock_hash": lock_hash,
-            "paid_authorization_sha256": V2_ATTEMPT_CONTEXT["paid_authorization_sha256"],
             "collection_id": args.collection_id,
             "attempt": args.attempt,
-            "result": "COMPLETE",
-            "task_version": lock_v2["task"]["task_version"],
-            "prompt_sha256": lock_v2["task"]["prompt_sha256"],
-            "payload_sha256": payload_hash,
+            "result": "COLLECTED",
+            "payload_hash": payload_hash,
             "execution_manifest_hash": cellule_v2["execution_manifest_hash"],
-            "response_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
-            "raw_sha256": hashlib.sha256((raw_text + "\n").encode("utf-8")).hexdigest(),
             "served": {"model": model_served, "provider": provider_served},
-            "finish_reason": finish_reason,
-            "token_usage": {
+            "candidate": {
+                "sha256": hashlib.sha256(candidate_bytes).hexdigest(),
+                "bytes": len(candidate_bytes),
+                "kind": candidate_kind,
+                "truncated": finish_reason == "length",
+            },
+            "response_json_sha256": hashlib.sha256(
+                (raw_text + "\n").encode("utf-8")
+            ).hexdigest(),
+            "usage": {
                 "prompt_tokens": _compteur_jetons(usage.get("prompt_tokens"))
                 if isinstance(usage, dict) else None,
                 "completion_tokens": _compteur_jetons(usage.get("completion_tokens"))
@@ -1269,13 +1292,19 @@ def main() -> None:
                 ) if isinstance(usage, dict) else None,
             },
             "cost_accounting": {
-                "status": "known" if cout_micro is not None else "unknown",
+                "status": statut_cout,
                 "cost_microdollars": cout_micro,
                 "reservation_id": args.reservation_id,
             },
+            "duration_ns": duration_ns,
+            "cause_code": None,
         }
+        valider_recu_collecte(collection_receipt, lock_hash, cellule_v2)
         meta["collection_receipt_hash"] = empreinte(collection_receipt)
         attempt_receipt = _recu_tentative("COMPLETE", result="COMPLETE", cost_usd=cost_usd)
+        valider_chaine_collecte(
+            attempt_receipt, collection_receipt, lock_hash, cellule_v2
+        )
     meta_text = json.dumps(meta, indent=2, ensure_ascii=False)
     if key in meta_text or key in raw_text or key in content:
         cleanup_or_fail(out, "key_leak_guard", "API key appeared in payload to write")

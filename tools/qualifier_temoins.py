@@ -162,7 +162,7 @@ def noter_v5(temoin: Path, verificateur: Path, card_id: str, delai: int = 180) -
         return {"etat": "UNKNOWN", "cause_code": "VERIFY_PROCESS_ERROR",
                 "predicates": {}, "detail": erreur[-200:]}
     try:
-        result = json.loads(sortie)
+        result = json.loads(sortie, parse_float=str)
     except json.JSONDecodeError:
         return {"etat": "UNKNOWN", "cause_code": "VERIFY_PROCESS_ERROR", "predicates": {}}
     return result if isinstance(result, dict) else {
@@ -183,7 +183,7 @@ def qualifier_v2(args) -> int:
         provenance, temoins_paths = charger_qualification_set(
             dossier, charger_json(provenance_path)
         )
-        for card in lock["score_cards"]:
+        for card in lock["axes"]:
             for asset in card["verify_manifest"]["assets"]:
                 path = RACINE / asset["path"]
                 if not path.is_file() or sha256_fichier(path) != asset["sha256"]:
@@ -206,7 +206,7 @@ def qualifier_v2(args) -> int:
                 "expected_result": p.get("resultat_attendu"),
             }
             observations[nom] = {}
-            for card in lock["score_cards"]:
+            for card in lock["axes"]:
                 resultat = noter_v5(temoin, verifier, card["id"], card["watchdog_s"])
                 scored = resultat.get("etat") == "SCORED"
                 observation = {
@@ -231,7 +231,7 @@ def qualifier_v2(args) -> int:
         cards = {}
         complete = True
         attentes_conformes = True
-        for card in lock["score_cards"]:
+        for card in lock["axes"]:
             couverture = {}
             for predicat in card["predicates"]:
                 positifs, negatifs = [], []
@@ -284,6 +284,10 @@ def qualifier_v2(args) -> int:
             "cards": cards,
             "qualified": bool(independants and attentes_conformes and complete),
         }
+        try:
+            empreinte(receipt)
+        except ValueError as exc:
+            raise ContratV2Invalide(f"reçu R-016 non canonique: {exc}") from exc
         ecrire_json_immuable(args.out_receipt, receipt)
     except ContratV2Invalide as exc:
         print(f"HOLD: {exc}", file=sys.stderr)

@@ -32,10 +32,15 @@ from protocole_v2 import (  # noqa: E402
     charger_json,
     decision_reprise,
     descripteur_environnement_runner,
+    ecrire_json_immuable,
     empreinte_lock,
+    valider_abandon_campagne,
     valider_autorisation_payante,
+    valider_etat_collecte,
     valider_environnement_observe,
     valider_lock,
+    valider_hold_operateur,
+    valider_recu_tentative,
 )
 
 COLLECT = Path(__file__).parent / "collect.py"
@@ -191,8 +196,99 @@ def _collecte_complete_v2(racine: Path, collection_id: str) -> bool:
                for d in _tentatives_v2(racine, collection_id))
 
 
-def _reconcilier_budget_v2(racine: Path, ledger: RegistreBudget) -> dict:
+def _etat_collecte_v2(
+    racine: Path, collection_id: str, lock_hash: str, cellule: dict
+) -> dict | None:
+    path = racine / "collections" / collection_id / "collection-state.json"
+    return (
+        valider_etat_collecte(charger_json(path), lock_hash, cellule)
+        if path.is_file() else None
+    )
+
+
+def _fermer_collecte_v2(
+    racine: Path,
+    lock_hash: str,
+    cellule: dict,
+    etat: str,
+    cause_code: str,
+    tentative: int | None,
+) -> None:
+    if etat not in {"INELIGIBLE", "INFRA_ERROR"}:
+        raise ContratV2Invalide(f"fermeture de collecte invalide: {etat}")
+    collection_id = cellule["collection_id"]
+    recu = {
+            "schema_version": "benchmark-lab-x/collection-state/v1",
+            "campaign_lock_hash": lock_hash,
+            "collection_id": collection_id,
+            "state": etat,
+            "cause_code": cause_code,
+            "last_attempt": tentative,
+        }
+    valider_etat_collecte(recu, lock_hash, cellule)
+    ecrire_json_immuable(
+        racine / "collections" / collection_id / "collection-state.json", recu
+    )
+
+
+def _poser_hold_v2(
+    racine: Path,
+    lock: dict,
+    lock_hash: str,
+    cause_code: str,
+    collection_id: str | None = None,
+    tentative: int | None = None,
+) -> None:
+    hold = {
+        "schema_version": "benchmark-lab-x/operator-hold/v1",
+        "campaign_lock_hash": lock_hash,
+        "decision": "HOLD",
+        "cause_code": cause_code,
+        "collection_id": collection_id,
+        "attempt": tentative,
+    }
+    valider_hold_operateur(hold, lock, lock_hash)
+    ecrire_json_immuable(
+        racine / "operator-hold.json", hold
+    )
+
+
+def _abandonner_hold_v2(
+    racine: Path,
+    lock: dict,
+    lock_hash: str,
+    abandonment_path: Path,
+) -> dict:
+    hold_path = racine / "operator-hold.json"
+    if not hold_path.is_file() or hold_path.is_symlink():
+        raise ContratV2Invalide("HOLD opérateur absent ou lié symboliquement")
+    hold = valider_hold_operateur(charger_json(hold_path), lock, lock_hash)
+    abandon = valider_abandon_campagne(
+        charger_json(abandonment_path), hold, lock_hash
+    )
+    cellule = cellule_du_lock(lock, abandon["collection_id"])
+    if _collecte_complete_v2(racine, cellule["collection_id"]):
+        raise ContratV2Invalide("une collecte acquise ne peut pas être abandonnée")
+    tentative = hold.get("attempt")
+    if not isinstance(tentative, int) or isinstance(tentative, bool):
+        raise ContratV2Invalide("tentative d'identité absente du HOLD")
+    _fermer_collecte_v2(
+        racine, lock_hash, cellule, "INFRA_ERROR",
+        abandon["cause_code"], tentative,
+    )
+    return {
+        "status": "ABANDONED_HELD_COLLECTION",
+        "collection_id": cellule["collection_id"],
+        "state": "INFRA_ERROR",
+        "operator_status": "HOLD",
+    }
+
+
+def _reconcilier_budget_v2(
+    racine: Path, ledger: RegistreBudget, lock: dict, lock_hash: str
+) -> dict:
     state = ledger.etat()
+    cellules = {c["collection_id"]: c for c in lock["collections"]}
     for reservation_id, reservation in list(state.get("reservations", {}).items()):
         if reservation.get("status") != "reserved":
             continue
@@ -201,11 +297,17 @@ def _reconcilier_budget_v2(racine: Path, ledger: RegistreBudget) -> dict:
             receipt = charger_json(path)
             accounting = receipt.get("cost_accounting") or {}
             if accounting.get("reservation_id") == reservation_id:
+                cellule = cellules.get(receipt.get("collection_id"))
+                if cellule is None:
+                    raise ContratV2Invalide(
+                        "reçu de réconciliation lié à une collecte inconnue"
+                    )
+                valider_recu_tentative(receipt, cellule, lock_hash)
                 trouve = accounting
                 break
         if trouve is None:
             ledger.finaliser(reservation_id, None)
-        elif trouve.get("status") == "known":
+        elif trouve.get("status") in {"known", "upper_bound"}:
             ledger.finaliser(reservation_id, trouve.get("cost_microdollars"))
         else:
             ledger.finaliser(reservation_id, None)
@@ -223,10 +325,13 @@ def _collecter_v2(
 ) -> dict:
     dernier = _dernier_recu_v2(racine, cellule["collection_id"])
     if tentative > 1 and dernier:
-        pause = dernier.get("retry_after_seconds")
-        if not isinstance(pause, (int, float)) or pause < 0:
-            pause = 30
-        time.sleep(min(240, max(0, float(pause))))
+        retry_after = dernier.get("retry_after")
+        try:
+            pause = max(0.0, float(retry_after)) if retry_after is not None else 0.0
+        except (TypeError, ValueError):
+            pause = 0.0
+        if pause:
+            time.sleep(pause)
     reservation_id = f"{cellule['collection_id']}__a{tentative}"
     cmd = [
         "uv", "run", str(COLLECT),
@@ -256,8 +361,7 @@ def _collecter_v2(
 
 def lancer_v2(args, conf: dict) -> int:
     racine = args.campaign.parent
-    def artefact_local(cle: str, defaut: str) -> Path:
-        brut = conf.get(cle, defaut)
+    def resoudre_local(brut, cle: str) -> Path:
         path = Path(brut)
         if path.is_absolute() or ".." in path.parts or "." in path.parts:
             raise ContratV2Invalide(f"chemin non local dans {cle}")
@@ -265,21 +369,50 @@ def lancer_v2(args, conf: dict) -> int:
         if racine.resolve() not in resolu.parents:
             raise ContratV2Invalide(f"chemin hors campagne dans {cle}")
         return resolu
+
+    def artefact_local(cle: str, defaut: str) -> Path:
+        return resoudre_local(conf.get(cle, defaut), cle)
+
     try:
         lock_path = artefact_local("campaign_lock", "campaign.lock.json")
+        lock = valider_lock(charger_json(lock_path), Path(__file__).parent.parent)
+        lock_hash = empreinte_lock(lock)
+    except (ContratV2Invalide, OSError) as exc:
+        print(f"HOLD avant toute action v2: {exc}", file=sys.stderr)
+        return 2
+
+    abandonment = getattr(args, "abandonment", None)
+    if abandonment is not None:
+        try:
+            resultat = _abandonner_hold_v2(
+                racine, lock, lock_hash,
+                resoudre_local(abandonment, "abandonment"),
+            )
+        except (ContratV2Invalide, OSError) as exc:
+            print(f"HOLD abandon refusé: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(resultat, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 0
+
+    try:
         auth_path = artefact_local("paid_authorization", "paid-authorization.json")
         ledger_path = artefact_local("budget_ledger", "budget-ledger.json")
-        lock = valider_lock(charger_json(lock_path), Path(__file__).parent.parent)
         valider_environnement_observe(lock, "runner", descripteur_environnement_runner())
         runner = lock["runner"]
-        lock_hash = empreinte_lock(lock)
         valider_autorisation_payante(
             charger_json(auth_path), lock_hash, lock["budget"]["cap_microdollars"]
         )
         ledger = RegistreBudget(ledger_path, lock["budget"]["cap_microdollars"], lock_hash)
-        state = _reconcilier_budget_v2(racine, ledger)
+        state = _reconcilier_budget_v2(racine, ledger, lock, lock_hash)
         if state.get("hold"):
+            _poser_hold_v2(racine, lock, lock_hash, "IN_FLIGHT_UNRECONCILED")
             raise ContratV2Invalide("registre budgétaire en HOLD après réconciliation")
+        operator_hold_path = racine / "operator-hold.json"
+        if operator_hold_path.exists():
+            valider_hold_operateur(
+                charger_json(operator_hold_path), lock, lock_hash
+            )
+            raise ContratV2Invalide("HOLD opérateur déjà présent pour cette campagne")
     except (ContratV2Invalide, OSError) as exc:
         print(f"HOLD avant tout appel v2: {exc}", file=sys.stderr)
         return 2
@@ -290,6 +423,11 @@ def lancer_v2(args, conf: dict) -> int:
         cid = cellule["collection_id"]
         if _collecte_complete_v2(racine, cid):
             continue
+        etat_collecte = _etat_collecte_v2(racine, cid, lock_hash, cellule)
+        if etat_collecte is not None:
+            if etat_collecte.get("state") not in {"INELIGIBLE", "INFRA_ERROR"}:
+                bloquants.append(f"{cid}: état de collecte invalide")
+            continue
         dernier = _dernier_recu_v2(racine, cid)
         if dernier is None:
             tentative = 1 + len(_tentatives_v2(racine, cid))
@@ -298,14 +436,26 @@ def lancer_v2(args, conf: dict) -> int:
             else:
                 travaux.append((cellule, tentative))
             continue
-        decision = decision_reprise(dernier, cellule, lock["attempts_max"])
+        try:
+            decision = decision_reprise(
+                dernier, cellule, lock_hash, lock["attempts_max"]
+            )
+        except ContratV2Invalide as exc:
+            bloquants.append(f"{cid}: reçu de tentative invalide: {exc}")
+            continue
         if decision["action"] == "retry":
             travaux.append((cellule, int(dernier["attempt"]) + 1))
+        elif decision["action"] == "infra_error":
+            _fermer_collecte_v2(
+                racine, lock_hash, cellule, "INFRA_ERROR", "ATTEMPTS_EXHAUSTED",
+                int(dernier["attempt"]),
+            )
         elif decision["action"] == "hold":
             bloquants.append(f"{cid}: {decision['reason']}")
-        elif dernier.get("result") != "COMPLETE":
-            bloquants.append(f"{cid}: {decision['reason']}")
+        elif decision["action"] == "complete":
+            bloquants.append(f"{cid}: tentative COMPLETE sans reçu de collecte acquis")
     if bloquants:
+        _poser_hold_v2(racine, lock, lock_hash, "RETRY_RECONCILIATION_FAILED")
         print("HOLD: reprises non autorisées", file=sys.stderr)
         for motif in bloquants:
             print(f"  - {motif}", file=sys.stderr)
@@ -314,15 +464,53 @@ def lancer_v2(args, conf: dict) -> int:
     concurrence = runner["concurrency"]
     futurs = {}
     arrete = False
+    quota_epuise = False
+    plafond_atteint = False
+    tentatives_soumises = sum(
+        len(_tentatives_v2(racine, cellule["collection_id"]))
+        for cellule in lock["collections"]
+    )
+
+    def admissible(cellule: dict) -> bool:
+        manifeste = cellule["execution_manifest"]
+        backend = manifeste["backend"]
+        provider = manifeste["provider_pinned"]
+        actifs = list(futurs.values())
+        actifs_backend = sum(
+            c["execution_manifest"]["backend"] == backend for c in actifs
+        )
+        actifs_provider = sum(
+            c["execution_manifest"]["provider_pinned"] == provider for c in actifs
+        )
+        return (
+            actifs_backend < lock["quotas"]["in_flight_by_backend"][backend]
+            and actifs_provider < lock["quotas"]["in_flight_by_provider"][provider]
+        )
+
     with ThreadPoolExecutor(max_workers=concurrence) as pool:
         restants = list(travaux)
         while restants or futurs:
             while restants and len(futurs) < concurrence and not arrete:
-                cellule, tentative = restants.pop(0)
+                if tentatives_soumises >= lock["quotas"]["attempts_total_max"]:
+                    quota_epuise = True
+                    restants.clear()
+                    break
+                index = next(
+                    (i for i, (cellule, _) in enumerate(restants) if admissible(cellule)),
+                    None,
+                )
+                if index is None:
+                    break
+                cellule, tentative = restants.pop(index)
                 reservation_id = f"{cellule['collection_id']}__a{tentative}"
                 try:
                     ledger.reserver(reservation_id, cellule["max_cost_microdollars"])
-                except (PlafondDepasse, ContratV2Invalide) as exc:
+                except PlafondDepasse as exc:
+                    print(f"Plafond atteint avant soumission: {exc}", file=sys.stderr)
+                    plafond_atteint = True
+                    restants.clear()
+                    break
+                except ContratV2Invalide as exc:
                     print(f"HOLD budget avant soumission: {exc}", file=sys.stderr)
                     arrete = True
                     break
@@ -331,6 +519,7 @@ def lancer_v2(args, conf: dict) -> int:
                     cellule, tentative,
                 )
                 futurs[futur] = cellule
+                tentatives_soumises += 1
             if not futurs:
                 break
             for futur in as_completed(list(futurs)):
@@ -339,20 +528,57 @@ def lancer_v2(args, conf: dict) -> int:
                 receipt = result["receipt"]
                 if receipt is None or receipt.get("schema_version") != SCHEMA_ATTEMPT:
                     ledger.finaliser(result["reservation_id"], None)
+                    _poser_hold_v2(
+                        racine, lock, lock_hash, "ATTEMPT_RECEIPT_MISSING",
+                        cellule["collection_id"], result["attempt"],
+                    )
                     print(f"HOLD {cellule['collection_id']}: reçu de tentative absent", file=sys.stderr)
                     arrete = True
                     break
+                try:
+                    valider_recu_tentative(receipt, cellule, lock_hash)
+                except ContratV2Invalide as exc:
+                    ledger.finaliser(result["reservation_id"], None)
+                    _poser_hold_v2(
+                        racine, lock, lock_hash, "ATTEMPT_RECEIPT_INVALID",
+                        cellule["collection_id"], result["attempt"],
+                    )
+                    print(
+                        f"HOLD {cellule['collection_id']}: reçu de tentative invalide: {exc}",
+                        file=sys.stderr,
+                    )
+                    arrete = True
+                    break
                 accounting = receipt.get("cost_accounting") or {}
-                cout = accounting.get("cost_microdollars") if accounting.get("status") == "known" else None
+                cout = (
+                    accounting.get("cost_microdollars")
+                    if accounting.get("status") in {"known", "upper_bound"}
+                    else None
+                )
                 ledger.finaliser(result["reservation_id"], cout)
                 if ledger.etat().get("hold"):
+                    _poser_hold_v2(
+                        racine, lock, lock_hash, "COST_ACCOUNTING_UNKNOWN",
+                        cellule["collection_id"], result["attempt"],
+                    )
                     print(f"HOLD {cellule['collection_id']}: coût non opposable", file=sys.stderr)
                     arrete = True
                     break
-                decision = decision_reprise(receipt, cellule, lock["attempts_max"])
+                decision = decision_reprise(
+                    receipt, cellule, lock_hash, lock["attempts_max"]
+                )
                 if decision["action"] == "retry":
                     restants.append((cellule, int(receipt["attempt"]) + 1))
-                elif receipt.get("result") != "COMPLETE":
+                elif decision["action"] == "infra_error":
+                    _fermer_collecte_v2(
+                        racine, lock_hash, cellule, "INFRA_ERROR",
+                        "ATTEMPTS_EXHAUSTED", int(receipt["attempt"]),
+                    )
+                elif decision["action"] == "hold":
+                    _poser_hold_v2(
+                        racine, lock, lock_hash, receipt["cause_code"],
+                        cellule["collection_id"], int(receipt["attempt"]),
+                    )
                     print(f"HOLD {cellule['collection_id']}: {decision['reason']}", file=sys.stderr)
                     arrete = True
                 break
@@ -364,6 +590,9 @@ def lancer_v2(args, conf: dict) -> int:
         "collections_expected": len(lock["collections"]),
         "engaged_microdollars": state["engaged_microdollars"],
         "reserved_microdollars": RegistreBudget._reserve_total(state),
+        "attempts_submitted": tentatives_soumises,
+        "attempts_quota_exhausted": quota_epuise,
+        "budget_cap_reached": plafond_atteint,
         "hold": bool(arrete or state.get("hold")),
     }, ensure_ascii=False, indent=2), file=sys.stderr)
     return 2 if arrete or state.get("hold") else 0
@@ -374,6 +603,10 @@ def main() -> int:
     ap.add_argument("campaign", type=Path)
     ap.add_argument("--reprendre", action="store_true",
                     help="saute les runs déjà marqués COMPLETE")
+    ap.add_argument(
+        "--abandonment", type=Path,
+        help="autorisation locale fermant la collecte en HOLD d'identité, sans nouvel appel",
+    )
     args = ap.parse_args()
 
     conf = tomllib.load(args.campaign.open("rb"))

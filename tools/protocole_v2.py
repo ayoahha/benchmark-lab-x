@@ -7,6 +7,7 @@ budget en microdollars, reprises bornées, agrégation et reçu R-016
 
 from __future__ import annotations
 
+import copy
 import fcntl
 import hashlib
 import json
@@ -23,17 +24,28 @@ from empreintes import empreinte
 
 
 PROTOCOLE_VERSION = "benchmark-lab-x/protocol/v2"
-B0_ESTIMATE_MICRODOLLARS = 31_812_500
-B0_CAP_MICRODOLLARS = 55_000_000
-SCHEMA_LOCK = "benchmark-lab-x/campaign-lock/v2"
-SCHEMA_ATTEMPT = "benchmark-lab-x/attempt-receipt/v2"
-SCHEMA_COLLECTION = "benchmark-lab-x/collection-receipt/v2"
-SCHEMA_SCORE = "benchmark-lab-x/score-receipt/v2"
+SCHEMA_LOCK_V3 = "benchmark-lab-x/campaign-lock/v3"
+SCHEMA_EXECUTION_V3 = "benchmark-lab-x/execution-manifest/v3"
+SCHEMA_LOCK = "benchmark-lab-x/campaign-lock/v4"
+SCHEMA_EXECUTION = "benchmark-lab-x/execution-manifest/v4"
+SCHEMA_ATTEMPT = "benchmark-lab-x/attempt-receipt/v3"
+SCHEMA_COLLECTION = "benchmark-lab-x/collection-receipt/v3"
+SCHEMA_SCORE = "benchmark-lab-x/score-receipt/v3"
+SCHEMA_COLLECTION_STATE = "benchmark-lab-x/collection-state/v1"
+SCHEMA_AUDIT = "benchmark-lab-x/axis-audit-receipt/v1"
+SCHEMA_PANEL_EVENTS = "benchmark-lab-x/panel-events/v1"
+SCHEMA_OPERATOR_HOLD = "benchmark-lab-x/operator-hold/v1"
+SCHEMA_ABANDONMENT = "benchmark-lab-x/campaign-abandonment/v1"
 SCHEMA_COVERAGE = "benchmark-lab-x/witness-coverage-receipt/v2"
 SCHEMA_LEDGER = "benchmark-lab-x/budget-ledger/v2"
-SCHEMA_CONTEXT = "benchmark-lab-x/measurement-context/v2"
+SCHEMA_CONTEXT = "benchmark-lab-x/measurement-context/v3"
 SCHEMA_PAID_AUTH = "benchmark-lab-x/paid-authorization/v1"
 SCHEMA_ENVIRONMENT = "benchmark-lab-x/environment/v1"
+
+SCHEMA_LOCK_HISTORIQUE = "benchmark-lab-x/campaign-lock/v2"
+SCHEMA_EXECUTION_HISTORIQUE = "benchmark-lab-x/execution-manifest/v2"
+PLAFOND_B0_HISTORIQUE = 55_000_000
+ESTIMATION_B0_HISTORIQUE = 31_812_500
 
 CHAMPS_ENVIRONNEMENT = {
     "schema_version", "os", "architecture", "locale", "timezone",
@@ -41,10 +53,10 @@ CHAMPS_ENVIRONNEMENT = {
 }
 CHEMINS_SOURCE_RUNTIME = (
     "docs/ARD.md",
-    "docs/DECISIONS-B0.md",
     "docs/PRD.md",
     "docs/RULES.md",
     "models.toml",
+    "tools/audit_instrument.py",
     "tools/choisir_provider.py",
     "tools/collect.py",
     "tools/empreintes.py",
@@ -62,8 +74,26 @@ CHEMINS_SOURCE_RUNTIME = (
     "tools/verifier_pentagone_v5.py",
 )
 
+ETATS_TENTATIVE = {"COMPLETE", "FAILED_RETRYABLE", "FAILED_NON_RETRYABLE"}
+ETATS_COLLECTE = {"COLLECTED", "INELIGIBLE", "INFRA_ERROR", "MISSING"}
 ETATS_SCORE = {"SCORED", "UNKNOWN", "INELIGIBLE", "INFRA_ERROR", "MISSING"}
 CAUSES_REPRISE = {"HTTP_429", "HTTP_503", "TRANSPORT_NO_HTTP_RESPONSE"}
+CAUSES_TENTATIVE_NON_RETRYABLE = {
+    "LOCK_PARAMETER_MISMATCH", "LOCK_PAYLOAD_MISMATCH", "HTTP_REDIRECT",
+    "HTTP_NON_RETRYABLE", "EMPTY_HTTP_BODY", "INVALID_JSON", "API_ERROR",
+    "RESPONSE_SCHEMA_INVALID", "ROUTE_MISMATCH", "LOCK_MANIFEST_MISMATCH",
+    "LOCK_PROMPT_MISMATCH", "KEY_LEAK_GUARD", "WRITE_FAILED",
+    "UNEXPECTED_ERROR",
+}
+CAUSES_COLLECTE_TERMINALE = {
+    "ATTEMPTS_EXHAUSTED", "ROUTE_INELIGIBLE",
+    "ABANDONED_AFTER_IDENTITY_MISMATCH",
+}
+CAUSES_HOLD_OPERATEUR = CAUSES_TENTATIVE_NON_RETRYABLE | {
+    "IN_FLIGHT_UNRECONCILED", "RETRY_RECONCILIATION_FAILED",
+    "ATTEMPT_RECEIPT_MISSING", "ATTEMPT_RECEIPT_INVALID",
+    "COST_ACCOUNTING_UNKNOWN",
+}
 CAUSE_CODES = {
     "OUTPUT_NO_PAGE", "API_MISSING_OR_INVALID", "NON_DETERMINISTIC", "ORDER_DEPENDENT",
     "INITIAL_STATE_INVALID", "VERIFY_TIMEOUT", "VERIFY_PROCESS_ERROR",
@@ -82,13 +112,50 @@ CAUSES_ECHEC_PAR_CARTE = {
     "pentagone-precision-24s": {"PRECISION_THRESHOLD_FAILED"},
     "pentagone-horizons-longs": {"OUT_OF_BOUNDS", "PRECISION_THRESHOLD_FAILED"},
 }
-CARDS_V4 = (
+AXES_PENTAGONE = (
     "pentagone-api",
     "pentagone-determinisme",
     "pentagone-confinement-court",
     "pentagone-precision-24s",
     "pentagone-horizons-longs",
 )
+# Alias de lecture pour les vérificateurs v4/v5 historiques. Les nouveaux
+# objets sérialisés emploient `axes`, jamais `score_cards`
+CARDS_V4 = AXES_PENTAGONE
+
+CHAMPS_MANIFESTE_EXECUTION = {
+    "schema_version", "mode", "model_requested", "backend",
+    "provider_pinned", "provider_expected", "endpoint_tag",
+    "quantization", "revision",
+    "reasoning_effort", "request_parameters", "max_tokens",
+    "data_policy_requested", "request_adapter_version", "tools", "agent",
+    "local_environment",
+}
+CHAMPS_MANIFESTE_EXECUTION_V3 = CHAMPS_MANIFESTE_EXECUTION - {"endpoint_tag"}
+CHAMPS_CONTEXTE_MESURE = {
+    "schema_version", "protocol_version", "task", "prompt_hash",
+    "system_prompt_hash", "axis_id", "verify_version", "verify_hash",
+    "measurement_environment_hash", "confidentiality_regime",
+}
+CHAMPS_RECU_TENTATIVE = {
+    "schema_version", "protocol_version", "campaign_lock_hash",
+    "collection_id", "attempt", "result", "cause_code",
+    "execution_manifest_hash", "payload_hash", "http_response_received",
+    "candidate_artifact_accepted", "cost_accounting", "retry_after",
+}
+CHAMPS_RECU_COLLECTE = {
+    "schema_version", "protocol_version", "campaign_lock_hash",
+    "collection_id", "attempt", "result", "payload_hash",
+    "execution_manifest_hash", "served", "candidate", "response_json_sha256",
+    "usage", "cost_accounting", "duration_ns", "cause_code",
+}
+CHAMPS_RECU_SCORE = {
+    "schema_version", "protocol_version", "campaign_lock_hash",
+    "collection_id", "collection_receipt_hash", "response_sha256", "alias",
+    "run", "axis_id", "verify_version", "verify_hash", "measurement_context",
+    "measurement_context_hash", "measurement_environment", "etat", "cause_code",
+    "verdict", "niveau", "frontiere", "predicats", "mesures",
+}
 PANEL_B0 = (
     "reference-gpt-5-6", "reference-gpt-5-6-high", "reference-gpt-5-6-xhigh",
     "opus-5-high", "opus-5-xhigh", "fable-5-medium", "fable-5-high",
@@ -158,8 +225,10 @@ def resultat_acquis_v2(racine: Path, collection_id: str) -> str | None:
                     objet = charger_json(recu)
                 except ContratV2Invalide:
                     return f"reçu de collecte antérieur invalide dans {tentative.name}"
-                if objet.get("collection_id") == collection_id and objet.get("result") == "COMPLETE":
-                    return f"reçu COMPLETE déjà acquis dans {tentative.name}"
+                if objet.get("collection_id") == collection_id and objet.get("result") in {
+                    "COMPLETE", "COLLECTED"
+                }:
+                    return f"reçu de collecte déjà acquis dans {tentative.name}"
 
     scores = racine / "scores"
     if scores.is_dir():
@@ -475,16 +544,20 @@ def _chemins_source_lock(lock: dict[str, Any]) -> list[str]:
                 entree.get("path"), f"task.task_tree[{i}].path"
             )
             chemins.add((Path(task_dir) / relatif).as_posix())
-    for i, card in enumerate(lock.get("score_cards") or []):
-        _exiger(isinstance(card, dict), f"score_cards[{i}] invalide")
+    objets_mesure = (
+        lock.get("axes") if lock.get("schema_version") in {SCHEMA_LOCK_V3, SCHEMA_LOCK}
+        else lock.get("score_cards")
+    ) or []
+    for i, card in enumerate(objets_mesure):
+        _exiger(isinstance(card, dict), f"axe[{i}] invalide")
         manifeste = card.get("verify_manifest")
-        _exiger(isinstance(manifeste, dict), f"verify_manifest absent dans score_cards[{i}]")
+        _exiger(isinstance(manifeste, dict), f"verify_manifest absent dans axe[{i}]")
         for j, asset in enumerate(manifeste.get("assets") or []):
             _exiger(isinstance(asset, dict),
-                    f"actif invalide dans score_cards[{i}].verify_manifest.assets[{j}]")
+                    f"actif invalide dans axes[{i}].verify_manifest.assets[{j}]")
             chemins.add(chemin_relatif_sur(
                 asset.get("path"),
-                f"score_cards[{i}].verify_manifest.assets[{j}].path",
+                f"axes[{i}].verify_manifest.assets[{j}].path",
             ))
     return sorted(chemins)
 
@@ -529,8 +602,12 @@ def valider_environnement_observe(
     )
 
 
-def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict[str, Any]:
-    _exiger(lock.get("schema_version") == SCHEMA_LOCK, "schema de lock v2 absent")
+def _valider_lock_historique_v2(
+    lock: dict[str, Any], racine_depot: Path | None = None
+) -> dict[str, Any]:
+    """Lecteur non autoritaire du lock historique, jamais utilisé pour collecter"""
+    _exiger(lock.get("schema_version") == SCHEMA_LOCK_HISTORIQUE,
+            "schema de lock historique v2 absent")
     _exiger(lock.get("protocol_version") == PROTOCOLE_VERSION, "protocole v2 absent du lock")
     _exiger(isinstance(lock.get("campaign_id"), str) and lock["campaign_id"],
             "campaign_id absent")
@@ -580,9 +657,9 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     budget = lock.get("budget")
     _exiger(isinstance(budget, dict), "budget absent")
     _exiger(budget.get("currency") == "USD", "devise du budget différente de USD")
-    _exiger(budget.get("cap_microdollars") == B0_CAP_MICRODOLLARS,
+    _exiger(budget.get("cap_microdollars") == PLAFOND_B0_HISTORIQUE,
             "plafond différent des 55 $ approuvés")
-    _exiger(budget.get("estimate_microdollars") == B0_ESTIMATE_MICRODOLLARS,
+    _exiger(budget.get("estimate_microdollars") == ESTIMATION_B0_HISTORIQUE,
             "estimation différente des 31,812500 $ approuvés")
 
     registry_source = lock.get("registry_source")
@@ -840,7 +917,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
                 == cellule["execution_manifest_hash"],
                 f"empreinte du manifeste d’exécution invalide dans {cid}")
         _exiger(manifeste_execution.get("schema_version")
-                == "benchmark-lab-x/execution-manifest/v2"
+                == SCHEMA_EXECUTION_HISTORIQUE
                 and manifeste_execution.get("protocol_version") == PROTOCOLE_VERSION
                 and manifeste_execution.get("task_version") == task["task_version"]
                 and manifeste_execution.get("prompt_sha256") == task["prompt_sha256"],
@@ -866,6 +943,573 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
         identites[alias] = identite
     _exiger(couples == {(alias, run) for alias in panel for run in range(1, 7)},
             "grille de collecte incomplète")
+    if racine_depot is not None:
+        _verifier_source_depot(lock, racine_depot)
+    return lock
+
+
+def valider_manifeste_execution(manifeste: dict[str, Any]) -> dict[str, Any]:
+    """Valider les listes positives fermées des manifestes v3 et v4"""
+    _exiger(isinstance(manifeste, dict), "manifeste d'exécution absent")
+    schema = manifeste.get("schema_version")
+    _exiger(schema in {SCHEMA_EXECUTION_V3, SCHEMA_EXECUTION},
+            "schéma du manifeste d'exécution inconnu")
+    champs = (
+        CHAMPS_MANIFESTE_EXECUTION
+        if schema == SCHEMA_EXECUTION
+        else CHAMPS_MANIFESTE_EXECUTION_V3
+    )
+    _exiger(set(manifeste) == champs,
+            "champs du manifeste d'exécution différents du contrat fermé")
+    _exiger(manifeste.get("mode") == "direct", "seul le mode direct est implémenté")
+    for champ in (
+        "model_requested", "backend", "provider_pinned", "provider_expected",
+        "request_adapter_version",
+    ):
+        _exiger(isinstance(manifeste.get(champ), str) and manifeste[champ].strip(),
+                f"{champ} absent du manifeste d'exécution")
+    if schema == SCHEMA_EXECUTION_V3:
+        for champ in ("quantization", "revision"):
+            _exiger(isinstance(manifeste.get(champ), str) and manifeste[champ].strip(),
+                    f"{champ} absent du manifeste d'exécution v3")
+            _exiger(manifeste[champ].strip().lower() not in {"unknown", "opaque"},
+                    f"{champ} obligatoire non résolu")
+    else:
+        _exiger(isinstance(manifeste.get("endpoint_tag"), str)
+                and manifeste["endpoint_tag"].strip(),
+                "endpoint_tag de pré-vol absent")
+        quantification = manifeste.get("quantization")
+        _exiger(isinstance(quantification, dict), "quantification structurée absente")
+        if quantification.get("status") == "declared":
+            _exiger(set(quantification) == {"status", "value"},
+                    "quantification declared ouverte")
+            valeur = quantification.get("value")
+            _exiger(isinstance(valeur, str) and valeur.strip()
+                    and valeur.strip().lower() not in {
+                        "unknown", "opaque", "native", "not_disclosed"
+                    }, "valeur de quantification déclarée invalide")
+        else:
+            _exiger(
+                set(quantification) == {"status", "value", "basis", "publisher"}
+                and quantification.get("status") == "not_disclosed"
+                and quantification.get("value") is None
+                and quantification.get("basis") == "publisher_managed_api"
+                and isinstance(quantification.get("publisher"), str)
+                and quantification["publisher"],
+                "statut not_disclosed invalide",
+            )
+        revision = manifeste.get("revision")
+        _exiger(
+            isinstance(revision, dict)
+            and set(revision) == {"status", "kind", "value"}
+            and revision.get("status") == "declared"
+            and revision.get("kind") == "endpoint_model_id"
+            and isinstance(revision.get("value"), str)
+            and revision["value"],
+            "révision endpoint_model_id invalide",
+        )
+    effort = manifeste.get("reasoning_effort")
+    _exiger(effort is None or (isinstance(effort, str) and effort.strip()),
+            "reasoning_effort invalide")
+    _entier_positif(manifeste.get("max_tokens"), "execution_manifest.max_tokens")
+    _exiger(manifeste.get("data_policy_requested") in {"allow", "deny"},
+            "politique de données demandée invalide")
+    _exiger(manifeste.get("tools") == [] and manifeste.get("agent") is None,
+            "outil ou agent interdit en mode direct")
+    _exiger(manifeste.get("local_environment") is None,
+            "environnement local non causal interdit dans le manifeste direct")
+
+    params = manifeste.get("request_parameters")
+    _exiger(isinstance(params, dict), "request_parameters absent")
+    _exiger(not ({"model", "messages", "max_tokens"} & set(params)),
+            "model, messages et max_tokens doivent rester hors request_parameters")
+    provider = params.get("provider")
+    _exiger(
+        isinstance(provider, dict)
+        and set(provider) == {"only", "allow_fallbacks", "require_parameters", "data_collection"}
+        and provider.get("only") == [manifeste["provider_pinned"]]
+        and provider.get("allow_fallbacks") is False
+        and provider.get("require_parameters") is True
+        and provider.get("data_collection") == manifeste["data_policy_requested"],
+        "paramètres provider différents du pin ou de la politique demandée",
+    )
+    _exiger(params.get("usage") == {"include": True},
+            "usage.include doit être figé à true")
+    if effort is not None:
+        _exiger(params.get("reasoning") == {"effort": effort},
+                "effort déclaré différent du payload")
+    _empreinte_contractuelle(manifeste, f"manifeste d'exécution {schema}")
+    return manifeste
+
+
+def construire_payload(manifeste: dict[str, Any], prompt: str) -> bytes:
+    """Produire les octets exacts de la requête sortante depuis le lock"""
+    valider_manifeste_execution(manifeste)
+    _exiger(isinstance(prompt, str), "prompt final non textuel")
+    body = {
+        "model": manifeste["model_requested"],
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": manifeste["max_tokens"],
+        **manifeste["request_parameters"],
+    }
+    return json.dumps(
+        body, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def _valider_identite_base(identite: Any, manifeste: dict[str, Any], chemin: str) -> None:
+    champs = {"mode", "model_requested", "backend", "provider_pinned", "reasoning_effort"}
+    if manifeste.get("schema_version") == SCHEMA_EXECUTION:
+        champs.add("endpoint_tag")
+    _exiger(isinstance(identite, dict) and set(identite) == champs,
+            f"identité de base fermée invalide dans {chemin}")
+    attendu = {champ: manifeste[champ] for champ in champs}
+    _exiger(identite == attendu, f"identité de base différente du manifeste dans {chemin}")
+
+
+def _valider_axe_v3(
+    axe: Any, index: int, runs: int, population: int, racine_depot: Path | None
+) -> None:
+    _exiger(isinstance(axe, dict), f"axes[{index}] invalide")
+    champs = {
+        "id", "kind", "verify_version", "verify_hash", "verifier_path",
+        "verify_manifest", "watchdog_s", "predicates", "aggregation",
+        "audit_plan",
+    }
+    _exiger(set(axe) == champs, f"champs fermés invalides pour axes[{index}]")
+    aid = axe.get("id")
+    _exiger(aid in AXES_PENTAGONE, f"axe inconnu: {aid}")
+    attendu_kind = "binary" if aid in AXES_PENTAGONE[:2] else "levels"
+    _exiger(axe.get("kind") == attendu_kind, f"kind invalide pour {aid}")
+    _exiger(
+        isinstance(axe.get("verify_version"), str)
+        and re.fullmatch(r"verify-v[1-9][0-9]*", axe["verify_version"]) is not None,
+        f"version du vérificateur invalide pour {aid}",
+    )
+    _sha(axe.get("verify_hash"), f"axes[{index}].verify_hash")
+    chemin_verifier = chemin_relatif_sur(
+        axe.get("verifier_path"), f"axes[{index}].verifier_path"
+    )
+    _entier_positif(axe.get("watchdog_s"), f"axes[{index}].watchdog_s")
+    predicats = axe.get("predicates")
+    _exiger(isinstance(predicats, list) and tuple(predicats) == PREDICATS_V4[aid],
+            f"prédicats différents du contrat pour {aid}")
+    _exiger(axe.get("aggregation") == {"runs": runs, "order_statistic": 4},
+            f"agrégation v2 différente pour {aid}")
+    plan_audit = axe.get("audit_plan")
+    champs_audit = {
+        "classes_and_boundaries", "anomalies_and_causes",
+        "blind_selection_method", "sample_size", "sample_size_justification",
+        "allowed_conclusion",
+    }
+    _exiger(isinstance(plan_audit, dict) and set(plan_audit) == champs_audit,
+            f"plan d'audit fermé absent pour {aid}")
+    for champ in ("classes_and_boundaries", "anomalies_and_causes"):
+        valeurs = plan_audit.get(champ)
+        _exiger(isinstance(valeurs, list) and valeurs
+                and all(isinstance(v, str) and v.strip() for v in valeurs),
+                f"{champ} invalide pour {aid}")
+    for champ in (
+        "blind_selection_method", "sample_size_justification", "allowed_conclusion"
+    ):
+        _exiger(isinstance(plan_audit.get(champ), str) and plan_audit[champ].strip(),
+                f"{champ} absent pour {aid}")
+    taille = _entier_positif(plan_audit.get("sample_size"), f"sample_size {aid}")
+    _exiger(taille <= population, f"échantillon d'audit supérieur à la population pour {aid}")
+    manifeste = axe.get("verify_manifest")
+    _exiger(isinstance(manifeste, dict), f"verify_manifest absent pour {aid}")
+    _exiger(_empreinte_contractuelle(manifeste, f"verify_manifest {aid}") == axe["verify_hash"],
+            f"verify_hash incohérent pour {aid}")
+    _exiger(
+        manifeste.get("schema_version") == "benchmark-lab-x/verifier-manifest/v2"
+        and manifeste.get("card_id") == aid
+        and manifeste.get("verify_version") == axe["verify_version"]
+        and manifeste.get("predicates") == predicats,
+        f"manifeste du vérificateur incohérent pour {aid}",
+    )
+    assets = manifeste.get("assets")
+    _exiger(isinstance(assets, list) and assets, f"actifs juge absents pour {aid}")
+    chemins: list[str] = []
+    for j, asset in enumerate(assets):
+        _exiger(isinstance(asset, dict) and set(asset) == {"path", "sha256", "bytes"},
+                f"actif invalide pour {aid}[{j}]")
+        path_rel = chemin_relatif_sur(asset.get("path"), f"{aid}.assets[{j}].path")
+        chemins.append(path_rel)
+        _sha(asset.get("sha256"), f"{aid}.assets[{j}].sha256")
+        _entier_positif(asset.get("bytes"), f"{aid}.assets[{j}].bytes", zero=True)
+        if racine_depot is not None:
+            path = resoudre_sous(racine_depot, path_rel)
+            _exiger(path.is_file() and not path.is_symlink(),
+                    f"actif juge absent ou lié: {path_rel}")
+            data = path.read_bytes()
+            _exiger(len(data) == asset["bytes"] and sha256_octets(data) == asset["sha256"],
+                    f"actif juge modifié: {path_rel}")
+    _exiger(chemins == sorted(set(chemins)), f"actifs non triés ou dupliqués pour {aid}")
+    _exiger(chemin_verifier in chemins, f"vérificateur principal absent pour {aid}")
+
+
+def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict[str, Any]:
+    """Valider les locks cibles v3 et v4 sans accepter un lock historique v2"""
+    champs_lock = {
+        "schema_version", "protocol_version", "campaign_id", "operation",
+        "question", "created_at", "paid_authorization_required",
+        "repository_source", "environments", "panel", "runs", "attempts_max",
+        "runner", "quotas", "selection_policy", "task", "axes", "collections",
+        "budget", "registry_source", "route_snapshot_source",
+    }
+    _exiger(isinstance(lock, dict) and set(lock) == champs_lock,
+            "champs du campaign-lock différents du contrat fermé")
+    schema_lock = lock.get("schema_version")
+    _exiger(schema_lock in {SCHEMA_LOCK_V3, SCHEMA_LOCK},
+            "campaign-lock/v3 ou v4 absent")
+    cible_v4 = schema_lock == SCHEMA_LOCK
+    _exiger(lock.get("protocol_version") == PROTOCOLE_VERSION, "protocole v2 absent")
+    _exiger(lock.get("operation") in {
+        "renotation", "reproduction", "new_collection", "longitudinal_comparison"
+    }, "opération de campagne invalide")
+    _exiger(lock["operation"] == "new_collection",
+            "ce chemin actif prépare uniquement une nouvelle collecte")
+    for champ in ("campaign_id", "question", "created_at"):
+        _exiger(isinstance(lock.get(champ), str) and lock[champ].strip(), f"{champ} absent")
+    _exiger(lock.get("paid_authorization_required") is True,
+            "autorisation payante séparée obligatoire")
+
+    source = lock.get("repository_source")
+    _exiger(isinstance(source, dict) and set(source) == {"commit"},
+            "commit source absent ou ambigu")
+    _git_oid(source.get("commit"), "repository_source.commit")
+    environnements = lock.get("environments")
+    _exiger(isinstance(environnements, dict) and set(environnements) == {"runner", "measurement"},
+            "environnements runner et measurement requis")
+    for role in ("runner", "measurement"):
+        entree = environnements[role]
+        _exiger(isinstance(entree, dict) and set(entree) == {"descriptor", "sha256"},
+                f"environnement {role} invalide")
+        descripteur = valider_descripteur_environnement(entree.get("descriptor"), role)
+        _sha(entree.get("sha256"), f"environments.{role}.sha256")
+        _exiger(_empreinte_contractuelle(descripteur, role) == entree["sha256"],
+                f"empreinte de l'environnement {role} invalide")
+
+    panel = lock.get("panel")
+    _exiger(isinstance(panel, list) and panel
+            and all(isinstance(alias, str) and alias for alias in panel), "panel invalide")
+    _exiger(len(panel) == len(set(panel)), "alias dupliqué dans le panel")
+    runs = _entier_positif(lock.get("runs"), "runs")
+    _exiger(runs == 6, "pentagone-rotatif exige le plan v2 à six runs")
+    _exiger(lock.get("attempts_max") == 3, "protocol/v2 exige trois tentatives maximum")
+    runner = lock.get("runner")
+    _exiger(isinstance(runner, dict)
+            and set(runner) == {"concurrency", "transport_timeout_s"}, "runner invalide")
+    concurrence = _entier_positif(runner.get("concurrency"), "runner.concurrency")
+    _entier_positif(runner.get("transport_timeout_s"), "runner.transport_timeout_s")
+
+    quotas = lock.get("quotas")
+    _exiger(isinstance(quotas, dict) and set(quotas) == {
+        "attempts_total_max", "in_flight_by_backend", "in_flight_by_provider"
+    }, "quotas absents ou ambigus")
+    total_tentatives = _entier_positif(quotas.get("attempts_total_max"),
+                                      "quotas.attempts_total_max")
+    _exiger(total_tentatives <= len(panel) * runs * lock["attempts_max"],
+            "quota de tentatives supérieur au maximum du protocole")
+    for champ in ("in_flight_by_backend", "in_flight_by_provider"):
+        table = quotas.get(champ)
+        _exiger(isinstance(table, dict) and table, f"quotas.{champ} absent")
+        for cle, valeur in table.items():
+            _exiger(isinstance(cle, str) and cle, f"clé invalide dans quotas.{champ}")
+            _entier_positif(valeur, f"quotas.{champ}.{cle}")
+
+    selection = lock.get("selection_policy")
+    _exiger(isinstance(selection, dict) and set(selection) == {"version"}
+            and isinstance(selection.get("version"), str) and selection["version"],
+            "politique de sélection absente")
+    budget = lock.get("budget")
+    _exiger(isinstance(budget, dict) and set(budget) == {
+        "currency", "cap_microdollars", "estimate_microdollars", "estimate_source"
+    }, "budget fermé invalide")
+    _exiger(budget.get("currency") == "USD", "devise différente de USD")
+    cap = _entier_positif(budget.get("cap_microdollars"), "budget.cap_microdollars")
+    estimation = _entier_positif(
+        budget.get("estimate_microdollars"), "budget.estimate_microdollars"
+    )
+    _exiger(estimation <= cap, "estimation supérieure au plafond")
+    _exiger(isinstance(budget.get("estimate_source"), str) and budget["estimate_source"],
+            "source de l'estimation absente")
+
+    registre = lock.get("registry_source")
+    _exiger(isinstance(registre, dict) and set(registre) == {"path", "sha256"},
+            "source du registre invalide")
+    registry_path = chemin_relatif_sur(registre.get("path"), "registry_source.path")
+    _sha(registre.get("sha256"), "registry_source.sha256")
+    route_source = lock.get("route_snapshot_source")
+    champs_route_source = {
+        "path", "sha256", "schema_version", "criterion_version", "observed_at"
+    }
+    if cible_v4:
+        champs_route_source |= {
+            "budget_estimate_microdollars", "budget_cap_microdollars",
+            "b0_09_approval_sha256", "b0_09_proposal_snapshot_sha256",
+        }
+    _exiger(isinstance(route_source, dict) and set(route_source) == champs_route_source,
+            "source du snapshot de routes invalide")
+    route_path = chemin_relatif_sur(route_source.get("path"), "route_snapshot_source.path")
+    _sha(route_source.get("sha256"), "route_snapshot_source.sha256")
+    schema_snapshot = (
+        "benchmark-lab-x/route-preflight-snapshot/v3"
+        if cible_v4
+        else "benchmark-lab-x/route-preflight-snapshot/v2"
+    )
+    _exiger(route_source.get("schema_version") == schema_snapshot,
+            f"snapshot de routes requis: {schema_snapshot}")
+    _exiger(route_source.get("criterion_version") == selection["version"],
+            "critère de route différent de la politique de sélection")
+    _exiger(
+        selection["version"]
+        == ("benchmark-lab-x/selection-route/v3" if cible_v4
+            else "benchmark-lab-x/selection-route/v2"),
+        "version du critère incompatible avec le lock",
+    )
+    _exiger(isinstance(route_source.get("observed_at"), str) and route_source["observed_at"],
+            "date du snapshot absente")
+    if cible_v4:
+        _exiger(
+            route_source.get("budget_estimate_microdollars") == estimation
+            and route_source.get("budget_cap_microdollars") == cap,
+            "budget du snapshot différent du lock",
+        )
+        _sha(route_source.get("b0_09_approval_sha256"),
+             "route_snapshot_source.b0_09_approval_sha256")
+        _sha(route_source.get("b0_09_proposal_snapshot_sha256"),
+             "route_snapshot_source.b0_09_proposal_snapshot_sha256")
+
+    task = lock.get("task")
+    _exiger(isinstance(task, dict) and set(task) == {
+        "task_id", "task_version", "task_dir", "task_file", "task_tree",
+        "prompt_sha256", "confidentiality_regime"
+    }, "contrat de carte invalide")
+    _exiger(isinstance(task.get("task_id"), str) and task["task_id"], "task_id absent")
+    _exiger(isinstance(task.get("task_version"), str)
+            and re.fullmatch(r"task-v[1-9][0-9]*", task["task_version"]),
+            "task_version invalide")
+    _sha(task.get("prompt_sha256"), "task.prompt_sha256")
+    _exiger(task.get("confidentiality_regime") in {"expose", "retenu"},
+            "régime de confidentialité de la carte invalide")
+
+    axes = lock.get("axes")
+    _exiger(isinstance(axes, list) and len(axes) == len(AXES_PENTAGONE),
+            "cinq axes sont requis pour la carte pentagone-rotatif")
+    for index, axe in enumerate(axes):
+        _valider_axe_v3(axe, index, runs, len(panel) * runs, racine_depot)
+    _exiger(tuple(axe["id"] for axe in axes) == AXES_PENTAGONE,
+            "ordre des axes différent du contrat")
+
+    snapshot_routes: dict[str, Any] | None = None
+    prompt: str | None = None
+    if racine_depot is not None:
+        registry_file = resoudre_sous(racine_depot, registry_path)
+        _exiger(registry_file.is_file() and sha256_fichier(registry_file) == registre["sha256"],
+                "registre verrouillé absent ou modifié")
+        snapshot_file = resoudre_sous(racine_depot, route_path)
+        _exiger(snapshot_file.is_file() and not snapshot_file.is_symlink(),
+                "snapshot de routes absent ou lié")
+        snapshot_data = snapshot_file.read_bytes()
+        _exiger(sha256_octets(snapshot_data) == route_source["sha256"],
+                "snapshot de routes modifié")
+        try:
+            snapshot = json.loads(snapshot_data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ContratV2Invalide("snapshot de routes illisible") from exc
+        _exiger(isinstance(snapshot, dict)
+                and snapshot.get("schema_version") == route_source["schema_version"]
+                and snapshot.get("criterion_version") == route_source["criterion_version"]
+                and snapshot.get("observed_at") == route_source["observed_at"]
+                and snapshot.get("panel") == panel
+                and snapshot.get("models_file") == registry_path
+                and snapshot.get("models_file_sha256") == registre["sha256"],
+                "contexte du snapshot différent du lock")
+        if cible_v4:
+            snapshot_budget = snapshot.get("budget_reestimate")
+            snapshot_approval = snapshot.get("b0_09_approval")
+            proposal_source = snapshot.get("proposal_source")
+            _exiger(
+                snapshot.get("status") == "PREPARED_LOCAL_ONLY"
+                and snapshot.get("hold_reasons") == []
+                and snapshot.get("pin_changes") == []
+                and isinstance(snapshot_budget, dict)
+                and snapshot_budget.get("repriced_estimate_microdollars") == estimation
+                and snapshot_budget.get("approved_cap_microdollars") == cap
+                and isinstance(snapshot_approval, dict)
+                and _empreinte_contractuelle(snapshot_approval, "approbation B0-09")
+                == route_source["b0_09_approval_sha256"],
+                "snapshot v3 encore en HOLD ou budget différent du lock",
+            )
+            _exiger(
+                isinstance(proposal_source, dict)
+                and set(proposal_source) == {"path", "sha256"}
+                and proposal_source.get("path")
+                == snapshot_approval.get("source_snapshot_path")
+                and proposal_source.get("sha256")
+                == snapshot_approval.get("source_snapshot_sha256")
+                == route_source["b0_09_proposal_snapshot_sha256"],
+                "approbation B0-09 non liée à sa proposition",
+            )
+            proposal_path = resoudre_sous(racine_depot, proposal_source["path"])
+            _exiger(proposal_path.is_file() and not proposal_path.is_symlink(),
+                    "proposition B0-09 absente ou liée")
+            proposal_data = proposal_path.read_bytes()
+            _exiger(sha256_octets(proposal_data) == proposal_source["sha256"],
+                    "proposition B0-09 modifiée")
+            try:
+                proposal = json.loads(proposal_data.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ContratV2Invalide("proposition B0-09 illisible") from exc
+            _exiger(
+                isinstance(proposal, dict)
+                and proposal.get("proposal_source") is None
+                and proposal.get("b0_09_approval") is None,
+                "source B0-09 déjà approuvée ou invalide",
+            )
+            attendu_snapshot = copy.deepcopy(proposal)
+            attendu_snapshot["proposal_source"] = proposal_source
+            attendu_snapshot["b0_09_approval"] = snapshot_approval
+            attendu_snapshot["hold_reasons"] = []
+            attendu_snapshot["status"] = "PREPARED_LOCAL_ONLY"
+            _exiger(attendu_snapshot == snapshot,
+                    "snapshot approuvé différent de sa proposition B0-09")
+        snapshot_routes = snapshot.get("resolved")
+        _exiger(isinstance(snapshot_routes, dict) and set(snapshot_routes) == set(panel),
+                "routes résolues incomplètes")
+        prompt, _ = assembler_prompt_verrouille(racine_depot, task)
+
+    collections = lock.get("collections")
+    _exiger(isinstance(collections, list) and len(collections) == len(panel) * runs,
+            "grille de collecte incomplète")
+    couples: set[tuple[str, int]] = set()
+    identites: dict[str, str] = {}
+    backends: set[str] = set()
+    providers: set[str] = set()
+    for index, cellule in enumerate(collections):
+        champs_cellule = {
+            "collection_id", "alias", "run", "task_version", "prompt_sha256",
+            "base_identity", "route", "execution_manifest", "execution_manifest_hash",
+            "payload_hash", "max_cost_microdollars",
+        }
+        _exiger(isinstance(cellule, dict) and set(cellule) == champs_cellule,
+                f"champs fermés invalides dans collections[{index}]")
+        alias = cellule.get("alias")
+        run = cellule.get("run")
+        cid = cellule.get("collection_id")
+        _exiger(alias in panel and isinstance(run, int) and not isinstance(run, bool)
+                and 1 <= run <= runs, f"alias ou run invalide dans {cid}")
+        _exiger(cid == f"{alias}__r{run}", f"collection_id non canonique: {cid}")
+        _exiger((alias, run) not in couples, f"collecte dupliquée: {cid}")
+        couples.add((alias, run))
+        _exiger(cellule.get("task_version") == task["task_version"]
+                and cellule.get("prompt_sha256") == task["prompt_sha256"],
+                f"contexte de tâche différent dans {cid}")
+
+        manifeste = valider_manifeste_execution(cellule.get("execution_manifest"))
+        _exiger(
+            manifeste.get("schema_version")
+            == (SCHEMA_EXECUTION if cible_v4 else SCHEMA_EXECUTION_V3),
+            f"version du manifeste incompatible avec {schema_lock}",
+        )
+        _sha(cellule.get("execution_manifest_hash"), f"{cid}.execution_manifest_hash")
+        _exiger(_empreinte_contractuelle(manifeste, f"manifeste {cid}")
+                == cellule["execution_manifest_hash"],
+                f"empreinte du manifeste invalide dans {cid}")
+        _valider_identite_base(cellule.get("base_identity"), manifeste, cid)
+        route = cellule.get("route")
+        champs_route = {
+            "metadata_status", "backend", "provider", "expect_provider",
+            "quantization", "revision", "criterion_version", "price_source",
+            "price_observed_at", "input_usd_per_million_tokens",
+            "output_usd_per_million_tokens", "request_usd", "prompt_token_upper_bound",
+        }
+        if cible_v4:
+            champs_route |= {"endpoint_tag", "ownership", "metadata_evidence"}
+        _exiger(isinstance(route, dict) and set(route) == champs_route,
+                f"route fermée invalide dans {cid}")
+        _exiger(route.get("metadata_status") == "resolved", f"route non résolue dans {cid}")
+        _exiger(
+            route["backend"] == manifeste["backend"]
+            and route["provider"] == manifeste["provider_pinned"]
+            and route["expect_provider"] == manifeste["provider_expected"]
+            and route["quantization"] == manifeste["quantization"]
+            and route["revision"] == manifeste["revision"]
+            and route["criterion_version"] == selection["version"],
+            f"route différente du manifeste ou du critère dans {cid}",
+        )
+        if cible_v4:
+            _exiger(route["endpoint_tag"] == manifeste["endpoint_tag"],
+                    f"endpoint de pré-vol différent du manifeste dans {cid}")
+            ownership = route.get("ownership")
+            evidence = route.get("metadata_evidence")
+            _exiger(
+                isinstance(ownership, dict)
+                and set(ownership) == {
+                    "kind", "canonical_publisher", "provider_slug",
+                    "provider_name", "endpoint_tag",
+                }
+                and ownership.get("provider_slug") == route["provider"]
+                and ownership.get("provider_name") == route["expect_provider"]
+                and ownership.get("endpoint_tag") == route["endpoint_tag"],
+                f"ownership différent de la route dans {cid}",
+            )
+            _exiger(
+                isinstance(evidence, dict)
+                and set(evidence) == {"url", "observed_at", "response_sha256"}
+                and evidence.get("url") == route["price_source"]
+                and evidence.get("observed_at") == route["price_observed_at"],
+                f"preuve de métadonnées différente de la route dans {cid}",
+            )
+            _sha(evidence.get("response_sha256"), f"{cid}.metadata_evidence.response_sha256")
+            quantification = route["quantization"]
+            if quantification.get("status") == "not_disclosed":
+                _exiger(
+                    ownership.get("kind") == "publisher_managed"
+                    and quantification.get("publisher")
+                    == ownership.get("canonical_publisher"),
+                    f"not_disclosed interdit hors API éditeur dans {cid}",
+                )
+        _exiger(isinstance(route.get("price_source"), str) and route["price_source"]
+                and isinstance(route.get("price_observed_at"), str) and route["price_observed_at"],
+                f"prix non datés dans {cid}")
+        max_cost = _entier_positif(
+            cellule.get("max_cost_microdollars"), f"{cid}.max_cost_microdollars"
+        )
+        _exiger(max_cost <= cap, f"coût maximal supérieur au plafond dans {cid}")
+        _exiger(_cout_max_depuis_route(route, manifeste["max_tokens"], f"{cid}.route") == max_cost,
+                f"coût maximal différent des prix verrouillés dans {cid}")
+        _sha(cellule.get("payload_hash"), f"{cid}.payload_hash")
+        if prompt is not None:
+            _exiger(sha256_octets(construire_payload(manifeste, prompt)) == cellule["payload_hash"],
+                    f"payload_hash différent des octets attendus dans {cid}")
+        if snapshot_routes is not None:
+            attendu_route = snapshot_routes.get(alias)
+            _exiger(isinstance(attendu_route, dict), f"route absente du snapshot pour {alias}")
+            for champ in champs_route - {"prompt_token_upper_bound"}:
+                _exiger(route.get(champ) == attendu_route.get(champ),
+                        f"{champ} différent du snapshot dans {cid}")
+            _exiger(attendu_route.get("max_tokens") == manifeste["max_tokens"],
+                    f"max_tokens différent du snapshot dans {cid}")
+        identite_hash = _empreinte_contractuelle(
+            {"base_identity": cellule["base_identity"],
+             "execution_manifest_hash": cellule["execution_manifest_hash"]},
+            f"identité {cid}",
+        )
+        _exiger(alias not in identites or identites[alias] == identite_hash,
+                f"configuration différente entre les runs de {alias}")
+        identites[alias] = identite_hash
+        backends.add(manifeste["backend"])
+        providers.add(manifeste["provider_pinned"])
+    _exiger(couples == {(alias, run) for alias in panel for run in range(1, runs + 1)},
+            "grille de collecte incomplète")
+    _exiger(set(quotas["in_flight_by_backend"]) == backends,
+            "quotas backend différents des routes")
+    _exiger(set(quotas["in_flight_by_provider"]) == providers,
+            "quotas provider différents des routes")
+    _exiger(concurrence <= sum(quotas["in_flight_by_backend"].values()),
+            "concurrence supérieure aux quotas backend")
     if racine_depot is not None:
         _verifier_source_depot(lock, racine_depot)
     return lock
@@ -903,29 +1547,106 @@ def cellule_du_lock(lock: dict[str, Any], collection_id: str) -> dict[str, Any]:
 def decision_reprise(
     attempt: dict[str, Any],
     cellule: dict[str, Any],
+    lock_hash: str,
     attempts_max: int = 3,
 ) -> dict[str, str]:
     """Décision fermée, sans lire le contenu de la réponse candidate"""
-    _exiger(attempt.get("schema_version") == SCHEMA_ATTEMPT, "reçu de tentative v2 absent")
-    _exiger(attempt.get("collection_id") == cellule.get("collection_id"),
-            "reçu lié à une autre cellule")
-    tentative = _entier_positif(attempt.get("attempt"), "attempt")
-    if attempt.get("result") == "COMPLETE":
-        return {"action": "stop", "reason": "résultat scoreable acquis"}
+    valider_recu_tentative(attempt, cellule, lock_hash)
+    tentative = attempt["attempt"]
+    if attempt["result"] == "COMPLETE":
+        return {"action": "complete", "reason": "artefact candidat accepté"}
+    if attempt["result"] == "FAILED_NON_RETRYABLE":
+        return {"action": "hold", "reason": attempt["cause_code"]}
     if tentative >= attempts_max:
-        return {"action": "stop", "reason": "tentatives épuisées"}
-    cause = attempt.get("cause_code")
-    if cause not in CAUSES_REPRISE:
-        return {"action": "hold", "reason": "cause non autorisée pour une reprise"}
-    if attempt.get("candidate_content_received") is not False:
-        return {"action": "hold", "reason": "contenu candidat reçu ou statut ambigu"}
-    if attempt.get("route_hash") != cellule.get("execution_manifest_hash"):
-        return {"action": "hold", "reason": "route ou manifeste différent du lock"}
+        return {"action": "infra_error", "reason": "tentatives épuisées"}
     accounting = attempt.get("cost_accounting")
-    if not isinstance(accounting, dict) or accounting.get("status") != "known":
+    if accounting.get("status") not in {"known", "upper_bound"}:
         return {"action": "hold", "reason": "coût non opposable, réservation maximale conservée"}
-    _entier_positif(accounting.get("cost_microdollars"), "cost_microdollars", zero=True)
-    return {"action": "retry", "reason": cause}
+    return {"action": "retry", "reason": attempt["cause_code"]}
+
+
+def valider_recu_tentative(
+    attempt: dict[str, Any], cellule: dict[str, Any], lock_hash: str
+) -> dict[str, Any]:
+    _exiger(isinstance(attempt, dict) and set(attempt) == CHAMPS_RECU_TENTATIVE,
+            "champs du reçu de tentative v3 différents du contrat fermé")
+    _exiger(attempt.get("schema_version") == SCHEMA_ATTEMPT,
+            "attempt-receipt/v3 absent")
+    _exiger(attempt.get("protocol_version") == PROTOCOLE_VERSION,
+            "protocole v2 absent du reçu de tentative")
+    _exiger(attempt.get("collection_id") == cellule.get("collection_id"),
+            "reçu lié à une autre collecte")
+    _sha(lock_hash, "campaign_lock_hash attendu")
+    _exiger(attempt.get("campaign_lock_hash") == lock_hash,
+            "reçu de tentative lié à un autre lock")
+    tentative = _entier_positif(attempt.get("attempt"), "attempt")
+    _exiger(tentative <= 3, "tentative supérieure au contrat v2")
+    resultat = attempt.get("result")
+    _exiger(resultat in ETATS_TENTATIVE, "état de tentative invalide")
+    _exiger(attempt.get("execution_manifest_hash") == cellule.get("execution_manifest_hash"),
+            "manifeste différent du lock dans le reçu de tentative")
+    _exiger(attempt.get("payload_hash") == cellule.get("payload_hash"),
+            "payload différent du lock dans le reçu de tentative")
+    _sha(attempt.get("payload_hash"), "attempt.payload_hash")
+    _exiger(isinstance(attempt.get("http_response_received"), bool),
+            "statut de réponse HTTP ambigu")
+    _exiger(isinstance(attempt.get("candidate_artifact_accepted"), bool),
+            "statut de l'artefact candidat ambigu")
+    cause = attempt.get("cause_code")
+    if resultat == "COMPLETE":
+        _exiger(cause is None
+                and attempt["http_response_received"] is True
+                and attempt["candidate_artifact_accepted"] is True,
+                "tentative COMPLETE sans artefact accepté")
+    elif resultat == "FAILED_RETRYABLE":
+        _exiger(cause in CAUSES_REPRISE and attempt["candidate_artifact_accepted"] is False,
+                "échec retryable sans cause fermée")
+    else:
+        _exiger(cause in CAUSES_TENTATIVE_NON_RETRYABLE,
+                "échec non retryable sans cause fermée")
+        _exiger(
+            attempt["candidate_artifact_accepted"] is False
+            or attempt["http_response_received"] is True,
+            "artefact accepté sans réponse HTTP",
+        )
+    if cause == "TRANSPORT_NO_HTTP_RESPONSE":
+        _exiger(attempt["http_response_received"] is False,
+                "absence HTTP contradictoire")
+    if cause in {"HTTP_429", "HTTP_503"}:
+        _exiger(attempt["http_response_received"] is True,
+                "réponse HTTP attendue pour 429 ou 503")
+    if cause == "ROUTE_MISMATCH":
+        _exiger(
+            attempt["http_response_received"] is True
+            and attempt["candidate_artifact_accepted"] is False,
+            "identité divergente contradictoire avec l'acceptation d'un artefact",
+        )
+    accounting = attempt.get("cost_accounting")
+    _exiger(isinstance(accounting, dict) and set(accounting) == {
+        "status", "cost_microdollars", "reservation_id"
+    }, "comptabilité de tentative invalide")
+    _exiger(accounting.get("status") in {"known", "upper_bound", "unknown"},
+            "statut de coût invalide")
+    if accounting["status"] == "unknown":
+        _exiger(accounting.get("cost_microdollars") is None,
+                "coût inconnu ne peut porter une valeur")
+    else:
+        cout = _entier_positif(accounting.get("cost_microdollars"),
+                               "attempt.cost_microdollars", zero=True)
+        maximum = _entier_positif(
+            cellule.get("max_cost_microdollars"), "cellule.max_cost_microdollars"
+        )
+        _exiger(cout <= maximum, "coût de tentative supérieur au maximum verrouillé")
+        if accounting["status"] == "upper_bound":
+            _exiger(cout == maximum, "borne de coût différente du maximum verrouillé")
+    _exiger(accounting.get("reservation_id")
+            == f"{cellule['collection_id']}__a{tentative}",
+            "reservation_id différent de la tentative")
+    _exiger(attempt.get("retry_after") is None
+            or (isinstance(attempt["retry_after"], str) and attempt["retry_after"]),
+            "Retry-After invalide")
+    _empreinte_contractuelle(attempt, "reçu de tentative v3")
+    return attempt
 
 
 def _empreinte_contractuelle(objet: Any, chemin: str) -> str:
@@ -961,7 +1682,7 @@ def valider_resultat_carte(
         return
 
     ordre = tuple(card["predicates"])
-    _exiger(tuple(predicats) == ordre,
+    _exiger(set(predicats) == set(ordre),
             f"ordre ou ensemble des prédicats différent pour {card['id']}")
     _exiger(all(isinstance(predicats[p], bool) for p in ordre),
             f"valeur de prédicat non booléenne pour {card['id']}")
@@ -994,6 +1715,289 @@ def valider_resultat_carte(
                 f"cause d'échec incohérente pour {card['id']}")
 
 
+def valider_recu_collecte(
+    collection: dict[str, Any], lock_hash: str, cellule: dict[str, Any]
+) -> dict[str, Any]:
+    _exiger(isinstance(collection, dict) and set(collection) == CHAMPS_RECU_COLLECTE,
+            "champs du reçu de collecte v3 différents du contrat fermé")
+    _exiger(collection.get("schema_version") == SCHEMA_COLLECTION,
+            "collection-receipt/v3 absent")
+    _exiger(collection.get("protocol_version") == PROTOCOLE_VERSION,
+            "protocole v2 absent de la collecte")
+    attendus = {
+        "campaign_lock_hash": lock_hash,
+        "collection_id": cellule["collection_id"],
+        "result": "COLLECTED",
+        "payload_hash": cellule["payload_hash"],
+        "execution_manifest_hash": cellule["execution_manifest_hash"],
+    }
+    for champ, attendu in attendus.items():
+        _exiger(collection.get(champ) == attendu,
+                f"{champ} différent dans le reçu de collecte")
+    tentative = _entier_positif(collection.get("attempt"), "collection.attempt")
+    _exiger(tentative <= 3, "tentative de collecte supérieure au contrat")
+    served = collection.get("served")
+    _exiger(isinstance(served, dict) and set(served) == {"model", "provider"}
+            and all(isinstance(served.get(k), str) and served[k] for k in served),
+            "identité servie absente ou ambiguë")
+    manifeste = cellule["execution_manifest"]
+    normaliser = lambda valeur: re.sub(
+        r"[\s_]+", "-", str(valeur).strip().lower()
+    )
+    _exiger(normaliser(served["model"]) == normaliser(manifeste["model_requested"]),
+            "modèle servi différent du lock")
+    _exiger(normaliser(served["provider"]) in {
+        normaliser(manifeste["provider_pinned"]),
+        normaliser(manifeste["provider_expected"]),
+    }, "provider servi différent du lock")
+    candidate = collection.get("candidate")
+    _exiger(isinstance(candidate, dict) and set(candidate) == {
+        "sha256", "bytes", "kind", "truncated"
+    }, "description de l'artefact candidat invalide")
+    _sha(candidate.get("sha256"), "collection.candidate.sha256")
+    taille = _entier_positif(candidate.get("bytes"), "collection.candidate.bytes", zero=True)
+    _exiger(candidate.get("kind") in {"content", "empty", "refusal"},
+            "type d'artefact candidat inconnu")
+    _exiger(isinstance(candidate.get("truncated"), bool), "signal de troncature ambigu")
+    _exiger((taille == 0) == (candidate["kind"] == "empty"),
+            "type empty incohérent avec la taille candidate")
+    _sha(collection.get("response_json_sha256"), "collection.response_json_sha256")
+    usage = collection.get("usage")
+    _exiger(isinstance(usage, dict) and set(usage) == {
+        "prompt_tokens", "completion_tokens", "reasoning_tokens"
+    }, "usage de collecte invalide")
+    for champ, valeur in usage.items():
+        _exiger(valeur is None or (
+            isinstance(valeur, int) and not isinstance(valeur, bool) and valeur >= 0
+        ), f"collection.usage.{champ} invalide")
+    accounting = collection.get("cost_accounting")
+    _exiger(isinstance(accounting, dict) and set(accounting) == {
+        "status", "cost_microdollars", "reservation_id"
+    }, "comptabilité de collecte invalide")
+    _exiger(accounting.get("status") in {"known", "upper_bound"},
+            "coût de collecte non opposable")
+    cout = _entier_positif(accounting.get("cost_microdollars"),
+                           "collection.cost_microdollars", zero=True)
+    maximum = _entier_positif(
+        cellule.get("max_cost_microdollars"), "cellule.max_cost_microdollars"
+    )
+    _exiger(cout <= maximum, "coût de collecte supérieur au maximum verrouillé")
+    if accounting["status"] == "upper_bound":
+        _exiger(cout == maximum, "borne de collecte différente du maximum verrouillé")
+    _exiger(accounting.get("reservation_id")
+            == f"{cellule['collection_id']}__a{tentative}",
+            "réservation de collecte différente de la tentative")
+    _entier_positif(collection.get("duration_ns"), "collection.duration_ns", zero=True)
+    _exiger(collection.get("cause_code") is None,
+            "une collecte COLLECTED ne porte pas de cause d'échec")
+    _empreinte_contractuelle(collection, "reçu de collecte v3")
+    return collection
+
+
+def valider_chaine_collecte(
+    attempt: dict[str, Any],
+    collection: dict[str, Any],
+    lock_hash: str,
+    cellule: dict[str, Any],
+) -> None:
+    """Lier une collecte acceptée à sa tentative terminale exacte"""
+    valider_recu_tentative(attempt, cellule, lock_hash)
+    valider_recu_collecte(collection, lock_hash, cellule)
+    _exiger(attempt["result"] == "COMPLETE", "collecte sans tentative COMPLETE")
+    _exiger(attempt["attempt"] == collection["attempt"],
+            "collecte liée à une autre tentative")
+    _exiger(attempt["cost_accounting"] == collection["cost_accounting"],
+            "comptabilité différente entre tentative et collecte")
+
+
+def valider_etat_collecte(
+    etat: dict[str, Any], lock_hash: str, cellule: dict[str, Any]
+) -> dict[str, Any]:
+    champs = {
+        "schema_version", "campaign_lock_hash", "collection_id", "state",
+        "cause_code", "last_attempt",
+    }
+    _exiger(isinstance(etat, dict) and set(etat) == champs,
+            "champs de l'état de collecte différents du contrat fermé")
+    _exiger(etat.get("schema_version") == SCHEMA_COLLECTION_STATE,
+            "collection-state/v1 absent")
+    _exiger(etat.get("campaign_lock_hash") == lock_hash,
+            "état de collecte lié à un autre lock")
+    _exiger(etat.get("collection_id") == cellule.get("collection_id"),
+            "état lié à une autre collecte")
+    _exiger(etat.get("state") in {"INELIGIBLE", "INFRA_ERROR"},
+            "état terminal de collecte invalide")
+    _exiger(etat.get("cause_code") in CAUSES_COLLECTE_TERMINALE,
+            "cause terminale de collecte non fermée")
+    _exiger(
+        (etat["state"] == "INELIGIBLE")
+        == (etat["cause_code"] == "ROUTE_INELIGIBLE"),
+        "cause terminale incompatible avec l'état de collecte",
+    )
+    tentative = etat.get("last_attempt")
+    _exiger(tentative is None or (
+        isinstance(tentative, int) and not isinstance(tentative, bool)
+        and 1 <= tentative <= 3
+    ), "dernière tentative invalide")
+    _empreinte_contractuelle(etat, "état de collecte")
+    return etat
+
+
+def valider_recu_audit(
+    receipt: dict[str, Any],
+    lock_hash: str,
+    axe: dict[str, Any],
+    measurement_context_hash: str,
+    collection_receipt_hashes: set[str],
+) -> dict[str, Any]:
+    champs = {
+        "schema_version", "campaign_lock_hash", "axis_id", "verify_hash",
+        "measurement_context_hash", "audit_plan_hash", "selection_method",
+        "identity_blinded", "score_changes", "sample", "decision",
+        "completed_at", "auditor_role", "conclusion",
+    }
+    _exiger(isinstance(receipt, dict) and set(receipt) == champs,
+            "champs du reçu d'audit différents du contrat fermé")
+    _exiger(receipt.get("schema_version") == SCHEMA_AUDIT,
+            "axis-audit-receipt/v1 absent")
+    attendus = {
+        "campaign_lock_hash": lock_hash,
+        "axis_id": axe["id"],
+        "verify_hash": axe["verify_hash"],
+        "measurement_context_hash": measurement_context_hash,
+        "audit_plan_hash": _empreinte_contractuelle(
+            axe["audit_plan"], f"plan d'audit {axe['id']}"
+        ),
+        "selection_method": axe["audit_plan"]["blind_selection_method"],
+        "conclusion": axe["audit_plan"]["allowed_conclusion"],
+    }
+    for champ, attendu in attendus.items():
+        _exiger(receipt.get(champ) == attendu, f"{champ} différent dans l'audit")
+    _exiger(receipt.get("identity_blinded") is True,
+            "identité du candidat visible pendant l'audit")
+    _exiger(receipt.get("score_changes") == 0,
+            "un audit ne modifie aucune note")
+    for champ in ("completed_at", "auditor_role"):
+        _exiger(isinstance(receipt.get(champ), str) and receipt[champ].strip(),
+                f"{champ} absent de l'audit")
+    sample = receipt.get("sample")
+    _exiger(isinstance(sample, list)
+            and len(sample) == axe["audit_plan"]["sample_size"],
+            "taille d'échantillon différente du plan")
+    vus: set[str] = set()
+    conformes: list[bool] = []
+    for index, unite in enumerate(sample):
+        _exiger(isinstance(unite, dict) and set(unite) == {
+            "collection_receipt_hash", "code_result_correct"
+        }, f"unité d'audit invalide: {index}")
+        recu_hash = unite.get("collection_receipt_hash")
+        _sha(recu_hash, f"audit.sample[{index}].collection_receipt_hash")
+        _exiger(recu_hash in collection_receipt_hashes,
+                f"unité d'audit étrangère à l'axe: {index}")
+        _exiger(recu_hash not in vus, f"unité d'audit dupliquée: {index}")
+        vus.add(recu_hash)
+        _exiger(isinstance(unite.get("code_result_correct"), bool),
+                f"verdict humain ambigu: {index}")
+        conformes.append(unite["code_result_correct"])
+    decision = receipt.get("decision")
+    _exiger(decision in {"ACCEPTED", "REJECTED"}, "décision d'audit invalide")
+    _exiger((decision == "ACCEPTED") == all(conformes),
+            "décision d'audit différente des observations")
+    _empreinte_contractuelle(receipt, "reçu d'audit")
+    return receipt
+
+
+def valider_evenements_panel(
+    objet: dict[str, Any], lock: dict[str, Any], lock_hash: str
+) -> dict[str, Any]:
+    _exiger(isinstance(objet, dict) and set(objet) == {
+        "schema_version", "campaign_lock_hash", "events"
+    }, "champs des événements de panel différents du contrat fermé")
+    _exiger(objet.get("schema_version") == SCHEMA_PANEL_EVENTS,
+            "panel-events/v1 absent")
+    _exiger(objet.get("campaign_lock_hash") == lock_hash,
+            "événements de panel liés à un autre lock")
+    evenements = objet.get("events")
+    _exiger(isinstance(evenements, list), "liste des événements de panel absente")
+    vus: set[str] = set()
+    for index, evenement in enumerate(evenements):
+        _exiger(isinstance(evenement, dict) and set(evenement) == {
+            "event", "alias", "reason", "decided_at", "decision_basis"
+        }, f"événement de panel invalide: {index}")
+        _exiger(evenement.get("event") == "RETIRE", f"événement inconnu: {index}")
+        alias = evenement.get("alias")
+        _exiger(alias in lock["panel"] and alias not in vus,
+                f"alias retiré inconnu ou dupliqué: {alias}")
+        vus.add(alias)
+        for champ in ("reason", "decided_at"):
+            _exiger(isinstance(evenement.get(champ), str) and evenement[champ].strip(),
+                    f"{champ} absent de l'événement RETIRE")
+        _exiger(evenement.get("decision_basis") == "independent_of_measured_result",
+                "retrait non déclaré indépendant du résultat")
+    _empreinte_contractuelle(objet, "événements de panel")
+    return objet
+
+
+def valider_hold_operateur(
+    hold: dict[str, Any], lock: dict[str, Any], lock_hash: str
+) -> dict[str, Any]:
+    champs = {
+        "schema_version", "campaign_lock_hash", "decision", "cause_code",
+        "collection_id", "attempt",
+    }
+    _exiger(isinstance(hold, dict) and set(hold) == champs,
+            "champs du HOLD opérateur différents du contrat fermé")
+    _exiger(hold.get("schema_version") == SCHEMA_OPERATOR_HOLD,
+            "operator-hold/v1 absent")
+    _exiger(hold.get("campaign_lock_hash") == lock_hash,
+            "HOLD opérateur lié à un autre lock")
+    _exiger(hold.get("decision") == "HOLD", "décision opérateur différente de HOLD")
+    _exiger(hold.get("cause_code") in CAUSES_HOLD_OPERATEUR,
+            "cause du HOLD opérateur non fermée")
+    collection_id = hold.get("collection_id")
+    if collection_id is None:
+        _exiger(hold.get("attempt") is None, "tentative sans collecte dans le HOLD")
+    else:
+        _exiger(any(c["collection_id"] == collection_id for c in lock["collections"]),
+                "HOLD lié à une collecte inconnue")
+        tentative = hold.get("attempt")
+        _exiger(tentative is None or (
+            isinstance(tentative, int) and not isinstance(tentative, bool)
+            and 1 <= tentative <= 3
+        ), "tentative invalide dans le HOLD")
+    _empreinte_contractuelle(hold, "HOLD opérateur")
+    return hold
+
+
+def valider_abandon_campagne(
+    abandon: dict[str, Any], hold: dict[str, Any], lock_hash: str
+) -> dict[str, Any]:
+    champs = {
+        "schema_version", "campaign_lock_hash", "decision", "collection_id",
+        "cause_code", "decided_at", "approved_by",
+    }
+    _exiger(isinstance(abandon, dict) and set(abandon) == champs,
+            "champs de l'abandon différents du contrat fermé")
+    _exiger(abandon.get("schema_version") == SCHEMA_ABANDONMENT,
+            "campaign-abandonment/v1 absent")
+    _exiger(abandon.get("campaign_lock_hash") == lock_hash,
+            "abandon lié à un autre lock")
+    _exiger(abandon.get("decision") == "ABANDON_HELD_COLLECTION",
+            "décision d'abandon invalide")
+    _exiger(
+        hold.get("cause_code") == "ROUTE_MISMATCH"
+        and abandon.get("collection_id") == hold.get("collection_id"),
+        "abandon autorisé seulement pour la collecte en HOLD d'identité",
+    )
+    _exiger(abandon.get("cause_code") == "ABANDONED_AFTER_IDENTITY_MISMATCH",
+            "cause d'abandon invalide")
+    for champ in ("decided_at", "approved_by"):
+        _exiger(isinstance(abandon.get(champ), str) and abandon[champ].strip(),
+                f"{champ} absent de l'abandon")
+    _empreinte_contractuelle(abandon, "abandon de campagne")
+    return abandon
+
+
 def valider_recu_score(
     score: dict[str, Any],
     lock: dict[str, Any],
@@ -1003,37 +2007,25 @@ def valider_recu_score(
     collection: dict[str, Any],
     collection_hash: str,
 ) -> dict[str, Any]:
-    """Valider identité, contexte et sémantique d'un reçu de score v2"""
-    _exiger(score.get("schema_version") == SCHEMA_SCORE, "schéma de score v2 absent")
-    _exiger(score.get("protocol_version") == PROTOCOLE_VERSION, "protocole v2 absent du score")
-    _exiger(collection.get("schema_version") == SCHEMA_COLLECTION,
-            "schéma de collecte v2 absent")
-    _exiger(collection.get("protocol_version") == PROTOCOLE_VERSION,
-            "protocole v2 absent de la collecte")
-    collection_attendue = {
-        "campaign_lock_hash": lock_hash,
-        "collection_id": cellule["collection_id"],
-        "result": "COMPLETE",
-        "task_version": lock["task"]["task_version"],
-        "prompt_sha256": lock["task"]["prompt_sha256"],
-        "execution_manifest_hash": cellule["execution_manifest_hash"],
-    }
-    for champ, attendu in collection_attendue.items():
-        _exiger(collection.get(champ) == attendu,
-                f"{champ} différent dans le reçu de collecte")
+    """Valider identité, contexte fermé et sémantique d'un reçu par axe"""
+    _exiger(isinstance(score, dict) and set(score) == CHAMPS_RECU_SCORE,
+            "champs du reçu de score v3 différents du contrat fermé")
+    _exiger(score.get("schema_version") == SCHEMA_SCORE, "score-receipt/v3 absent")
+    _exiger(score.get("protocol_version") == PROTOCOLE_VERSION,
+            "protocole v2 absent du score")
+    valider_recu_collecte(collection, lock_hash, cellule)
     _exiger(_empreinte_contractuelle(collection, "reçu de collecte") == collection_hash,
             "empreinte du reçu de collecte différente")
     _sha(collection_hash, "collection_receipt_hash")
-    _sha(collection.get("response_sha256"), "collection.response_sha256")
 
     attendus = {
         "campaign_lock_hash": lock_hash,
         "collection_id": cellule["collection_id"],
         "collection_receipt_hash": collection_hash,
-        "response_sha256": collection["response_sha256"],
+        "response_sha256": collection["candidate"]["sha256"],
         "alias": cellule["alias"],
         "run": cellule["run"],
-        "score_card_id": card["id"],
+        "axis_id": card["id"],
         "verify_version": card["verify_version"],
         "verify_hash": card["verify_hash"],
     }
@@ -1050,21 +2042,28 @@ def valider_recu_score(
     contexte_attendu = {
         "schema_version": SCHEMA_CONTEXT,
         "protocol_version": PROTOCOLE_VERSION,
-        "task_version": lock["task"]["task_version"],
-        "prompt_sha256": lock["task"]["prompt_sha256"],
-        "score_card_id": card["id"],
+        "task": {
+            "id": lock["task"]["task_id"],
+            "version": lock["task"]["task_version"],
+        },
+        "prompt_hash": lock["task"]["prompt_sha256"],
+        "system_prompt_hash": None,
+        "axis_id": card["id"],
         "verify_version": card["verify_version"],
         "verify_hash": card["verify_hash"],
         "measurement_environment_hash": environnement_hash,
-        "regime_confidentialite": "expose",
+        "confidentiality_regime": lock["task"]["confidentiality_regime"],
     }
     contexte = score.get("measurement_context")
-    _exiger(isinstance(contexte, dict) and contexte == contexte_attendu,
+    _exiger(isinstance(contexte, dict) and set(contexte) == CHAMPS_CONTEXTE_MESURE
+            and contexte == contexte_attendu,
             "contexte de mesure différent du lock ou de l'environnement")
     contexte_hash = _empreinte_contractuelle(contexte, "contexte de mesure")
     _sha(score.get("measurement_context_hash"), "measurement_context_hash")
     _exiger(score["measurement_context_hash"] == contexte_hash,
             "empreinte du contexte de mesure invalide")
+    _exiger(score.get("etat") in {"SCORED", "UNKNOWN"},
+            "un reçu de score porte seulement SCORED ou UNKNOWN")
     valider_resultat_carte(score, card)
     return score
 
@@ -1105,6 +2104,10 @@ def valider_recu_couverture(
 ) -> tuple[bool, list[str]]:
     """Valider la preuve R-016 figée sans lancer Chromium"""
     motifs: list[str] = []
+    try:
+        _empreinte_contractuelle(receipt, "reçu R-016")
+    except ContratV2Invalide as exc:
+        motifs.append(str(exc))
     if receipt.get("schema_version") != SCHEMA_COVERAGE:
         motifs.append("schema de reçu R-016 invalide")
     if receipt.get("campaign_lock_hash") != lock_hash:
@@ -1172,7 +2175,7 @@ def valider_recu_couverture(
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ContratV2Invalide) as exc:
             motifs.append(str(exc))
             provenance_temoins = {}
-    cartes = {card["id"]: card for card in lock.get("score_cards", [])}
+    cartes = {axe["id"]: axe for axe in lock.get("axes", [])}
     independants = True
     attentes: dict[str, dict[str, dict[str, bool]]] = {}
     for nom, temoin in sorted(temoins.items()):
@@ -1305,7 +2308,7 @@ def valider_recu_couverture(
     complete = True
     if set(cards_receipt) != set(cartes):
         motifs.append("ensemble des cartes de couverture différent du lock")
-    for card in lock.get("score_cards", []):
+    for card in lock.get("axes", []):
         cid = card["id"]
         bloc = cards_receipt.get(cid)
         if not isinstance(bloc, dict):

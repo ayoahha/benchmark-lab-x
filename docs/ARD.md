@@ -4,124 +4,142 @@ style_gate: pass
 
 # ARD : Benchmark Lab-X
 
-Version 2.0, mise à jour le 5 août 2026
+Version documentaire 3.0, 8 août 2026
 
 ## 1. Rôle et autorité
 
-Cet ARD, pour *Architecture Requirements Document*, décrit l’architecture cible de Benchmark Lab-X et les preuves attendues. Il couvre la trajectoire complète et distingue l’existant, les jalons engagés et la vision.
+Cet ARD, pour *Architecture Requirements Document*, décrit les objets, identités, flux, états, frontières de confiance et preuves techniques de Benchmark Lab-X.
 
-Benchmark Lab-X cherche à savoir quel modèle, quelle configuration ou quel agent réussit un travail réel : avec quelle fiabilité, à quel coût, en combien de temps. Puis si cette réponse tient encore quand les systèmes évoluent.
+Benchmark Lab-X détermine quel modèle, quelle configuration ou quel agent réussit un travail réel, avec quelle fiabilité, à quel coût et en combien de temps, puis vérifie si cette recommandation reste valable lorsque les systèmes évoluent.
 
-| Document | Autorité |
+| Surface | Autorité |
 |---|---|
-| [RULES.md](RULES.md) | Éligibilité, notation et validité des résultats |
-| [PRD.md](PRD.md) | Problème, utilisateurs, objectifs et jalons |
-| ARD.md | Structure du système, frontières de confiance et preuves techniques |
+| [PRD](PRD.md) | problème, valeur, utilisateurs, exigences produit, périmètre et jalons |
+| [RULES](RULES.md) | invariants universels d’éligibilité, notation, agrégation et publication |
+| ARD, ce document | objets, identités, flux, états, sécurité et preuves techniques |
+| [README](../README.md) | compréhension publique et prise en main |
+| [Modèle de carte](../tasks/TEMPLATE.md) | contrat réutilisable d’une carte d’usage |
 
-Les décisions d’architecture restent dans cet ARD. Aucun document de décision séparé n’est requis.
+Les décisions d’architecture restent ici, près des exigences concernées. Aucun format de décision séparé n’est requis.
 
-## 2. Vocabulaire et identités
+## 2. Objets, identités et empreintes
 
-### 2.1 Candidat et configuration
-
-Le candidat direct reste un triplet lisible :
-
-| Composant | Définition | Exemple |
-|---|---|---|
-| Modèle | Identifiant demandé | `deepseek/deepseek-v4-flash-0731` |
-| Route | Backend et provider réellement servi | `OpenRouter → Novita` |
-| Effort | Réglage demandé ou valeur explicite `default` | `high` |
-
-La configuration mesurée ajoute un manifeste complet. Son empreinte `execution_manifest_hash` couvre :
-
-- modèle demandé et servi, révision exposée ou valeur `opaque`
-- backend, provider demandé et servi, politique de données
-- empreinte du prompt système, sans secret
-- paramètres réellement envoyés et leur provenance
-- version du protocole, du runner et de l’environnement
-- liste d’outils, égale à `[]` pour un appel direct
-
-Une configuration agent ajoute : implémentation et version de l’agent, instructions, outils et versions, permissions, mémoire, stratégie de boucle, limites de tours, temps et coût, image d’environnement et politique réseau.
-
-Les valeurs de secrets ne figurent jamais dans le manifeste ni dans une empreinte publique. Une configuration inconnue du fournisseur est marquée `opaque`, jamais devinée.
-
-### 2.2 Contexte de mesure
-
-`measurement_context_hash` couvre uniquement les éléments communs nécessaires à la comparaison :
-
-- `task-vN` et `prompt_hash`
-- `verify-vM` et `verify_hash`
-- protocole de collecte et de notation
-- environnement de mesure
-- régime de confidentialité
-
-Il n’inclut pas le candidat. Deux configurations différentes peuvent donc être comparées sous le même contexte. Une série longitudinale de la même configuration exige les deux empreintes inchangées. Une comparaison entre versions reste possible, à condition que son intitulé nomme ce changement.
-
-#### Canonicalisation des empreintes
-
-Chaque manifeste porte `schema_version`. La première version vaut `benchmark-lab-x/execution-manifest/v1` pour le manifeste d’exécution et `benchmark-lab-x/measurement-context/v1` pour le manifeste de contexte. Toute évolution de leur schéma change cette valeur. Les clés optionnelles existent avec la valeur `null` ; une information non publiée par un fournisseur vaut la chaîne `opaque`. L’objet est canonicalisé en UTF-8 selon [RFC 8785, JSON Canonicalization Scheme](https://www.rfc-editor.org/rfc/rfc8785), puis son SHA-256 est publié en hexadécimal minuscule.
-
-Les empreintes internes suivent le même algorithme et occupent 64 caractères hexadécimaux minuscules :
-
-- `prompt_hash` porte sur les octets UTF-8 exacts du message utilisateur final, après assemblage et avant transport, sans normalisation Unicode supplémentaire
-- `system_prompt_hash` et `instructions_hash` portent sur les octets UTF-8 exacts du texte correspondant ; en l’absence de texte, le champ vaut `null`
-- `verify_hash` porte sur un manifeste JSON canonicalisé des fichiers qui définissent ou calibrent la note, triés par chemin relatif POSIX ; chaque entrée contient `path` et le SHA-256 des octets exacts du fichier, couvrant au minimum vérificateur, oracle, points d’évaluation, seuils, provenance préenregistrée et octets des témoins qualifiants. Le reçu d’observation R-016 lie ensuite ce `verify_hash`, le lock et l’environnement ; il n’entre pas dans sa propre empreinte
-- `environment_hash` et `measurement_environment_hash` portent sur un descripteur JSON canonicalisé contenant exactement `schema_version`, `os`, `architecture`, `locale`, `timezone`, `runtimes`, `browser` et `sandbox_image_digest` ; `schema_version` vaut initialement `benchmark-lab-x/environment/v1`, `os` contient `name`, `version` et `kernel`, `runtimes` est trié par `name` et chaque entrée contient `name` et `version`, `browser` contient `name` et `version` ou vaut `null`, et toute image absente vaut `null`. Pour G4, `sandbox_image_digest` est obligatoire et fait autorité : les champs décrivent l’image, `os.kernel` vaut `null`, et les faits propres à l’hôte sont consignés hors empreinte
-
-Le manifeste d’exécution contient exactement les groupes suivants : `schema_version`, `mode`, `model`, `route`, `reasoning`, `system_prompt_hash`, `parameters`, `data_policy`, `runner_version`, `protocol_version`, `environment_hash`, `tools` et `agent`.
-
-- `model` contient `requested`, `served` et `revision`
-- `route` contient `backend`, `provider_requested` et `provider_served`
-- `reasoning` contient `effort` et `max_tokens`, avec `null` lorsque le réglage n’est pas envoyé
-- `parameters` associe chaque paramètre API réellement envoyé à un objet contenant `value` et `source` ; `source` vaut `campaign`, `candidate`, `route_default` ou `protocol_default`
-- `tools` vaut `[]` en mode direct ; sinon chaque entrée contient `name`, `version` et `permissions`
-- `agent` vaut `null` en mode direct ; sinon il contient `name`, `version`, `instructions_hash`, `memory_policy`, `loop_policy`, `max_turns`, `timeout_s` et `cost_cap_usd`
-
-Le manifeste de contexte contient exactement : `schema_version`, `task_version`, `prompt_hash`, `verify_version`, `verify_hash`, `protocol_version`, `measurement_environment_hash` et `confidentiality_regime`. Il exclut modèle, route, effort, paramètres, outils et agent.
-
-`protocol_version` identifie l’ensemble indissociable du protocole de collecte et de notation ; tout changement de l’une de ces deux parties l’incrémente dans les deux manifestes. `environment_hash` décrit l’environnement d’exécution du candidat ; `measurement_environment_hash` décrit celui du vérificateur. Ils sont égaux lorsque collecte et vérification partagent exactement le même environnement, sinon les deux valeurs distinctes sont conservées.
-
-### 2.3 Objets
+### 2.1 Vocabulaire
 
 | Terme | Définition |
 |---|---|
-| Carte | Contrat versionné, entrées, oracle, vérificateur et témoins |
-| Run attendu | Cellule d’une campagne pour une carte, une configuration et un numéro de run |
-| Tentative | Appel numéroté destiné à satisfaire un run attendu |
-| Candidat complet | Candidat dont chaque run attendu porte l’état `SCORED` |
-| Campagne | Question et ensemble gelé de cartes, configurations, profils et limites |
-| Côté modèle | Contenu réellement envoyé au système évalué |
-| Côté juge | Actifs utilisés pour noter sans être envoyés au système évalué |
-| Carte exposée | Carte publiable et renouvelable |
-| Carte retenue | Ancre locale V4, fixe entre deux campagnes comparables |
+| Carte d’usage | travail réel, stimulus, décision visée et contrat |
+| Axe de score | mesure déterministe appliquée à l’artefact d’une carte |
+| Identité de base | mode, modèle, backend, provider épinglé et effort ; nom et version de l’agent en mode agent |
+| Configuration mesurée | paramètres exacts d’une exécution, identifiés par `execution_manifest_hash` |
+| Candidat lisible | libellé humain de la configuration, sans pouvoir de jointure |
+| Collecte planifiée | carte d’usage × configuration × index de run |
+| Tentative | appel numéroté destiné à une collecte planifiée |
+| Adaptateur de route | composant qui valide la réponse fournisseur et matérialise les octets candidats |
+| Artefact accepté | première séquence d’octets candidate matérialisée, même vide ou invalide pour la tâche |
+| Unité de score | axe × configuration × run |
+| Résultat d’axe | agrégation des unités de score d’une configuration |
+| Candidat de profil | identité de base reliée explicitement aux configurations exactes de chaque axe |
+| Oracle | calculateur ou référence déterministe côté juge |
+| Run design | répétition du même stimulus ou série d’instances distinctes |
 
-### 2.4 Taxonomie
+Une carte d’usage peut alimenter plusieurs axes. Elle ne compte qu’une fois dans la couverture et ne déclenche qu’une collecte par configuration et run.
 
-Le domaine d’usage, le mode `direct` ou `agent` et la profondeur locale forment la taxonomie produit. F1 à F4 restent des patrons techniques :
+### 2.2 Identité de base et configuration exacte
 
-| Patron | Effet mesuré |
+Exemple direct :
+
+| Composant | Exemple |
 |---|---|
-| F1, rendu | Géométrie ou comportement d’un artefact rendu |
-| F2, exécution | Correction et robustesse d’un programme exécuté |
-| F3, fermé | Extraction, calcul et provenance dans un format décidable |
-| F4, contraintes | Faisabilité et écart à un optimum calculé |
+| mode | `direct` |
+| modèle demandé | `deepseek/deepseek-v4-flash-0731` |
+| backend | `OpenRouter` |
+| provider épinglé | `Novita` |
+| effort | `high` |
 
-Un nouveau patron peut être ajouté sans créer automatiquement un nouveau domaine. Les profondeurs de deux cartes différentes ne sont jamais additionnées.
+Exemple agent :
 
-## 3. État et trajectoire d’architecture
+| Composant ajouté | Exemple |
+|---|---|
+| agent | `lab-x-runner` |
+| version | `3` |
 
-| Capacité | État actuel | Cible |
+L’identité de base reste lisible. La configuration exacte porte les paramètres, versions et composants qui influencent l’exécution. Deux configurations ayant des `max_tokens` différents ont des `execution_manifest_hash` différents, même si leur identité de base est commune.
+
+### 2.3 Contrats de hash cibles
+
+Le protocole de mesure reste `benchmark-lab-x/protocol/v2`. La signification des manifestes change réellement ; les schémas cibles sont donc distincts des schémas historiques.
+
+| Contrat | Contenu positif fermé | Éléments explicitement exclus |
 |---|---|---|
-| Assemblage du prompt | bloc de consignes et découverte de fichiers Markdown avec exclusions | liste d’autorisation explicite par carte |
-| Collecte | appel direct, route épinglée, reçu de collecte | manifeste complet et contrôle de conformité séparé |
-| Campagne | lanceur prototype et `campaign.toml` | pré-vol, `campaign.lock`, états persistants et reprise idempotente |
-| Notation | vérificateurs spécialisés invoqués depuis le chemin du run | entrée neutralisée, reçus de score séparés et renotation générique |
-| Restitution | données intermédiaires | `results.html` provisoire puis validé |
-| Agents | absent | runner isolé et piste distincte en V3 |
-| Longitudinal | absent | jeu retenu, restauration et comparaison V4 |
-| Site | absent | consultation V5, studio validé V6 |
+| `benchmark-lab-x/campaign-draft/v4` | intention locale, panel, politique de données, routes et budget proposés, états B0-08 à B0-10, quotas, plans d’audit et commit source attendu | autorisation payante, observation fournisseur et score |
+| `benchmark-lab-x/execution-manifest/v4` | mode, modèle demandé, backend, provider épinglé et attendu, endpoint observé au pré-vol, quantification structurée, révision `endpoint_model_id`, effort, paramètres API exacts à envoyer, `max_tokens` propre à la carte ou route, politique de données demandée, version de l’adaptateur de requête, outils et configuration d’agent, environnement local lorsqu’il influence réellement l’exécution | tâche, prompt, vérificateur, réponse brute de métadonnées, prix, quotas, concurrence, identité servie, coûts, durées et environnement du vérificateur |
+| `benchmark-lab-x/route-preflight-snapshot/v3` | panel, `selection-route/v3`, tuple éditeur/provider/endpoint, quantification structurée, révision, prix, date, URL et SHA-256 de la réponse de métadonnées, dérives de pin, recalcul B0-09, manifeste haché des 76 reçus historiques et liaison de l’approbation au snapshot proposé exact | valeur de quantification supposée, secret, résultat futur et identité réellement servie |
+| `payload_hash` | octets exacts de la requête sortante | rien de la requête transportée |
+| reçu de collecte | hash du lock, collecte, payload, configuration attendue, modèle et provider servis, réponse, usage, coût, durée et cause | verdict et score |
+| `benchmark-lab-x/measurement-context/v3` | tâche, prompt final, prompt système commun, axe, `verify-vM`, `verify_hash`, protocole, environnement de mesure et régime de confidentialité | configuration, candidat, prix et observations fournisseur |
+| `verify_hash` | vérificateur, oracle, prédicats, seuils, actifs juge et témoins qualifiants de l’axe | sorties candidates et identité du candidat |
+| `benchmark-lab-x/axis-audit-receipt/v1` | hash du lock, axe, `verify_hash`, contexte de mesure, plan d’audit, méthode aveugle, unités examinées, conformité de chaque note, absence de correction et conclusion permise | identité du candidat pendant l’audit et toute note modifiée |
+| `benchmark-lab-x/campaign-lock/v4` | panel, politique de sélection, snapshot approuvé, approbation B0-09 et snapshot proposé exact liés par empreinte, routes résolues, prix datés, quotas, concurrence, plafonds, collectes, plans d’audit par axe, protocoles et hashes attendus | secrets et observations postérieures |
 
-Aucune propriété de la colonne cible n’est présentée comme déjà implémentée.
+`measurement_context_hash` est produit par reçu de score et par axe. Un actif juge partagé peut donc modifier plusieurs `verify_hash` et plusieurs contextes.
+
+`endpoint_tag` décrit l’endpoint unique observé dans les métadonnées de pré-vol. Le backend actuel n’accepte qu’un pin de provider et le reçu de collecte n’observe que modèle et provider servis. Le lock ne présente donc jamais `endpoint_tag` comme une preuve de l’endpoint réellement servi.
+
+Ici, `payload` désigne le corps API sérialisé. Les en-têtes de transport et d’authentification n’en font pas partie et ne sont jamais hachés dans un artefact publiable.
+
+L’identité servie n’entre jamais dans `execution_manifest_hash`. Elle est observée dans le reçu puis comparée au pin du lock.
+
+#### Canonicalisation
+
+Chaque objet haché porte son `schema_version`. Il est encodé en UTF-8, canonicalisé selon [RFC 8785, JSON Canonicalization Scheme](https://www.rfc-editor.org/rfc/rfc8785), puis haché en SHA-256 hexadécimal minuscule. `payload_hash` fait exception : il porte sur les octets exacts transportés, sans recanonicalisation.
+
+Les fichiers entrant dans `verify_hash` sont triés par chemin relatif POSIX. Chaque entrée contient le chemin et le SHA-256 des octets exacts. Un lien symbolique ou un chemin externe est interdit.
+
+Les schémas v1 et v2 restent historiques. Leur signification ne change jamais silencieusement.
+
+### 2.4 Jointure des profils
+
+Un candidat de profil contient :
+
+- une identité de base commune
+- la version du profil
+- la liste des axes obligatoires
+- pour chaque axe, le couple exact `(measurement_context_hash, execution_manifest_hash)`
+- les minima fonctionnels
+- les contraintes dures
+- la règle de départage
+- la fraîcheur requise
+- la politique d’abstention
+- une charge d’usage seulement si le profil agrège réellement coût ou durée
+
+Des cartes différentes peuvent justifier des `max_tokens` différents. Leurs manifestes d’exécution diffèrent et le profil les relie explicitement. Une identité de base différente crée un autre candidat de profil. Aucun alias ne remplace cette jointure.
+
+### 2.5 Versionnage des cartes
+
+`task-vN` et `verify-vM` sont des compteurs entiers indépendants :
+
+- `task-vN` change lorsque les consignes ou entrées visibles changent
+- `verify-vM` change lorsque vérificateur, oracle, prédicats, seuils, actifs juge ou témoins qualifiants changent
+
+Après `task-v9` vient `task-v10`, pas `task-v101`. Une compatibilité de lecture peut être documentée, mais elle ne rend pas deux empreintes identiques.
+
+## 3. État actuel et cible
+
+| Capacité | État actuel | Cible normative |
+|---|---|---|
+| Contrats v2 | schémas v3 historiques et schémas de route v4, transitions et reçus validés hors réseau | campagne qualifiée sous ces contrats |
+| Manifestes | constructeurs et validateurs v3 historiques et v4 cibles testés hors ligne | nouveau lock autoritaire avec `execution-manifest/v4` et `measurement-context/v3` |
+| Prompt | assemblage existant avec exclusions | liste d’autorisation fermée par carte |
+| Lock B0 | `PREPARED_LOCAL_ONLY` | nouveau lock régénéré après migration, prix et plafond réapprouvés |
+| Collecte | adaptateur direct, identité observée, budget et réconciliation testés sans appel | qualification sur une nouvelle campagne autorisée |
+| Notation | reçus par axe et chaîne de collecte testés hors ligne | renotation et couverture requalifiée sous le nouveau lock |
+| Restitution | rapport multi-statut et reçus d’audit testés sur fixtures | `results.html` d’une campagne réelle qualifiée |
+| Agents | absent | runner isolé et piste distincte V3 |
+| Longitudinal | absent | pilote V4 |
+| Site et studio | absents | consultation V5, studio contrôlé V6 |
+
+Ces preuves locales établissent le contrat du code, pas sa conformité en campagne réelle. Le lock B0 historique ne peut autoriser aucune collecte sous cette version documentaire.
 
 ## 4. Architecture logique
 
@@ -130,311 +148,363 @@ flowchart LR
     A["campaign.toml"] --> B["Pré-vol et résolution"]
     B --> C["campaign.lock"]
     C --> D["Runner direct ou agent"]
-    D --> E["Reçu de collecte immuable"]
-    E --> F["Vérificateur et oracle"]
-    F --> G["Reçu de score immuable"]
-    G --> H["Contrôle de conformité"]
-    H --> I["Page provisoire"]
-    I --> J["Audit humain de l’instrument"]
-    J --> K["results.html validé"]
+    D --> E["Adaptateur de route"]
+    E --> F["Reçu de collecte"]
+    F --> G["Notation par axe"]
+    G --> H["Reçus de score"]
+    H --> I["Contrôle de conformité"]
+    I --> J["results.html multi-statut"]
+    H --> K["Audit de l’instrument"]
+    K --> I
 ```
 
-### 4.1 Pré-vol et verrouillage
+### 4.1 Intention, lock attendu et reçu observé
 
-Le pré-vol charge la question, les cartes, configurations, runs, quotas, concurrence et plafond. Il résout les alias, routes, paramètres, tarifs et environnements, puis écrit `campaign.lock` avant le premier appel utile.
+`campaign.toml` exprime l’intention. Il fournit aussi, pour chaque axe, les classes, frontières, anomalies, méthode aveugle, taille justifiée et conclusion permise de l’audit humain. Le pré-vol résout panel, routes, prix datés, paramètres, quotas, concurrence, plafonds, collectes, plans d’audit et hashes attendus, puis écrit `campaign.lock` avant le premier appel.
 
-Le lock est immuable pour la campagne. Une modification d’intention crée une nouvelle campagne. Une donnée non révélée par un provider reçoit la valeur `opaque`.
+Le lock est immuable. Le runner lit le lock, jamais une nouvelle résolution du registre. Les reçus consignent les observations postérieures sans modifier l’attendu. Toute modification d’intention crée une nouvelle campagne et un nouveau lock.
 
-### 4.2 Runner direct
+### 4.2 Runner direct et adaptateur de route
 
-Le runner direct :
+Une tentative directe :
 
-1. assemble le prompt depuis une liste autorisée
-2. effectue un seul appel pour une tentative
-3. vérifie modèle et provider servis
-4. écrit le reçu et la réponse
-5. s’arrête sans score, outil, correction ni deuxième tour
+1. assemble le prompt depuis la liste autorisée
+2. sérialise la requête et calcule `payload_hash`
+3. effectue un appel sans outil ni tour de correction
+4. transmet la réponse brute à l’adaptateur de la route
+5. vérifie l’identité servie
+6. matérialise les premiers octets candidats
+7. écrit le reçu de collecte et s’arrête sans noter
 
-Le candidat ne reçoit ni verdict, ni retour du vérificateur, ni moyen d’interroger le côté juge. Cette propriété réduit les chemins permettant de chercher une réponse détournée ; elle ne remplace pas la liste d’autorisation des fichiers.
+L’adaptateur porte la sémantique propre au fournisseur : enveloppe de succès, refus structuré, troncature, usage et identité servie. Le cœur du protocole ne suppose pas que deux providers exposent les mêmes signaux.
 
-### 4.3 Runner agent
+Une réponse vide reste un artefact accepté. Un refus matérialisé reste un artefact accepté. Leur échec éventuel appartient à la notation, pas aux reprises d’infrastructure.
 
-V3 introduit un composant séparé. Il exécute l’agent dans un environnement éphémère avec manifeste d’outils, droits minimaux, quotas, arrêt d’urgence et journal d’actions. Son réseau est refusé par défaut. Le reset entre runs est prouvé avant qualification.
+### 4.3 Notation par axe
 
-Les résultats agent appartiennent à une piste distincte et ne partagent aucun classement avec les appels directs.
+Le notateur copie les octets acceptés sous un chemin neutre. Chaque axe reçoit :
 
-### 4.4 Notation
+- les octets candidats
+- son vérificateur et son oracle
+- les seuls actifs juge nécessaires
+- l’environnement et les limites versionnés
 
-Le composant de notation place la sortie sous un chemin neutre, puis le vérificateur reçoit uniquement ces octets et les actifs côté juge nécessaires. Il ne reçoit aucune identité du candidat. L’oracle calcule la référence lorsque la carte le permet. Le reçu de score conserve la version, l’empreinte, les prédicats et le verdict.
+Il produit un reçu de score distinct. Cinq axes appliqués au même artefact produisent cinq reçus, mais un seul reçu et un seul coût de collecte.
 
-Le contrôle de conformité lit les reçus et identités après notation. Il attribue l’état terminal, refuse les incohérences et décide si une agrégation peut devenir validée.
+Le contrôle de conformité lit ensuite lock et reçus. Le vérificateur ne décide jamais l’éligibilité de la route.
+
+### 4.4 Runner agent
+
+V3 introduit un runner séparé. Il exécute l’agent dans un environnement éphémère avec outils, versions, permissions, mémoire, politique de boucle, quotas, arrêt d’urgence et journal d’actions. Le réseau est refusé par défaut. La remise à zéro entre runs est prouvée.
+
+Les résultats agent ne partagent aucun classement avec les appels directs.
 
 ### 4.5 Restitution
 
-L’agrégateur produit une page locale même en présence de manques, mais la marque provisoire. Une page validée exige l’état `SCORED` pour chaque run attendu des candidats éligibles. Elle affiche les inéligibles hors classement et ne masque aucune limite.
+`results.html` est le seul rapport de campagne destiné à l’utilisateur. Il reflète les statuts des axes et profils sous-jacents. Il peut montrer simultanément :
 
-`results.html` est le seul livrable humain du produit. Les reçus et réponses restent sous `runs/`. Aucune analyse Markdown interne n’est requise pour les utilisateurs.
+- un axe valide et classé
+- un axe provisoire
+- une configuration inéligible hors classement
+- une campagne incomplète
+- un profil en abstention
 
-## 5. Frontières de confiance
+Il n’invente aucun statut scientifique global.
 
-### 5.1 Entrées visibles et côté juge
+## 5. Machine d’état et transitions
 
-Le risque principal est l’envoi accidentel d’un oracle, témoin ou test caché dans le prompt. Une liste d’exclusion par nom est insuffisante : un nouveau fichier `solution.md` pourrait être envoyé sans être reconnu comme dangereux.
+### 5.1 États
 
-Chaque carte doit donc déclarer une liste fermée de fichiers visibles. Tout fichier non déclaré, lien symbolique, chemin externe ou traversée est refusé. Le reçu conserve les empreintes des fichiers réellement envoyés.
+| Niveau | États ou décisions |
+|---|---|
+| Tentative | `COMPLETE`, `FAILED_RETRYABLE`, `FAILED_NON_RETRYABLE` |
+| Collecte | `COLLECTED`, `INELIGIBLE`, `INFRA_ERROR`, `MISSING` |
+| Unité de score | `SCORED`, `UNKNOWN`, `INELIGIBLE`, `INFRA_ERROR`, `MISSING` |
+| Opérateur | `HOLD` |
+| Panel | événement `RETIRE` |
+| Résultat d’axe | valide ou provisoire |
+| Profil | valide, non couvert, périmé ou abstention |
+| Campagne | complète ou incomplète |
 
-Cette frontière répond aussi aux stratégies détournées d’un modèle : sans outil, tour de correction ni actif côté juge dans le prompt, il ne peut pas demander le verdict ou lire les réponses attendues pendant son run.
+`HOLD` n’est jamais un sixième état de score.
 
-### 5.2 Sorties exécutables
+### 5.2 Transitions fermées
 
-Une sortie peut contenir du code hostile ou simplement imprévu.
+- seuls `HTTP_429`, `HTTP_503` et absence confirmée de réponse HTTP donnent `FAILED_RETRYABLE`
+- le protocole v2 autorise trois tentatives au maximum
+- aucune reprise n’a lieu après acceptation d’un artefact
+- une erreur de vérificateur ne provoque jamais de nouvelle collecte
+- une identité servie divergente donne `FAILED_NON_RETRYABLE` et `HOLD`
+- un appel en vol incertain impose une réconciliation ou un `HOLD`
+- une réponse tardive ne remplace jamais l’artefact déjà accepté
+- une collecte conforme jamais tentée à la clôture devient `MISSING`
+- des tentatives épuisées sans artefact deviennent `INFRA_ERROR`
+- une non-conformité connue avant appel devient `INELIGIBLE`
 
-- F1 : Chromium rend la page sans requête HTTP vers Internet, le réseau local ou `localhost`, et sans accès aux fichiers locaux
+Après un `HOLD` d’identité, deux suites seulement sont autorisées :
+
+1. autorisation humaine `campaign-abandonment/v1` liée au lock et au `HOLD`, puis fermeture des cellules concernées en `INFRA_ERROR`
+2. nouvelle campagne sous un nouveau lock
+
+Aucun pin ne change dans la campagne existante.
+
+Un retrait du panel est consigné dans `panel-events/v1` avec alias, motif, date et déclaration d’indépendance au résultat. Il ne modifie ni le lock, ni les octets, ni l’état réel des collectes.
+
+## 6. Frontières de confiance
+
+### 6.1 Mode direct
+
+Le modèle direct ne dispose ni d’outil, ni de résultat du vérificateur, ni de tour de correction. Il reçoit seulement le contenu autorisé de la carte. Cela empêche la recherche interactive de l’oracle pendant le run, mais ne prouve pas que le modèle ignore une carte déjà publique ou mémorisée.
+
+La contamination publique et la connaissance préalable sont des risques déclarés, pas des propriétés rendues techniquement impossibles.
+
+### 6.2 Assemblage du prompt
+
+Chaque carte déclare une liste fermée de fichiers visibles. Tout fichier non déclaré est refusé, ainsi que :
+
+- lien symbolique
+- chemin externe au dossier de carte
+- traversée de répertoire
+- actif juge
+- fichier dont le type ou l’empreinte ne correspond pas au lock
+
+Le reçu conserve les empreintes des fichiers effectivement envoyés.
+
+### 6.3 Sorties exécutables
+
+Les limites qui influencent la mesure sont versionnées : temps, mémoire, CPU, processus, disque, navigateur, solveur et politique réseau.
+
+- F1 : la page est rendue sans accès aux fichiers locaux et sans requête vers Internet, `localhost` ou un réseau privé
 - F2 : le programme s’exécute dans un environnement jetable sans réseau, secret, dépôt, tests cachés ni autre run
-- F4 : le solveur reçoit uniquement l’entrée normalisée et reste borné en temps et mémoire
+- F4 : le solveur reçoit seulement l’entrée normalisée et reste borné par les limites versionnées
 
-« Réseau du navigateur » désigne toute requête sortante initiée par la page générée, y compris vers un service local. L’annulation des requêtes dans un seul vérificateur ne suffit pas ; l’isolation doit devenir uniforme et testée.
+Le « réseau du navigateur » désigne toute requête initiée par la page générée, y compris vers un service local.
 
-### 5.3 Cyber
+### 6.4 Cyber et agents
 
-Le pilote défensif V2 utilise uniquement des scénarios et actifs synthétiques. Une extension offensive V3 exige une décision humaine séparée après ce pilote et les preuves suivantes :
+Une carte cyber défensive utilise uniquement des données et cibles synthétiques. Une carte offensive outillée exige en plus un modèle de menace approuvé et une autorisation humaine séparée. Aucun environnement ne possède de route vers une cible réelle. Aucun test ne cherche à contourner un garde-fou fournisseur.
 
-- modèle de menace approuvé
-- cible synthétique sans route vers un système réel
-- environnement éphémère, réseau sortant refusé
-- outils autorisés et versions figées
-- aucun secret ni donnée personnelle
-- quotas, arrêt d’urgence et journal complet
-- remise à zéro vérifiée
-- publication sans charge utile dangereuse
+### 6.5 Jeu retenu
 
-Le système ne cherche jamais à contourner un garde-fou fournisseur. Un refus ou blocage est enregistré selon son origine.
+Une carte retenue reste locale, sauvegardée, restaurable et accessible seulement aux personnes autorisées. Le fournisseur voit nécessairement le stimulus du run officiel ; ce risque résiduel est déclaré. Une fuite invalide la série.
 
-### 5.4 Jeu retenu
+### 6.6 Publication et provenance
 
-V4 crée au moins deux ancres locales. Avant leur première campagne, l’emplacement, les accès, la sauvegarde, la restauration et le second humain sont approuvés et testés. Le provider voit nécessairement le prompt du run officiel ; ce risque résiduel reste explicite.
+Le dépôt public ne contient ni secret, ni sortie brute retenue, ni prompt interne de reprise, ni avis de relecture, ni commande interne, ni identifiant local de session ou d’orchestration.
 
-Une fuite détruit la série concernée. Les résultats publics du jeu retenu ne montrent que les écarts compatibles, jamais les cartes, sorties ou scores individuels.
+Les provenances de témoins peuvent conserver le type de producteur, le modèle lorsqu’il est méthodologiquement pertinent, les octets et empreintes sources. Les identifiants locaux d’orchestration sont retirés lors de la régénération du lock. Tant que cette migration n’est pas prouvée, la publication reste bloquée.
 
-### 5.5 Site et studio
+## 7. Exigences d’architecture
 
-V5 lit un jeu de résultats expurgé. Il n’effectue aucun appel de modèle et ne contient aucune clé fournisseur. Une recommandation indique son contexte, sa date et sa fenêtre de fraîcheur ; un résultat périmé devient historique.
+La colonne **Source** porte la traçabilité inverse. Chaque exigence cite au moins un contrat du PRD ou de RULES.
 
-V6 ajoute un service contrôlé. Il accepte d’abord une description textuelle non sensible et produit des données synthétiques. Le brouillon passe par instrumentation, témoins indépendants et approbation humaine. Les coûts, abus, quotas et authentification sont résolus avant ouverture publique.
+### 7.1 Collecte et contrôle
 
-## 6. Versionnage
+| ID | Pri. | Source | Exigence | Preuve |
+|---|---:|---|---|---|
+| AR-C-001 | P0 | EF-009, R-003 | L’identité de base et la configuration `execution-manifest/v4` restent distinctes | deux configurations sous un même libellé |
+| AR-C-002 | P0 | EF-001, EF-014 | `campaign.toml` fixe intention, panel, collectes, tentatives, concurrence, quotas et plafonds | pré-vol refusant un champ obligatoire absent |
+| AR-C-003 | P0 | EF-001, R-015 | `campaign.lock` fige exactement les champs du §2.3 avant collecte | lock immuable et hashé |
+| AR-C-004 | P0 | EF-002 à EF-004 | Une tentative directe effectue un appel, accepte au plus un artefact et s’arrête sans score ni correction | réponse normale, vide et refus |
+| AR-C-005 | P1 | EF-005, EF-024 | L’état persiste et la reprise ne crée ni doublon, ni trou, ni nouvelle résolution | arrêt brutal puis reprise |
+| AR-C-006 | P0 | EF-005, R-003b | Les reprises v2 sont limitées aux trois causes et à trois tentatives, avant artefact accepté | 429 puis succès, 503, absence HTTP et refus de quatrième tentative |
+| AR-C-007 | P0 | EF-003, EF-007, EF-009 | Exécution, payload, contexte par axe, vérificateur et lock ont des empreintes distinctes | mutations unitaires de chaque contrat |
+| AR-C-008 | P0 | EF-005, ENF-005, R-004 | Une identité servie divergente ferme la tentative, place la campagne en `HOLD` et interdit tout changement de pin | abandon puis nouvelle campagne |
+| AR-C-009 | P0 | EF-021, ENF-005, R-003a | Aucun fallback ne change modèle, provider ou backend ; Groq exige un nouveau lock | indisponibilité sans substitution |
+| AR-C-010 | P0 | EF-014 | Le plafond compte coûts engagés et réservés, y compris appels en vol | deux réservations concurrentes |
+| AR-C-011 | P0 | EF-005, R-003b | Un appel en vol incertain est réconcilié ou place la campagne en `HOLD` ; une réponse tardive ne remplace aucun artefact | crash entre envoi et reçu |
+| AR-C-012 | P0 | EF-014 | Concurrence et quotas sont déclarés par backend et provider | pré-vol et saturation contrôlée |
+| AR-C-013 | P2 | EF-019, R-029 | Une configuration agent fixe agent, instructions, outils, droits, mémoire, boucle, limites et environnement | manifeste stable et reset |
+| AR-C-014 | P1 | EF-023, EF-024 | Tentatives, collectes, retraits et clôture se reconstruisent depuis lock et reçus | recompte indépendant |
 
-`task-vN` et `verify-vM` utilisent des compteurs entiers indépendants :
+### 7.2 Mesure
 
-- `task-vN` change lorsque les consignes ou entrées visibles changent
-- `verify-vM` change lorsque l’oracle, le vérificateur, les prédicats ou témoins changent
+| ID | Pri. | Source | Exigence | Preuve |
+|---|---:|---|---|---|
+| AR-M-001 | P0 | ENF-010, R-001 | Toutes les données notées sont synthétiques | revue et fixtures |
+| AR-M-002 | P0 | ENF-001, R-006 | Le score vient de code déterministe appliqué à l’effet observable | rejeu identique |
+| AR-M-003 | P0 | ENF-001, R-010 | Le notateur neutralise chemin et identité avant vérification | métadonnées variables, score identique |
+| AR-M-004 | P0 | EF-010, R-014, R-018 | Axes, items, prérequis et structure sont explicites | pré-vol de carte |
+| AR-M-005 | P0 | EF-002, EF-007, R-013, R-019 | Chaque axe produit ses unités et son agrégat v2 sans multiplier les collectes | un artefact, cinq reçus, quatrième meilleur |
+| AR-M-006 | P0 | EF-007, ENF-004, R-008, R-015, R-016 | Versions, hashes et reçus restent séparés ; tout nouveau `verify_hash` impose couverture et renotation | même octets, nouveau reçu de score |
+| AR-M-007 | P0 | EF-006, R-010, R-027 | Le contrôle de conformité, pas le vérificateur, décide l’éligibilité et la validation | reçu altéré refusé |
+| AR-M-008 | P0 | EF-011, R-016 | Chaque prédicat possède témoins positifs et négatifs indépendants ; leur réutilisation exige prédicats inchangés | couverture ancienne acceptée ou refusée |
+| AR-M-009 | P0 | EF-010, R-023 | La carte documente décision, stimulus, panel, représentativité, conséquences et limites du proxy | contrat complet |
+| AR-M-010 | P1 | EF-010, R-023 | Une carte adversariale préenregistre son piège et son critère justifié en collectes indépendantes | qualification et retrait sans seuil universel |
+| AR-M-011 | P0 | R-012, R-022 | Un jugement ouvert reste exploratoire et hors classement | absence de reçu noté |
+| AR-M-012 | P0 | R-024 | Une anomalie déclenche l’examen du harnais avant attribution au candidat | dossier d’analyse |
+| AR-M-013 | P0 | EF-004, R-013, R-025 | L’adaptateur normalise refus, troncature et vide sans sémantique provider supposée ; un artefact accepté n’est jamais recollecté | fixtures par route |
+| AR-M-014 | P1 | EF-010, R-023 | Une carte F2 qui revendique une robustesse de famille utilise plusieurs instances et qualifie sa suite | mutations et instances gelées |
+| AR-M-015 | P1 | EF-010, R-011 | Une carte F4 prouve ou borne l’optimum sous un solveur et des ressources versionnés | oracle et délai |
+| AR-M-016 | P0 | R-013, R-025 | Un refus ne devient succès que si ce comportement est inscrit dans tâche et oracle avant collecte | refus attendu et refus ordinaire |
 
-Ce n’est pas du versionnage sémantique. Toute modification mesurable crée une nouvelle identité ; on ne suppose aucune compatibilité de type correctif mineur. `task-v101` reste techniquement valide si cent révisions existent réellement, mais signale une carte instable à revoir.
+### 7.3 Audit humain
 
-Le slug reste descriptif et ne contient pas la version. Une variante qui mesure la même compétence reçoit un autre slug et déclare sa filiation.
+| ID | Pri. | Source | Exigence | Preuve |
+|---|---:|---|---|---|
+| AR-H-001 | P0 | EF-012, R-026 | Le plan fixe classes, frontières, anomalies et causes à examiner | plan préenregistré |
+| AR-H-002 | P0 | EF-012, R-026 | La sélection est aveugle à l’identité et suit une méthode consignée | reçu de sélection |
+| AR-H-003 | P0 | R-006, R-026 | L’auditeur ne modifie aucune note | absence d’édition manuelle |
+| AR-H-004 | P0 | EF-007, R-026 | Une note fausse crée une nouvelle `verify-vM`, un nouveau reçu de couverture et une renotation | chaîne de reçus |
+| AR-H-005 | P0 | EF-012, R-026 | La taille est justifiée avant audit et la conclusion reste limitée à l’échantillon | justification et rapport borné |
 
-## 7. Registre des exigences
+### 7.4 Sécurité et confiance
 
-### 7.1 Campagne et identité
+| ID | Pri. | Source | Exigence | Preuve |
+|---|---:|---|---|---|
+| AR-S-001 | P0 | ENF-002, R-009 | Le prompt part d’une liste d’autorisation fermée | fichier autorisé accepté, autre refusé |
+| AR-S-002 | P0 | ENF-002, R-009 | Aucun actif juge n’entre dans le payload | faux oracle refusé |
+| AR-S-003 | P0 | ENF-002 | Liens symboliques, chemins externes et traversées sont refusés | chemins hostiles |
+| AR-S-004 | P0 | ENF-010, R-001 | Aucun secret ni donnée réelle n’entre dans prompt, reçu public, log public ou HTML | scan ciblé |
+| AR-S-005 | P0 | EF-023, ENF-007, ENF-010, R-002, R-005, R-017 | Le système distingue exposé, sous embargo, public et retenu ; il publie le paquet exposé, protège le retenu et retire les identifiants locaux de provenance | cycle complet et scan avant publication |
+| AR-S-006 | P0 | ENF-003 | Une page F1 s’exécute sans fichiers locaux ni requête Internet, locale ou privée, sous limites versionnées | tests réseau et ressources |
+| AR-S-007 | P0 | ENF-003, R-029 | Un programme F2 s’exécute sans réseau, secret, dépôt, tests cachés ni autre run | tests d’évasion |
+| AR-S-008 | P0 | ENF-003 | Un solveur F4 reçoit seulement l’entrée normalisée et reste borné | test d’entrée et limites |
+| AR-S-009 | P3 | EF-016, ENF-007, R-002 | Le jeu retenu reste local, sauvegardé et restaurable | exercice de restauration |
+| AR-S-010 | P3 | ENF-007, R-002 | Les accès au jeu retenu sont nominatifs, minimaux et révocables | revue d’accès |
+| AR-S-011 | P2 | EF-019, EF-022, R-029 | Le runner agent est éphémère, réseau refusé par défaut, avec outils autorisés, quotas, arrêt et reset | batterie d’isolation |
+| AR-S-012 | P2 | EF-022, R-029 | Une carte cyber ne vise aucun système réel ; l’offensif exige un modèle de menace et une autorisation distincte | topologie et revue |
+| AR-S-013 | P3 | EF-020, R-030 | Le studio refuse données réelles et secrets avant persistance | entrées hostiles |
 
-| ID | Pri. | Exigence | Preuve |
-|---|---:|---|---|
-| AR-C-001 | P0 | Le candidat direct fixe modèle, route et effort ; sa configuration porte `execution_manifest_hash` | Lock et reçu concordants |
-| AR-C-002 | P0 | `campaign.toml` fixe question, cartes, configurations, runs, tentatives maximales, concurrence, quotas et plafond ; V0 impose une tentative par run | Pré-vol refusant tout champ obligatoire absent |
-| AR-C-003 | P0 | `campaign.lock` fige résolutions, versions, paramètres, tarifs, commit et environnements avant collecte | Lock immuable et hashé |
-| AR-C-004 | P0 | Le collecteur direct effectue un appel par tentative, sans score, outil ni correction | Revue et test du collecteur |
-| AR-C-005 | P1 | Le lanceur possède des états persistants et reprend sans doublon | Arrêt brutal puis reprise |
-| AR-C-006 | P1 | À partir de V1, les tentatives additionnelles sont bornées, numérotées, reliées au run attendu et ne modifient jamais une tentative antérieure | Dossiers et reçus distincts, arrêt puis reprise |
-| AR-C-007 | P0 | Contexte de mesure et configuration possèdent des empreintes distinctes | Comparaison croisée et longitudinale testée |
-| AR-C-008 | P0 | Un modèle ou provider servi différent du pin invalide la tentative | Route fautive exclue |
-| AR-C-009 | P0 | Aucun fallback silencieux ne change modèle, provider ou backend | Indisponibilité sans substitution |
-| AR-C-010 | P0 | Chaque campagne applique son plafond et borne les appels déjà en vol | Test sous plafond bas |
-| AR-C-011 | P0 | Le budget de sortie est résolu avant l’appel, borné et consigné | Cas route, plancher et plafond |
-| AR-C-012 | P0 | Concurrence et quotas sont configurables par provider | Recettes V0 et V1 |
-| AR-C-013 | P2 | Une configuration agent fixe implémentation, instructions, outils, permissions, mémoire, boucle, limites et environnement | Manifeste complet et hash stable |
-| AR-C-014 | P1 | Appels partis et campagnes terminées se reconstruisent depuis les reçus | Recompte sans champ manuel |
+### 7.5 Fiabilité et reproduction
 
-### 7.2 Cartes et notation
-
-| ID | Pri. | Exigence | Preuve |
-|---|---:|---|---|
-| AR-M-001 | P0 | Toutes les données notées sont synthétiques | Revue et scan de carte |
-| AR-M-002 | P0 | Le score vient de code déterministe appliqué à l’effet rendu, exécuté ou calculé | Rejeu identique et témoin trompeur |
-| AR-M-003 | P0 | Le composant de notation neutralise le chemin et le vérificateur ne lit aucune identité du candidat | Test de chemin neutre avec métadonnées variables |
-| AR-M-004 | P0 | Chaque item mesure un seul défaut et respecte la structure checklist ou paliers de R-018 | Contrôle du contrat de carte |
-| AR-M-005 | P0 | États, verdicts, niveaux et agrégats retenus sont dérivés mécaniquement selon R-019 | Tests de chaque branche, checklist et paliers |
-| AR-M-006 | P0 | `task-vN`, `verify-vM`, empreintes et reçus restent séparés | Renotation sans mutation de collecte |
-| AR-M-007 | P0 | Le contrôle de conformité, jamais le vérificateur, décide l’éligibilité à l’agrégation | Cas invalide en code non nul |
-| AR-M-008 | P0 | Chaque prédicat possède des témoins positif et négatif produits sans accès au vérificateur, selon les rôles R-016 | Reçu de calibrage, provenance et consignes du producteur |
-| AR-M-009 | P0 | Toute carte notée documente besoin, décision et mécanisme discriminant | Pré-vol de carte |
-| AR-M-010 | P0 | Une carte adversariale prouve l’économie du piège, expose un prédicat binaire `trap_triggered` et perd ce statut après le seuil versionné R-023 | Deux `task-vN`, même `verify-vM`, au moins 24 runs attendus et tous `SCORED` par campagne de référence |
-| AR-M-011 | P0 | Une carte à jugement ouvert reste exploratoire | Absence de classement |
-| AR-M-012 | P0 | Un résultat aberrant déclenche l’analyse du harnais avant attribution | Reçu d’analyse |
-| AR-M-013 | P0 | Troncature, refus et états non scoreables suivent R-013 et R-025 | Tests par origine et budget |
-| AR-M-014 | P1 | Une carte F2 utilise plusieurs instances et une suite cachée qualifiée par mutation | Taux gelé avant qualification |
-| AR-M-015 | P1 | Une carte F4 prouve l’optimum sous une borne déclarée | Solveur épinglé et test de délai |
-| AR-M-016 | P0 | Le sens d’un refus est inscrit dans la tâche et l’oracle avant collecte | Cas par défaut FAIL et cas de refus correct |
-
-### 7.3 Validation humaine
-
-| ID | Pri. | Exigence | Preuve |
-|---|---:|---|---|
-| AR-H-001 | P0 | Une graine sélectionne jusqu’à trois sorties hautes et trois basses selon la clé du run définie par R-019 | Reçu de sélection couvrant checklist et paliers |
-| AR-H-002 | P0 | L’auditeur répond seulement si le résultat noté, verdict et niveau éventuel, décrit la sortie | Réponse binaire consignée |
-| AR-H-003 | P0 | L’auditeur ne modifie aucune note | Absence d’édition manuelle |
-| AR-H-004 | P0 | Un verdict ou niveau faux crée une nouvelle `verify-vM` et une renotation complète | Nouvelle page et reçus |
-| AR-H-005 | P0 | Une strate incomplète est compensée ; sous six sorties, toutes sont auditées | Tests de petites populations |
-
-### 7.4 Sécurité et confidentialité
-
-| ID | Pri. | Exigence | Preuve |
-|---|---:|---|---|
-| AR-S-001 | P0 | Le prompt part d’une liste autorisée, jamais d’une découverte générale | Tests positif et négatif |
-| AR-S-002 | P0 | Aucun actif côté juge n’entre dans le prompt | Faux oracle refusé |
-| AR-S-003 | P0 | Liens symboliques, chemins externes et traversées sont refusés | Batterie de chemins hostiles |
-| AR-S-004 | P0 | Aucun secret ne figure dans prompt, argument, log, manifeste ou HTML | Scan ciblé |
-| AR-S-005 | P0 | Le régime de données de chaque route est demandé et consigné | Cas exposé, retenu et inéligible |
-| AR-S-006 | P0 | Toute page F1 est rendue sans réseau ni fichiers locaux | Tests Internet, local et fichier |
-| AR-S-007 | P0 | Tout code F2 s’exécute sans réseau, secret, dépôt, tests cachés ni autre run | Tests d’évasion |
-| AR-S-008 | P0 | Le solveur F4 reçoit seulement l’entrée normalisée et reste borné | Test d’entrée et délai |
-| AR-S-009 | P3 | Le jeu retenu reste local, sauvegardé et restaurable | Exercice de restauration |
-| AR-S-010 | P3 | Les accès au jeu retenu sont nominatifs, minimaux et révocables | Revue d’accès |
-| AR-S-011 | P2 | Un runner agent est éphémère, sans réseau par défaut, avec outils autorisés, quotas, arrêt et reset | Batterie d’isolation |
-| AR-S-012 | P2 | Une carte cyber ne vise aucun système réel ; une carte offensive exige en plus un modèle de menace approuvé | Test de topologie défensive ; revue du modèle de menace offensif |
-| AR-S-013 | P3 | Le studio refuse données réelles et secrets avant persistance | Tests d’entrée et journal expurgé |
-
-### 7.5 Fiabilité et exploitation
-
-| ID | Pri. | Exigence | Preuve |
-|---|---:|---|---|
-| AR-R-001 | P0 | Les reçus conservent identités, paramètres, empreintes, états, coût, durée, tokens et causes | Contrôle de schéma |
-| AR-R-002 | P0 | Le dossier est réservé avant appel et la complétude est marquée en dernier | Test d’interruption |
-| AR-R-003 | P0 | Chaque run attendu termine dans un état R-013 unique : pré-vol non conforme en `INELIGIBLE`, run conforme jamais tenté en `MISSING`, tentatives épuisées sans sortie scoreable en `INFRA_ERROR` | Tests des cinq états et des trois transitions sans ambiguïté |
-| AR-R-004 | P0 | `UNKNOWN`, `INFRA_ERROR` ou `MISSING` bloque le classement validé | Campagnes amputées |
-| AR-R-005 | P0 | Deux candidats se comparent sous le même contexte | Divergence refusée |
-| AR-R-006 | P0 | Une série de même configuration exige aussi le même manifeste d’exécution | Endpoint identique et version changée |
-| AR-R-007 | P0 | Les composants influençant la mesure sont épinglés ; les autres sont consignés | Archive d’environnement |
-| AR-R-008 | P0 | `results.html` est généré sans saisie manuelle | Rejeu du générateur |
-| AR-R-009 | P0 | V0 tient sous 3 heures et V1 sous 8 heures dans leurs enveloppes documentées | Exercices chronométrés |
-| AR-R-010 | P1 | Un tiers reproduit une campagne validée nommée dans l’image portable épinglée, sous les mêmes empreintes de contexte et de configuration et sur le même ensemble de candidats, selon la métrique et la tolérance préenregistrées de chaque carte | Rejeu sur un autre hôte ; verdict retenu identique ou écart absolu de niveau retenu inférieur ou égal au seuil du contrat |
-| AR-R-011 | P3 | Chaque profil public possède date, contexte et fenêtre de fraîcheur | Résultat courant puis historique |
+| ID | Pri. | Source | Exigence | Preuve |
+|---|---:|---|---|---|
+| AR-R-001 | P0 | EF-003, EF-007, ENF-004, R-015 | Reçus de collecte et de score respectent les contenus fermés du §2.3 | validation de schéma |
+| AR-R-002 | P0 | EF-003, EF-024 | Le dossier est réservé avant appel et sa complétude marquée en dernier | interruption à chaque étape |
+| AR-R-003 | P0 | EF-005, R-013, R-013a | La machine d’état totale distingue tentative, collecte, unité de score, `HOLD`, `RETIRE`, axe, profil et campagne | transitions et états interdits |
+| AR-R-004 | P0 | EF-008, R-020, R-027 | La validité est décidée par axe ; la page peut mêler valide et provisoire sans statut global | axe `UNKNOWN` isolé |
+| AR-R-005 | P0 | EF-009, R-007, R-015 | Deux résultats d’axe ne se comparent que sous un contexte compatible | divergence refusée |
+| AR-R-006 | P0 | EF-009, EF-016, R-015 | Une série de configuration exige les manifestes exacts ou nomme les différences | `max_tokens` différent |
+| AR-R-007 | P0 | ENF-013, R-015 | Temps, mémoire, CPU, processus, disque, navigateur, solveur et environnement sont versionnés lorsqu’ils influencent la mesure | mutation unitaire |
+| AR-R-008 | P0 | EF-008 | `results.html` est généré sans saisie manuelle et constitue le seul rapport utilisateur | rejeu du générateur |
+| AR-R-009 | P0 | ENF-006 | Le temps mural et le travail utilisateur sont mesurés avant approbation d’une cible | campagne complète chronométrée sur des axes valides |
+| AR-R-010 | P1 | EF-015, R-015 | Renotation, reproduction sur autre hôte, nouvelle collecte et comparaison longitudinale sont quatre opérations distinctes | quatre scénarios |
+| AR-R-011 | P3 | EF-017, ENF-011 | Chaque profil public porte date, contexte, fraîcheur et abstention | courant, périmé, absent et incompatible |
 
 ### 7.6 Restitution et évolution
 
-| ID | Pri. | Exigence | Preuve |
-|---|---:|---|---|
-| AR-P-001 | P0 | La page classe uniquement les candidats complets, par verdict retenu sur une checklist et par niveau retenu sur une carte à paliers | Cas checklist, paliers, complet et inéligible |
-| AR-P-002 | P0 | Un profil multi-cartes fixe ses niveaux et départage avant collecte | Test sans profil et avec profil |
-| AR-P-003 | P0 | La page parle de répétabilité observée et montre la distribution | Revue du texte et des données |
-| AR-P-004 | P0 | Secrets, sorties brutes et actifs retenus ne sont jamais publiés | Scan avant diffusion |
-| AR-P-005 | P3 | Les résultats retenus sortent seulement sous forme d’écarts compatibles | Page longitudinale expurgée |
-| AR-P-006 | P1 | Le dépôt explique ce qui est public, côté juge et confidentiel | README et ARD concordants |
-| AR-P-007 | P1 | Les décisions restent dans PRD ou ARD | Revue documentaire |
-| AR-P-008 | P1 | La documentation se comprend sans notes privées du mainteneur | Revue depuis clone frais |
-| AR-P-009 | P3 | V5 lit uniquement des résultats expurgés et ne détient aucune clé provider | Inspection du client et des données |
-| AR-P-010 | P3 | V6 impose brouillon, instrumentation, témoins, validation et qualification | Machine d’état sans raccourci |
-| AR-P-011 | P2 | Groq est un backend distinct après qualification, jamais un fallback | Campagne séparée |
-| AR-P-012 | P0 | Les contenus destinés à un humain, messages d’outillage et HTML sont en français selon R-028 | Revue et scan |
-| AR-P-013 | P0 | Aucun score global ni fusion direct/agent n’est produit | Tests d’agrégation |
-| AR-P-014 | P2 | La matrice d’usages est versionnée et approuvée avant V2 | États et historique de validation |
-| AR-P-015 | P0 | Coût, durée, dispersion et jetons restent hors du score ; ils n’ordonnent qu’une contrainte préenregistrée | Test avec diagnostics variables et score inchangé |
+| ID | Pri. | Source | Exigence | Preuve |
+|---|---:|---|---|---|
+| AR-P-001 | P0 | EF-008, R-020, R-027 | La page classe seulement, axe par axe, les configurations dont toutes les unités sont `SCORED` et l’audit accepté | checklist, paliers et axe provisoire |
+| AR-P-002 | P3 | EF-017, R-007 | Un profil joint les couples exacts par axe, applique minima, contraintes, départage, fraîcheur et abstention | alias identique, hashes différents |
+| AR-P-003 | P0 | ENF-012, R-019, R-021 | La page sépare qualité, distribution, répétabilité, robustesse, fiabilité opérationnelle et fiabilité du benchmark | revue des libellés |
+| AR-P-004 | P0 | ENF-010, R-002 | Secrets, sorties retenues, actifs retenus et traces internes ne sont jamais publiés | scan de publication |
+| AR-P-005 | P3 | EF-016, R-002 | Les résultats retenus publient seulement les écarts compatibles autorisés | page longitudinale expurgée |
+| AR-P-006 | P1 | ENF-008 | Le dépôt explique les frontières public, exposé, embargo et retenu | README et ARD concordants |
+| AR-P-007 | P1 | ENF-008 | Les décisions restent dans PRD ou ARD, sans document de décision séparé | inventaire documentaire |
+| AR-P-008 | P1 | ENF-008 | La documentation se comprend sans notes privées | revue depuis clone frais |
+| AR-P-009 | P3 | EF-017, ENF-011 | V5 lit seulement des résultats expurgés et ne détient aucune clé fournisseur | inspection client et données |
+| AR-P-010 | P3 | EF-020, R-030 | V6 impose brouillon, fidélité, instrumentation, témoins, sécurité éventuelle et approbation | machine d’état sans raccourci |
+| AR-P-011 | P2 | EF-021 | Groq est un backend distinct, jamais un fallback dans un lock existant | campagne séparée |
+| AR-P-012 | P0 | ENF-009, R-028 | Les contenus humains sont en français selon les exceptions définies | scan et revue |
+| AR-P-013 | P0 | R-007 | Aucun score global ni fusion direct et agent n’est produit | agrégation refusée |
+| AR-P-014 | P2 | EF-018 | La matrice d’usages est versionnée et approuvée avant V2 | états et validation |
+| AR-P-015 | P0 | EF-013, R-021 | Coût, durée, dispersion, usage et jetons restent hors du score | diagnostics variables, score inchangé |
 
-## 8. Matrice de traçabilité
+## 8. Traçabilité avant implémentation
 
 ### 8.1 PRD vers ARD
 
-| Source | Contrat | Exigences d’architecture |
-|---|---|---|
-| PRD | EF-001 | AR-C-002 à AR-C-004, AR-C-012, AR-R-009 |
-| PRD | EF-002 | AR-M-006, AR-R-001 |
-| PRD | EF-003 | AR-M-007, AR-R-003 |
-| PRD | EF-004 | AR-R-004, AR-R-008 |
-| PRD | EF-005 | AR-C-007, AR-R-005 |
-| PRD | EF-006 | AR-R-005, AR-R-006, AR-S-009, AR-P-005 |
-| PRD | EF-007 | AR-M-004, AR-M-009 |
-| PRD | EF-008 | AR-M-008 |
-| PRD | EF-009 | AR-C-014, AR-R-001 |
-| PRD | EF-010 | AR-R-008, AR-P-001 à AR-P-003 |
-| PRD | EF-011 | AR-R-010 |
-| PRD | EF-012 | AR-C-010 |
-| PRD | EF-013 | AR-C-005, AR-C-006 |
-| PRD | EF-014 | AR-C-001, AR-C-007, AR-R-005 à AR-R-007 |
-| PRD | EF-015 | AR-P-014 |
-| PRD | EF-016 | AR-C-013, AR-S-011, AR-P-013 |
-| PRD | EF-017 | AR-P-009, AR-R-011 |
-| PRD | EF-018 | AR-S-013, AR-P-010 |
-| PRD | EF-019 | AR-M-014 |
-| PRD | EF-020 | AR-M-015 |
-| PRD | ENF-001 | AR-M-002 à AR-M-007 |
-| PRD | ENF-002 | AR-S-001 à AR-S-003 |
-| PRD | ENF-003 | AR-S-006 à AR-S-008 |
-| PRD | ENF-004 | AR-R-001 à AR-R-006 |
-| PRD | ENF-005 | AR-C-008, AR-C-009 |
-| PRD | ENF-006 | AR-R-009 |
-| PRD | ENF-007 | AR-S-009, AR-S-010, AR-P-005 |
-| PRD | ENF-008 | AR-P-006 à AR-P-008 |
-| PRD | ENF-009 | AR-P-012 |
-| PRD | ENF-010 | AR-S-004, AR-S-005 |
-| PRD | ENF-011 | AR-P-009, AR-P-010 |
-| PRD | ENF-012 | AR-P-003 |
-| PRD | Porte Groq | AR-P-011 |
+| Contrat PRD | Exigences d’architecture |
+|---|---|
+| EF-001 | AR-C-002, AR-C-003, AR-C-005 |
+| EF-002 | AR-C-004, AR-M-005 |
+| EF-003 | AR-C-007, AR-R-001, AR-R-002 |
+| EF-004 | AR-C-004, AR-M-013 |
+| EF-005 | AR-C-005, AR-C-006, AR-C-008, AR-C-011, AR-R-003 |
+| EF-006 | AR-M-007 |
+| EF-007 | AR-M-005, AR-M-006, AR-H-004 |
+| EF-008 | AR-R-004, AR-R-008, AR-P-001 |
+| EF-009 | AR-C-001, AR-C-007, AR-R-005, AR-R-006 |
+| EF-010 | AR-M-004, AR-M-009, AR-M-010, AR-M-014, AR-M-015 |
+| EF-011 | AR-M-008 |
+| EF-012 | AR-H-001, AR-H-002, AR-H-005 |
+| EF-013 | AR-P-015 |
+| EF-014 | AR-C-002, AR-C-010, AR-C-012 |
+| EF-015 | AR-R-010 |
+| EF-016 | AR-R-006, AR-S-009, AR-P-005 |
+| EF-017 | AR-P-002, AR-R-011, AR-P-009 |
+| EF-018 | AR-P-014 |
+| EF-019 | AR-C-013, AR-S-011 |
+| EF-020 | AR-S-013, AR-P-010 |
+| EF-021 | AR-C-009, AR-P-011 |
+| EF-022 | AR-S-011, AR-S-012 |
+| EF-023 | AR-C-014, AR-S-005 |
+| EF-024 | AR-C-014, AR-R-002 |
+| ENF-001 | AR-M-002, AR-M-003 |
+| ENF-002 | AR-S-001 à AR-S-003 |
+| ENF-003 | AR-S-006 à AR-S-008 |
+| ENF-004 | AR-M-006, AR-R-001 à AR-R-004 |
+| ENF-005 | AR-C-008, AR-C-009 |
+| ENF-006 | AR-R-009 |
+| ENF-007 | AR-S-005, AR-S-009, AR-S-010 |
+| ENF-008 | AR-P-006, AR-P-007, AR-P-008 |
+| ENF-009 | AR-P-012 |
+| ENF-010 | AR-M-001, AR-S-004, AR-S-005, AR-P-004 |
+| ENF-011 | AR-R-011, AR-P-009 |
+| ENF-012 | AR-P-003 |
+| ENF-013 | AR-R-007 |
+| ENF-014 | §3 et §9 |
 
-### 8.2 Règles vers ARD
+### 8.2 RULES vers ARD
 
-| Source | Contrat | Exigences d’architecture |
-|---|---|---|
-| RULES | R-001 | AR-M-001, AR-S-013 |
-| RULES | R-002 | AR-S-009, AR-S-010, AR-P-004, AR-P-005 |
-| RULES | R-003 | AR-C-001, AR-R-006 |
-| RULES | R-004 | AR-C-008, AR-R-006 |
-| RULES | R-005 | AR-S-005 |
-| RULES | R-006 | AR-M-002, AR-H-003 |
-| RULES | R-007 | AR-P-002, AR-P-013 |
-| RULES | R-008 | AR-M-006 |
-| RULES | R-009 | AR-S-001, AR-S-002 |
-| RULES | R-010 | AR-M-003 |
-| RULES | R-011 | AR-M-004 |
-| RULES | R-012 | AR-M-011 |
-| RULES | R-013 | AR-M-005, AR-M-013, AR-M-016, AR-R-003 |
-| RULES | R-014 | AR-M-004 |
-| RULES | R-015 | AR-C-007, AR-M-006, AR-R-001, AR-R-005, AR-R-006 |
-| RULES | R-016 | AR-M-008, AR-S-010 pour le témoin retenu |
-| RULES | R-017 | AR-C-014, AR-R-001 |
-| RULES | R-018 | AR-M-004 |
-| RULES | R-019 | AR-M-005, AR-P-003 |
-| RULES | R-020 | AR-R-004, AR-P-001, AR-P-002 |
-| RULES | R-021 | AR-P-015 |
-| RULES | R-022 | AR-M-011 |
-| RULES | R-023 | AR-M-009, AR-M-010 |
-| RULES | R-024 | AR-M-012 |
-| RULES | R-025 | AR-C-011, AR-M-013 |
-| RULES | R-026 | AR-H-001 à AR-H-005 |
-| RULES | R-027 | AR-M-007, AR-R-004 |
-| RULES | R-028 | AR-P-012 |
-| RULES | R-029 | AR-S-011, AR-S-012 |
-| RULES | R-030 | AR-S-013, AR-P-010 |
+| Contrat RULES | Exigences d’architecture |
+|---|---|
+| R-001 | AR-M-001, AR-S-004, AR-S-013 |
+| R-002 | AR-S-005, AR-S-009, AR-S-010, AR-P-004, AR-P-005 |
+| R-003 | AR-C-001 |
+| R-003a | AR-C-003, AR-C-009 |
+| R-003b | AR-C-006, AR-C-011 |
+| R-004 | AR-C-008 |
+| R-005 | AR-S-005 |
+| R-005a | AR-S-005 |
+| R-005b | AR-S-005 |
+| R-006 | AR-M-002, AR-H-003 |
+| R-007 | AR-R-005, AR-P-002, AR-P-013 |
+| R-008 | AR-M-006 |
+| R-009 | AR-S-001, AR-S-002 |
+| R-010 | AR-M-003, AR-M-007 |
+| R-011 | AR-M-015 |
+| R-012 | AR-M-011 |
+| R-013 | AR-M-005, AR-M-013, AR-M-016, AR-R-003 |
+| R-013a | AR-C-014, AR-R-003 |
+| R-014 | AR-M-004 |
+| R-015 | AR-C-003, AR-C-007, AR-M-006, AR-R-001, AR-R-005 à AR-R-007, AR-R-010 |
+| R-016 | AR-M-006, AR-M-008, AR-H-004 |
+| R-017 | AR-C-014, AR-S-005 |
+| R-018 | AR-M-004 |
+| R-019 | AR-M-005, AR-P-003 |
+| R-020 | AR-R-004, AR-P-001 |
+| R-021 | AR-P-003, AR-P-015 |
+| R-022 | AR-M-011 |
+| R-023 | AR-M-009, AR-M-010, AR-M-014 |
+| R-024 | AR-M-012 |
+| R-025 | AR-M-013, AR-M-016 |
+| R-026 | AR-H-001 à AR-H-005 |
+| R-027 | AR-M-007, AR-R-004, AR-P-001 |
+| R-028 | AR-P-012 |
+| R-029 | AR-C-013, AR-S-007, AR-S-011, AR-S-012 |
+| R-030 | AR-S-013, AR-P-010 |
 
-## 9. Décisions d’architecture actées
+## 9. Évolution, comparabilité et blocages
 
-| Décision | Statut | Conséquence |
-|---|---|---|
-| Candidat lisible et manifeste complet séparés | acceptée | le triplet reste compréhensible ; l’empreinte porte la reproductibilité |
-| Contexte de mesure sans identité du candidat | acceptée | plusieurs candidats restent comparables |
-| Appels directs et agents séparés | acceptée | aucune fusion de classement ou de protocole |
-| Liste autorisée de fichiers | cible P0 | l’implémentation actuelle par exclusions reste non suffisante |
-| Jeu retenu reporté en V4 | acceptée | V1 n’est pas bloquée par stockage privé ou second humain |
-| Site V5 sans appels live | acceptée | consultation depuis des résultats validés seulement |
-| Studio V6 synthétique et validé | acceptée | aucune tâche utilisateur auto-notée |
-| Groq backend distinct | conditionnelle | qualification avant tout classement ; aucun fallback silencieux |
+Quatre opérations restent distinctes :
 
-## 10. Évolution et comparabilité
+1. **renotation** : mêmes octets, nouveau `verify_hash`, nouveaux reçus de couverture et de score
+2. **reproduction** : même contrat rejoué sur un autre hôte compatible
+3. **nouvelle collecte** : nouveau lock ou nouveaux appels
+4. **comparaison longitudinale** : campagnes compatibles comparées selon une règle préenregistrée
 
-Une ancienne campagne ne devient jamais comparable par déclaration après un changement de contexte. Une nouvelle version de vérification peut renoter des populations anciennes si leurs sorties et tâches restent compatibles.
+Une ancienne campagne ne devient jamais comparable par déclaration.
 
-Trois changements sont toujours distingués :
+Le chemin local couvre les manifestes v3 historiques, les contrats de route v4, l’absence de plancher universel, les transitions, la réconciliation et les reçus décrits ici. Avant toute nouvelle collecte B0, il reste à :
 
-1. configuration modifiée sous le même contexte
-2. instrument modifié avec renotation commune
-3. profil d’usage modifié, créant une nouvelle recommandation
+1. compléter l’intention v3, notamment budget, quotas et plans d’audit propres aux cinq axes
+2. figer le code et les contrats dans un commit source complet
+3. produire un nouveau snapshot de routes et requalifier les témoins sous les nouveaux `verify_hash`
+4. assainir les provenances destinées à la publication
+5. régénérer le lock puis recalculer prix, estimation et plafond
+6. obtenir une nouvelle autorisation d’Ayo liée à ce lock et à ce plafond
 
-La rotation des cartes exposées sert l’actualité, les ancres retenues fixes la comparaison longitudinale. L’historique immuable conserve les preuves de chaque contexte, sans fabriquer de continuité entre eux.
+B0-10 reste en `HOLD`. Le plafond reste fixé à 55 dollars. Toute estimation issue d’un nouveau snapshot exige une approbation distincte avant le lock final.

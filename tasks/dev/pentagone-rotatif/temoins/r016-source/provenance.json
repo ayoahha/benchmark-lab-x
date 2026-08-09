@@ -2,6 +2,20 @@
   "regle": "R-016 — jeu de témoins préenregistré pour pentagone-rotatif/task-v3",
   "date_utc_fixation": "2026-08-08T15:04:18.368395+00:00",
   "environnement": "environnement techniquement non cloisonné ; aucun contenu interdit consulté",
+  "copie_publique": {
+    "assainie": true,
+    "source_originale_sha256": "dade38d6ff34e10266c0e0965b85427548fc5c89bd2dbc65c88e856ca0cf7208",
+    "retraits": [
+      "nom de l’outil d’orchestration local",
+      "identifiants locaux de session"
+    ],
+    "invariants_conserves": [
+      "modèle et fournisseur méthodologiquement pertinents",
+      "octets et empreintes des témoins",
+      "attentes préenregistrées",
+      "déclarations d’accès au vérificateur"
+    ]
+  },
   "qualification_set": [
     "temoins/neg-01-page-absente.md",
     "temoins/neg-02-api-absente.md",
@@ -19,7 +33,7 @@
   ],
   "temoins": {
     "temoins/pos-01-solution.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/pos-01-solution.html ; sha256 05573d31c38cfcae9d8566a57c2b5b10a9f7aa0deb1d95edcd1ad929aee52b03 vérifié contre le manifeste puis revérifié après copie",
@@ -88,7 +102,7 @@
       }
     },
     "temoins/neg-01-page-absente.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-01-page-absente.html ; sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 vérifié contre le manifeste puis revérifié après copie",
@@ -99,7 +113,7 @@
       }
     },
     "temoins/neg-02-api-absente.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-02-api-absente.html ; sha256 6f2eb38fb4942504bc6b57f64c502d8875b2b5079855b0dbf4019c0456be0aa8 vérifié contre le manifeste puis revérifié après copie",
@@ -110,7 +124,7 @@
       }
     },
     "temoins/neg-03-non-deterministe.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-03-non-deterministe.html ; sha256 f9ede2645524cce7f5c597da5f2d6bb737198d721c1fa842f09ec2241a1d0324 vérifié contre le manifeste puis revérifié après copie",
@@ -121,10 +135,10 @@
       }
     },
     "temoins/neg-04-dependance-ordre.md": {
-      "producteur": "kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "kimi-k3 (moonshotai), agent producteur indépendant",
       "acces_au_verificateur": false,
       "consignes": "prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "statut_octets": "nouveau témoin produit dans cette session ; remplace le neg-04 du manifeste (compteur par appel, non conforme à la consigne) sans en conserver les octets",
+      "statut_octets": "nouveau témoin produit lors de cette production ; remplace le neg-04 du manifeste (compteur par appel, non conforme à la consigne) sans en conserver les octets",
       "resultat_attendu": {
         "pentagone-determinisme": {
           "D1_REPEATABLE": true,
@@ -133,7 +147,7 @@
       }
     },
     "temoins/neg-05-etat-initial-faux.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-05-etat-initial-faux.html ; sha256 4ae84cadad094c86f6c2fb20409ba2e63248f00cb0b1ef98ad40021b7f405d98 vérifié contre le manifeste puis revérifié après copie",
@@ -149,7 +163,7 @@
       }
     },
     "temoins/neg-06-sortie-avant-2s.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-06-sortie-avant-2s.html ; sha256 9c3fe8a55344028d8ee46b34e658610c7d1d678052eaaf961c1adae2a8aabe64 vérifié contre le manifeste puis revérifié après copie",
@@ -160,7 +174,7 @@
       }
     },
     "temoins/neg-07-sortie-avant-10s.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-07-sortie-avant-10s.html ; sha256 7d364e51df9363b6913fa0ee2e7d5f7653ef588736e8c24bc761c7855be06631 vérifié contre le manifeste puis revérifié après copie",
@@ -171,7 +185,7 @@
       }
     },
     "temoins/neg-08-sortie-avant-20s.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-08-sortie-avant-20s.html ; sha256 7f7f4120963b80252e5e90515ff319102a98981c1251f5bc4d29b57f8ed48432 vérifié contre le manifeste puis revérifié après copie",
@@ -182,7 +196,7 @@
       }
     },
     "temoins/neg-09-erreur-1e2-24s.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-09-erreur-1e2-24s.html ; sha256 61bbea4b8274bcbc37d7a8bc413c8f329c33ee2fc165ef3729a8340daf8025e3 vérifié contre le manifeste puis revérifié après copie",
@@ -229,7 +243,7 @@
       }
     },
     "temoins/neg-10-horizon-35s.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-10-horizon-35s.html ; sha256 703e5d77e514cc11d73afe36373b75382a1e8f646a0bd4f8e3e4be0208adbd72 vérifié contre le manifeste puis revérifié après copie",
@@ -240,7 +254,7 @@
       }
     },
     "temoins/neg-11-horizon-55s.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-11-horizon-55s.html ; sha256 27a7d95005a22d00af305cc73f699b17c5b70565ca3273d57786cdf9e4044b30 vérifié contre le manifeste puis revérifié après copie",
@@ -251,7 +265,7 @@
       }
     },
     "temoins/neg-12-horizon-75s.md": {
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-12-horizon-75s.html ; sha256 6603bbbd358dd8874104e05892cc8b61e545f867f7ad6742bb10b8959c97ee92 vérifié contre le manifeste puis revérifié après copie",

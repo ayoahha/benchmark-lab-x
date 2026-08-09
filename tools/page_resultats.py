@@ -330,6 +330,96 @@ def page(data: dict, reg: dict, source: Path) -> str:
 """
 
 
+def page_v3(data: dict, reg: dict, source: Path) -> str:
+    """Rendre les axes valides et provisoires sans statut global trompeur"""
+    blocs = []
+    for axe in data.get("axes") or []:
+        lignes = []
+        candidats = sorted(
+            axe.get("candidats") or [],
+            key=lambda candidat: (
+                candidat.get("rang_provisoire") is None,
+                candidat.get("rang_provisoire") or 0,
+                candidat.get("alias") or "",
+            ),
+        )
+        for candidat in candidats:
+            agregat = candidat.get("agregat") or {}
+            valeur = agregat.get("verdict_retenu")
+            if valeur is None:
+                valeur = agregat.get("niveau_retenu")
+            if valeur is None:
+                valeur = "hors classement"
+            distribution = ", ".join(
+                str(item) if item is not None else "?"
+                for item in agregat.get("distribution") or []
+            )
+            rang = candidat.get("rang_provisoire")
+            nom = libelle(candidat.get("alias", ""), None, reg)
+            if candidat.get("panel_state") == "RETIRE":
+                nom += " (retirée du panel)"
+            lignes.append(
+                "<tr>"
+                f"<td>{html.escape(str(rang) if rang is not None else '–')}</td>"
+                f"<td>{html.escape(nom)}</td>"
+                f"<td>{html.escape(str(valeur))}</td>"
+                f"<td>{html.escape(distribution)}</td>"
+                "</tr>"
+            )
+        blocages = html.escape(json.dumps(axe.get("blocages") or [], ensure_ascii=False))
+        blocs.append(f"""
+  <section>
+    <h2>{html.escape(str(axe.get('id')))}</h2>
+    <p class="statut {html.escape(str(axe.get('statut')))}">Statut : {html.escape(str(axe.get('statut')))}</p>
+    <table>
+      <thead><tr><th>Rang</th><th>Configuration</th><th>Résultat retenu</th><th>Six runs</th></tr></thead>
+      <tbody>{''.join(lignes)}</tbody>
+    </table>
+    {f'<details><summary>Pourquoi cet axe reste provisoire</summary><code>{blocages}</code></details>' if axe.get('statut') != 'valide' else ''}
+  </section>""")
+
+    statut_campagne = data.get("campaign_status") or "incomplete"
+    hold = data.get("operator_status") == "HOLD"
+    return f"""<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Résultats Benchmark Lab-X</title>
+<style>
+  :root {{ color-scheme: light dark; --trait: #7775; --alerte: #a54b2a; }}
+  body {{ margin: 0; padding: 2rem 1rem 4rem; font: 16px/1.5 system-ui, sans-serif; }}
+  main {{ max-width: 72rem; margin: auto; }}
+  h1 {{ margin-bottom: .4rem; }}
+  .mission {{ max-width: 62rem; }}
+  .bandeau {{ border-left: .25rem solid var(--alerte); padding: .75rem 1rem; margin: 1.5rem 0; }}
+  section {{ margin-top: 2.5rem; }}
+  h2 {{ margin-bottom: .25rem; }}
+  .statut {{ margin-top: 0; font-weight: 600; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th, td {{ padding: .45rem .5rem; text-align: left; border-bottom: 1px solid var(--trait); }}
+  th:first-child, td:first-child {{ width: 4rem; text-align: right; }}
+  details {{ margin-top: .8rem; }}
+  details code {{ white-space: pre-wrap; }}
+  footer {{ margin-top: 3rem; font-size: .85rem; opacity: .75; }}
+</style>
+</head>
+<body>
+<main>
+  <h1>Résultats Benchmark Lab-X</h1>
+  <p class="mission">Benchmark Lab-X détermine quel modèle, quelle configuration ou quel agent réussit un travail réel, avec quelle fiabilité, à quel coût et en combien de temps, puis vérifie si cette recommandation reste valable lorsque les systèmes évoluent.</p>
+  <div class="bandeau">
+    Campagne <strong>{html.escape(str(statut_campagne))}</strong>.
+    {'Contrôle opérateur : HOLD. Aucun nouvel appel ne doit partir sous ce lock.' if hold else 'Chaque axe porte son propre statut.'}
+  </div>
+  {''.join(blocs)}
+  <footer>Données : <code>{html.escape(str(source))}</code>. Lock <code>{html.escape(str(data.get('campaign_lock_hash', ''))[:16])}…</code>.</footer>
+</main>
+</body>
+</html>
+"""
+
+
 def cause_historique(run: dict) -> str | None:
     if run.get("cause") == "budget de temps dépassé":
         return (
@@ -599,16 +689,24 @@ def main() -> int:
     else:
         sortie = args.sortie or RACINE / "docs" / "index.html"
         data = json.loads(args.rapport.read_text(encoding="utf-8"))
-        contenu = page(data, registre(), args.rapport)
+        contenu = (
+            page_v3(data, registre(), args.rapport)
+            if data.get("schema_version") == "benchmark-lab-x/results-data/v3"
+            else page(data, registre(), args.rapport)
+        )
 
     sortie.parent.mkdir(parents=True, exist_ok=True)
     sortie.write_text(contenu, encoding="utf-8")
 
     conf = data.get("conformite") or {}
-    print(f"{sortie}  "
-          f"{len([c for c in data.get('candidats', []) if c.get('classable')])} classés, "
-          f"{len([c for c in data.get('candidats', []) if not c.get('classable')])} hors classement, "
-          f"page_validee={conf.get('page_validee')}")
+    if data.get("schema_version") == "benchmark-lab-x/results-data/v3":
+        print(f"{sortie}  {len(data.get('axes') or [])} axes, "
+              f"page_validee={conf.get('page_validee')}")
+    else:
+        print(f"{sortie}  "
+              f"{len([c for c in data.get('candidats', []) if c.get('classable')])} classés, "
+              f"{len([c for c in data.get('candidats', []) if not c.get('classable')])} hors classement, "
+              f"page_validee={conf.get('page_validee')}")
     return 0
 
 

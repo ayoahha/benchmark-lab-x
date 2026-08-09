@@ -203,6 +203,9 @@ provider = "mistral"
 model = "xiaomi/mimo-v2.5"
 nom_public = "MiMo V2.5"
 provider = "xiaomi"
+# Le dépôt officiel et sa procédure SGLang publient ce modèle en FP8
+# https://huggingface.co/XiaomiMiMo/MiMo-V2.5
+format_reference = "fp8"
 omit_params = ["seed"]
 
 [minimax-m3]

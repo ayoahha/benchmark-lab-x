@@ -44,7 +44,12 @@ from protocole_v2 import (  # noqa: E402
     agreger_scores,
     charger_json,
     empreinte_lock,
+    valider_chaine_collecte,
+    valider_etat_collecte,
+    valider_evenements_panel,
+    valider_hold_operateur,
     valider_lock,
+    valider_recu_audit,
     valider_recu_couverture,
     valider_recu_score,
 )
@@ -280,6 +285,20 @@ def _score_v2(
     run: int,
 ) -> dict:
     collection_id = f"{alias}__r{run}"
+    etat_path = campaign_dir / "collections" / collection_id / "collection-state.json"
+    if etat_path.is_file():
+        etat_collecte = charger_json(etat_path)
+        cellule = next(
+            c for c in lock["collections"] if c["collection_id"] == collection_id
+        )
+        valider_etat_collecte(etat_collecte, lock_hash, cellule)
+        etat = etat_collecte["state"]
+        return {
+            "alias": alias,
+            "run": run,
+            "etat": etat,
+            "cause_code": etat_collecte.get("cause_code"),
+        }
     tentatives = sorted((campaign_dir / "collections" / collection_id).glob("attempt-*"))
     recus = [d / "collection-receipt.json" for d in tentatives
             if (d / "collection-receipt.json").is_file() and (d / "COMPLETE").is_file()]
@@ -287,11 +306,25 @@ def _score_v2(
         return {"alias": alias, "run": run, "etat": "MISSING",
                 "cause_code": "COLLECTION_UNAVAILABLE"}
     collection = charger_json(recus[0])
+    cellule = next(
+        c for c in lock["collections"] if c["collection_id"] == collection_id
+    )
+    attempt_path = recus[0].parent / "attempt-receipt.json"
+    if not attempt_path.is_file() or attempt_path.is_symlink():
+        raise ContratV2Invalide(f"reçu de tentative absent: {collection_id}")
+    valider_chaine_collecte(
+        charger_json(attempt_path), collection, lock_hash, cellule
+    )
     response_path = recus[0].parent / "response.md"
     if (not response_path.is_file() or response_path.is_symlink()
             or hashlib.sha256(response_path.read_bytes()).hexdigest()
-            != collection.get("response_sha256")):
+            != (collection.get("candidate") or {}).get("sha256")):
         raise ContratV2Invalide(f"preuve response.md absente ou modifiée: {collection_id}")
+    response_json_path = recus[0].parent / "raw.json"
+    if (not response_json_path.is_file() or response_json_path.is_symlink()
+            or hashlib.sha256(response_json_path.read_bytes()).hexdigest()
+            != collection.get("response_json_sha256")):
+        raise ContratV2Invalide(f"preuve raw.json absente ou modifiée: {collection_id}")
     collection_hash = empreinte(collection)
     score_path = (campaign_dir / "scores" / collection_hash / card["id"]
                   / f"{card['verify_hash']}.json")
@@ -300,10 +333,6 @@ def _score_v2(
                 "cause_code": "SCORE_RECEIPT_MISSING",
                 "collection_receipt_hash": collection_hash}
     score = charger_json(score_path)
-    cellule = next(
-        c for c in lock["collections"]
-        if c["collection_id"] == collection_id
-    )
     valider_recu_score(score, lock, lock_hash, card, cellule, collection, collection_hash)
     return {
         "alias": alias,
@@ -322,6 +351,8 @@ def _score_v2(
 
 def _rangs_competition(candidats: list[dict], kind: str) -> None:
     def valeur(candidat: dict) -> int | None:
+        if candidat.get("panel_state") == "RETIRE":
+            return None
         agregat = candidat["agregat"]
         if not agregat.get("classement_valide"):
             return None
@@ -352,8 +383,20 @@ def rapport_v2(campaign_dir: Path, conf: dict) -> int:
             instrument_qualifie_v2 = False
             motifs_r016 = ["reçu de couverture R-016 absent"]
 
+        panel_events_path = campaign_dir / conf.get(
+            "panel_events", "panel-events.json"
+        )
+        if panel_events_path.is_file():
+            panel_events = valider_evenements_panel(
+                charger_json(panel_events_path), lock, lock_hash
+            )
+            retraites = {e["alias"] for e in panel_events["events"]}
+        else:
+            panel_events = None
+            retraites = set()
+
         cartes = []
-        for card in lock["score_cards"]:
+        for card in lock["axes"]:
             candidats = []
             blocages = []
             contextes = set()
@@ -367,24 +410,66 @@ def rapport_v2(campaign_dir: Path, conf: dict) -> int:
                 agregat = agreger_scores(card["kind"], scores)
                 if not agregat.get("classement_valide"):
                     blocages.append({"alias": alias, "runs": agregat.get("blocages")})
-                candidats.append({"alias": alias, "scores": scores, "agregat": agregat})
+                candidats.append({
+                    "alias": alias,
+                    "panel_state": "RETIRE" if alias in retraites else None,
+                    "scores": scores,
+                    "agregat": agregat,
+                })
             _rangs_competition(candidats, card["kind"])
             contexte_unique = len(contextes) == 1
             if not contexte_unique:
                 blocages.append({"measurement_context_hashes": sorted(contextes)})
-            classement_valide = not blocages and instrument_qualifie_v2
+            audit_receipt = None
+            audit_accepte = False
+            audit_path = (
+                campaign_dir / conf.get("audits_dir", "audits") / card["id"]
+                / f"{card['verify_hash']}.json"
+            )
+            if contexte_unique and contextes and audit_path.is_file():
+                hashes_collecte = {
+                    score["collection_receipt_hash"]
+                    for candidat in candidats for score in candidat["scores"]
+                    if score.get("etat") == "SCORED"
+                    and score.get("collection_receipt_hash")
+                }
+                try:
+                    audit_receipt = valider_recu_audit(
+                        charger_json(audit_path), lock_hash, card,
+                        next(iter(contextes)), hashes_collecte,
+                    )
+                except ContratV2Invalide as exc:
+                    blocages.append({"audit": f"reçu invalide: {exc}"})
+                else:
+                    audit_accepte = audit_receipt["decision"] == "ACCEPTED"
+                    if not audit_accepte:
+                        blocages.append({"audit": "désaccord humain avec la note du code"})
+            elif contexte_unique and contextes:
+                blocages.append({"audit": "reçu d'audit fondé sur le risque absent"})
+            else:
+                blocages.append({"audit": "contexte de mesure non auditable"})
+            classement_valide = not blocages and instrument_qualifie_v2 and audit_accepte
             cartes.append({
                 "id": card["id"],
                 "kind": card["kind"],
                 "verify_version": card["verify_version"],
                 "verify_hash": card["verify_hash"],
                 "measurement_context_hash": next(iter(contextes)) if contexte_unique else None,
+                "statut": "valide" if classement_valide else "provisoire",
                 "classement_valide": classement_valide,
                 "blocages": blocages + ([] if instrument_qualifie_v2 else [{"R-016": motifs_r016}]),
+                "audit_receipt": audit_receipt,
                 "candidats": candidats,
             })
+        operator_hold_path = campaign_dir / "operator-hold.json"
+        if operator_hold_path.is_file():
+            operator_hold = valider_hold_operateur(
+                charger_json(operator_hold_path), lock, lock_hash
+            )
+        else:
+            operator_hold = None
         resultat = {
-            "schema_version": "benchmark-lab-x/results-data/v2",
+            "schema_version": "benchmark-lab-x/results-data/v3",
             "protocol_version": PROTOCOLE_V2,
             "campaign_id": lock["campaign_id"],
             "campaign_lock_hash": lock_hash,
@@ -397,7 +482,19 @@ def rapport_v2(campaign_dir: Path, conf: dict) -> int:
                 "blocages": {"R-016": motifs_r016} if motifs_r016 else {},
             },
             "coverage_receipt": couverture,
-            "cartes": cartes,
+            "panel_events": panel_events,
+            "campaign_status": (
+                "incomplete"
+                if any(
+                    score["etat"] == "MISSING"
+                    for axe in cartes for candidat in axe["candidats"]
+                    for score in candidat["scores"]
+                )
+                else "complete"
+            ),
+            "operator_status": "HOLD" if operator_hold is not None else None,
+            "operator_hold": operator_hold,
+            "axes": cartes,
         }
     except ContratV2Invalide as exc:
         print(f"HOLD: {exc}", file=sys.stderr)

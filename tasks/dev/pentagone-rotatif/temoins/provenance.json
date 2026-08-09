@@ -1,10 +1,18 @@
 {
-  "_etat": "préenregistré, en attente de qualification Chromium",
+  "_etat": "préenregistré, en attente d’une nouvelle qualification Chromium",
   "_lisez_moi": "Provenance des témoins au sens R-016. Un témoin ne qualifie un palier que si son producteur n'avait pas accès au vérificateur. Les sept ci-dessous ont été écrits par l'auteur du vérificateur : ils sont déclarés tels quels, donc non qualifiants. La polarité ne se déclare pas sur une carte à paliers, elle se déduit : un témoin qui atteint le niveau L est positif pour les paliers 1 à L et négatif pour les suivants. Les champs `predicats_couverts` et `polarite` ont été retirés le 2026-08-06 : ils nommaient `P_precision_ref`, un identifiant qui n'existe dans aucun vérificateur.",
   "_observation": "Mesuré le 2026-08-06 par `tools/qualifier_temoins.py`. Les sept témoins atteignent 1, 3, 10, 10, 11, 11 et 20 paliers sur 51. Même produits indépendamment, ils laisseraient 31 paliers sans témoin positif, du 21e au 51e, et le 1er sans témoin négatif. Deux manques distincts : l'un de procédure, l'autre de substance. Le second exige qu'une implémentation atteignant le haut de l'échelle soit écrite par quelqu'un qui n'a pas vu le vérificateur ; le meilleur modèle mesuré atteint 43.",
+  "_r016_positive_v3_source": {
+    "package_dir": "temoins/r016-positive-v3-source",
+    "preregistration_sha256": "af94ffebf8d598816d17dbce60e785f49c20adae905549d23ef27cd55b8a1aa0",
+    "production_sha256": "f0d4515966774ea1e943feeccc04b2125dca9577fe33cec074240052c42bea95",
+    "sha256sums_sha256": "9baa7f012e8ad4e1b536f121ad85d91b87770146afda88f7bf5af93f64e6eef7",
+    "statut": "LIVRE",
+    "witness_sha256": "1a5f82af054ff8cb93e142c1745736a8f1e437912ffb0387ed79b58f47d83ce5"
+  },
   "_r016_source": {
-    "production_sha256": "fc000e827fe9ef171366caf7f65139d4ea52b619ea6e72bd97ff379f00869096",
-    "provenance_sha256": "dade38d6ff34e10266c0e0965b85427548fc5c89bd2dbc65c88e856ca0cf7208",
+    "production_sha256": "dce711f42718609e2e46cead6e8dc216e400f9d3dfce6c0f5bff3e05694e35b2",
+    "provenance_sha256": "d4a52ae0501a080eff2a631dc7c8294427b97b7400557e9f14afb8d1a9a898a7",
     "statut": "LIVRÉ — paquet R-016 préenregistré ; attentes figées sans aucune observation du juge"
   },
   "_regle": "R-016",
@@ -21,7 +29,7 @@
     "temoins/neg-10-horizon-35s.md",
     "temoins/neg-11-horizon-55s.md",
     "temoins/neg-12-horizon-75s.md",
-    "temoins/pos-01-solution.md"
+    "temoins/pos-03-solution.md"
   ],
   "temoins": {
     "anchor-T0-sans-simulate.md": {
@@ -62,7 +70,7 @@
     "temoins/neg-01-page-absente.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-api": {
           "P0_PAGE": false
@@ -73,7 +81,7 @@
     "temoins/neg-02-api-absente.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-api": {
           "P1_API_NUMERIC_TOTAL": false
@@ -84,7 +92,7 @@
     "temoins/neg-03-non-deterministe.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-determinisme": {
           "D1_REPEATABLE": false
@@ -95,19 +103,19 @@
     "temoins/neg-04-dependance-ordre.md": {
       "acces_au_verificateur": false,
       "consignes": "prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "kimi-k3 (moonshotai), agent producteur indépendant",
       "resultat_attendu": {
         "pentagone-determinisme": {
           "D1_REPEATABLE": true,
           "D2_ORDER_INDEPENDENT": false
         }
       },
-      "statut_octets": "nouveau témoin produit dans cette session ; remplace le neg-04 du manifeste (compteur par appel, non conforme à la consigne) sans en conserver les octets"
+      "statut_octets": "nouveau témoin produit lors de cette production ; remplace le neg-04 du manifeste (compteur par appel, non conforme à la consigne) sans en conserver les octets"
     },
     "temoins/neg-05-etat-initial-faux.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-confinement-court": {
           "I0_INITIAL_STATE": false
@@ -123,7 +131,7 @@
     "temoins/neg-06-sortie-avant-2s.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-confinement-court": {
           "C2_CONFINEMENT": false
@@ -134,7 +142,7 @@
     "temoins/neg-07-sortie-avant-10s.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-confinement-court": {
           "C10_CONFINEMENT": false
@@ -145,7 +153,7 @@
     "temoins/neg-08-sortie-avant-20s.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-confinement-court": {
           "C20_CONFINEMENT": false
@@ -156,7 +164,7 @@
     "temoins/neg-09-erreur-1e2-24s.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-precision-24s": {
           "P24_1e+0": false,
@@ -203,7 +211,7 @@
     "temoins/neg-10-horizon-35s.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-horizons-longs": {
           "C35_CONFINEMENT": false
@@ -214,7 +222,7 @@
     "temoins/neg-11-horizon-55s.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-horizons-longs": {
           "C55_CONFINEMENT": false
@@ -225,7 +233,7 @@
     "temoins/neg-12-horizon-75s.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-horizons-longs": {
           "C75_CONFINEMENT": false
@@ -236,7 +244,7 @@
     "temoins/pos-01-solution.md": {
       "acces_au_verificateur": false,
       "consignes": "manifeste de la source dérivée (sha256 27178ccf89572ba4468c0c2ee6c71677e09730b17aa48b4c4d29f84a30118714), prompt de nouvelle mission (sha256 2d63821bad070e9fe1dd0cd81fe1b377999f9103c9f5c13a73cd6cdbf345306f) et prompt R-016 initial (sha256 19f458eb4912061d89dac9848f2a7e7be990c3bd12bdaff5f77076c9943b3782)",
-      "producteur": "octets produits par prime-agent, session 019fe0a4-f327-77d8-9e07-b3706067c197 ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai) via prime-agent, session 019fe0fd-dc2b-74e8-868c-9f64cc8930ac",
+      "producteur": "octets produits par un agent producteur indépendant ; copie octet-pour-octet et attentes préenregistrées par kimi-k3 (moonshotai)",
       "resultat_attendu": {
         "pentagone-api": {
           "P0_PAGE": true,
@@ -301,6 +309,75 @@
         }
       },
       "statut_octets": "copie conforme de /tmp/temoins-r016/pos-01-solution.html ; sha256 05573d31c38cfcae9d8566a57c2b5b10a9f7aa0deb1d95edcd1ad929aee52b03 vérifié contre le manifeste puis revérifié après copie"
+    },
+    "temoins/pos-03-solution.md": {
+      "acces_au_verificateur": false,
+      "consignes": "task-v3.md sha256 7acfb34a2e4e68d5fe8b75d2972cc97bb949f99d36e92b12e80de1339e9a77bf, donnees.md sha256 2f4dd0872b4377ea61df278396898f4cd7354d1bfa2a105ef6bfe1cdd3c77045, préenregistrement sha256 af94ffebf8d598816d17dbce60e785f49c20adae905549d23ef27cd55b8a1aa0 ; aucune observation du juge avant fixation des 51 attentes",
+      "producteur": "agent producteur indépendant local, sans accès au vérificateur ; dérivation physique et contractuelle limitée aux deux sources publiques hashées",
+      "resultat_attendu": {
+        "pentagone-api": {
+          "P0_PAGE": true,
+          "P1_API_NUMERIC_TOTAL": true
+        },
+        "pentagone-confinement-court": {
+          "C10_CONFINEMENT": true,
+          "C20_CONFINEMENT": true,
+          "C2_CONFINEMENT": true,
+          "I0_INITIAL_STATE": true
+        },
+        "pentagone-determinisme": {
+          "D1_REPEATABLE": true,
+          "D2_ORDER_INDEPENDENT": true
+        },
+        "pentagone-horizons-longs": {
+          "C35_CONFINEMENT": true,
+          "C55_CONFINEMENT": true,
+          "C75_CONFINEMENT": true,
+          "E35_PRECISION": true,
+          "E55_PRECISION": true,
+          "E75_PRECISION": true
+        },
+        "pentagone-precision-24s": {
+          "P24_1e+0": true,
+          "P24_1e+1": true,
+          "P24_1e+2": true,
+          "P24_1e-1": true,
+          "P24_1e-10": true,
+          "P24_1e-11": true,
+          "P24_1e-12": true,
+          "P24_1e-13": true,
+          "P24_1e-14": true,
+          "P24_1e-15": true,
+          "P24_1e-16": true,
+          "P24_1e-2": true,
+          "P24_1e-3": true,
+          "P24_1e-4": true,
+          "P24_1e-5": true,
+          "P24_1e-6": true,
+          "P24_1e-7": true,
+          "P24_1e-8": true,
+          "P24_1e-9": true,
+          "P24_3e+0": true,
+          "P24_3e+1": true,
+          "P24_3e-1": true,
+          "P24_3e-10": true,
+          "P24_3e-11": true,
+          "P24_3e-12": true,
+          "P24_3e-13": true,
+          "P24_3e-14": true,
+          "P24_3e-15": true,
+          "P24_3e-16": true,
+          "P24_3e-2": true,
+          "P24_3e-3": true,
+          "P24_3e-4": true,
+          "P24_3e-5": true,
+          "P24_3e-6": true,
+          "P24_3e-7": true,
+          "P24_3e-8": true,
+          "P24_3e-9": true
+        }
+      },
+      "statut_octets": "témoin positif préenregistré ; sha256 1a5f82af054ff8cb93e142c1745736a8f1e437912ffb0387ed79b58f47d83ce5 ; preuve numérique forte non certifiée par intervalles"
     }
   }
 }
