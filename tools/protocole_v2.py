@@ -182,6 +182,13 @@ PREDICATS_V4 = {
         "E55_PRECISION", "C75_CONFINEMENT", "E75_PRECISION",
     ),
 }
+PREDICATS_V5 = {
+    **PREDICATS_V4,
+    "pentagone-horizons-longs": (
+        "C35_CONFINEMENT", "E35_PRECISION", "C55_CONFINEMENT",
+        "E55_PRECISION", "C75_CONFINEMENT",
+    ),
+}
 
 
 class ContratV2Invalide(ValueError):
@@ -190,6 +197,15 @@ class ContratV2Invalide(ValueError):
 
 class PlafondDepasse(RuntimeError):
     """Une réservation dépasserait le plafond préenregistré"""
+
+
+def predicats_pour_verificateur(verify_version: str) -> dict[str, tuple[str, ...]]:
+    """Conserver les catalogues historiques tout en versionnant l'instrument actif"""
+    if verify_version == "verify-v5":
+        return PREDICATS_V4
+    if verify_version == "verify-v6":
+        return PREDICATS_V5
+    raise ContratV2Invalide(f"catalogue de prédicats inconnu: {verify_version}")
 
 
 def sha256_octets(data: bytes) -> str:
@@ -1092,7 +1108,8 @@ def _valider_axe_v3(
     )
     _entier_positif(axe.get("watchdog_s"), f"axes[{index}].watchdog_s")
     predicats = axe.get("predicates")
-    _exiger(isinstance(predicats, list) and tuple(predicats) == PREDICATS_V4[aid],
+    catalogue = predicats_pour_verificateur(axe["verify_version"])
+    _exiger(isinstance(predicats, list) and tuple(predicats) == catalogue[aid],
             f"prédicats différents du contrat pour {aid}")
     _exiger(axe.get("aggregation") == {"runs": runs, "order_statistic": 4},
             f"agrégation v2 différente pour {aid}")
@@ -1301,6 +1318,14 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
         _valider_axe_v3(axe, index, runs, len(panel) * runs, racine_depot)
     _exiger(tuple(axe["id"] for axe in axes) == AXES_PENTAGONE,
             "ordre des axes différent du contrat")
+    version_attendue = {"task-v3": "verify-v5", "task-v4": "verify-v6"}.get(
+        task["task_version"]
+    )
+    _exiger(
+        version_attendue is not None
+        and all(axe["verify_version"] == version_attendue for axe in axes),
+        "couple task/verify différent des instruments versionnés",
+    )
 
     snapshot_routes: dict[str, Any] | None = None
     prompt: str | None = None

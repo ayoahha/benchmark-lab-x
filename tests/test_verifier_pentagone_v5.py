@@ -15,6 +15,7 @@ RACINE = Path(__file__).parent.parent
 sys.path.insert(0, str(RACINE / "tools"))
 
 import verifier_pentagone_v5 as V  # noqa: E402
+import verifier_pentagone_v6 as V6  # noqa: E402
 
 
 class PageFausse:
@@ -63,6 +64,15 @@ class VerifierPentagoneV5Tests(unittest.TestCase):
         self.assertEqual(a1, a3)
         self.assertNotEqual(a1, list(reversed(inverse)))
         self.assertEqual(V.VERIFY_VERSION, "verify-v5")
+
+    def test_v6_horizon_long_s_arrete_au_confinement_75(self):
+        card_id = "pentagone-horizons-longs"
+        predicates = {name: True for name in V6.PREDICATS_V5[card_id]}
+        result = V6._score_niveaux(card_id, predicates, None, {})
+        self.assertEqual(V6.VERIFY_VERSION, "verify-v6")
+        self.assertNotIn("E75_PRECISION", result["predicates"])
+        self.assertEqual(result["niveau"], 5)
+        self.assertEqual(result["verdict"], "PASS")
 
 
 if __name__ == "__main__":

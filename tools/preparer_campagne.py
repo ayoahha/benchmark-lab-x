@@ -35,6 +35,7 @@ from protocole_v2 import (  # noqa: E402
     PANEL_B0,
     PLAFOND_B0_HISTORIQUE,
     PREDICATS_V4,
+    PREDICATS_V5,
     PROTOCOLE_VERSION,
     SCHEMA_EXECUTION,
     SCHEMA_EXECUTION_V3,
@@ -104,7 +105,12 @@ def _arbre_tache(task_dir: Path, task_file: str, visible_inputs: list[str]) -> l
     return fichiers
 
 
-def _manifeste_verificateur(card_id: str, assets: list[str]) -> dict[str, Any]:
+def _manifeste_verificateur(
+    card_id: str,
+    assets: list[str],
+    verify_version: str = "verify-v5",
+    predicates: dict[str, tuple[str, ...]] = PREDICATS_V4,
+) -> dict[str, Any]:
     if len(assets) != len(set(assets)):
         raise ContratV2Invalide("actif du vérificateur dupliqué")
     lignes = []
@@ -116,8 +122,8 @@ def _manifeste_verificateur(card_id: str, assets: list[str]) -> dict[str, Any]:
     return {
         "schema_version": "benchmark-lab-x/verifier-manifest/v2",
         "card_id": card_id,
-        "verify_version": "verify-v5",
-        "predicates": list(PREDICATS_V4[card_id]),
+        "verify_version": verify_version,
+        "predicates": list(predicates[card_id]),
         "assets": lignes,
     }
 
@@ -625,8 +631,17 @@ def construire_lock(draft: dict[str, Any]) -> dict[str, Any]:
     assembler_prompt_verrouille(RACINE, task, verifier_arbre=True)
     prompt_token_upper_bound = len(prompt.encode("utf-8"))
 
+    instruments = {
+        "task-v3": ("verify-v5", "tools/verifier_pentagone_v5.py", PREDICATS_V4),
+        "task-v4": ("verify-v6", "tools/verifier_pentagone_v6.py", PREDICATS_V5),
+    }
+    instrument = instruments.get(task_version)
+    if instrument is None:
+        raise ContratV2Invalide(f"instrument absent pour {task_version}")
+    verify_version, verifier_path, predicates = instrument
+
     assets = [
-        "tools/verifier_pentagone_v5.py",
+        verifier_path,
         "tools/oracle_pentagone.py",
         "tools/moteur_rendu.py",
         "tools/protocole_v2.py",
@@ -642,16 +657,18 @@ def construire_lock(draft: dict[str, Any]) -> dict[str, Any]:
         raise ContratV2Invalide("un plan d'audit explicite est requis pour chaque axe")
     axes = []
     for axis_id in AXES_PENTAGONE:
-        manifeste_verify = _manifeste_verificateur(axis_id, assets)
+        manifeste_verify = _manifeste_verificateur(
+            axis_id, assets, verify_version, predicates
+        )
         axes.append({
             "id": axis_id,
             "kind": kinds[axis_id],
-            "verify_version": "verify-v5",
+            "verify_version": verify_version,
             "verify_hash": empreinte(manifeste_verify),
-            "verifier_path": "tools/verifier_pentagone_v5.py",
+            "verifier_path": verifier_path,
             "verify_manifest": manifeste_verify,
             "watchdog_s": 180,
-            "predicates": list(PREDICATS_V4[axis_id]),
+            "predicates": list(predicates[axis_id]),
             "aggregation": {"runs": 6, "order_statistic": 4},
             "audit_plan": audit_plans[axis_id],
         })

@@ -25,6 +25,7 @@ from protocole_v2 import (  # noqa: E402
     CARDS_V4,
     PANEL_B0,
     PREDICATS_V4,
+    PREDICATS_V5,
     PROTOCOLE_VERSION,
     SCHEMA_ABANDONMENT,
     SCHEMA_ATTEMPT,
@@ -839,6 +840,20 @@ class ProtocolV2Tests(unittest.TestCase):
         with self.assertRaises(ContratV2Invalide):
             valider_lock(altere)
 
+    def test_verify_v6_retire_uniquement_e75_precision(self):
+        self.assertEqual(sum(map(len, PREDICATS_V4.values())), 51)
+        self.assertEqual(sum(map(len, PREDICATS_V5.values())), 50)
+        for axis_id in AXES_PENTAGONE[:-1]:
+            self.assertEqual(PREDICATS_V5[axis_id], PREDICATS_V4[axis_id])
+        self.assertEqual(
+            PREDICATS_V5["pentagone-horizons-longs"],
+            tuple(
+                predicate
+                for predicate in PREDICATS_V4["pentagone-horizons-longs"]
+                if predicate != "E75_PRECISION"
+            ),
+        )
+
     def test_lock_refuse_source_ou_environnement_non_fige(self):
         sans_source = lock_minimal()
         del sans_source["repository_source"]
@@ -1171,7 +1186,7 @@ class ProtocolV2Tests(unittest.TestCase):
                 "in_flight_by_provider": {"openai": 1},
             },
             "task_dir": "tasks/dev/pentagone-rotatif",
-            "task_file": "task-v3.md",
+            "task_file": "task-v4.md",
             "visible_inputs": ["donnees.md"],
             "confidentiality_regime": "expose",
             "data_policy_requested": "allow",
@@ -1208,6 +1223,9 @@ class ProtocolV2Tests(unittest.TestCase):
         valider_lock(lock)
         cellule = lock["collections"][0]
         self.assertEqual(lock["schema_version"], SCHEMA_LOCK)
+        self.assertEqual(lock["task"]["task_version"], "task-v4")
+        self.assertEqual({axis["verify_version"] for axis in lock["axes"]}, {"verify-v6"})
+        self.assertEqual(sum(len(axis["predicates"]) for axis in lock["axes"]), 50)
         self.assertEqual(cellule["execution_manifest"]["schema_version"], SCHEMA_EXECUTION)
         self.assertEqual(cellule["base_identity"]["endpoint_tag"], "openai")
         self.assertEqual(cellule["route"]["quantization"], quantification)

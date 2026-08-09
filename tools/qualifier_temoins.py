@@ -177,7 +177,6 @@ def qualifier_v2(args) -> int:
     try:
         lock = valider_lock(charger_json(args.campaign_lock), RACINE)
         lock_hash = empreinte_lock(lock)
-        verifier = RACINE / "tools/verifier_pentagone_v5.py"
         dossier = RACINE / lock["task"]["task_dir"]
         provenance_path = dossier / "temoins/provenance.json"
         provenance, temoins_paths = charger_qualification_set(
@@ -207,6 +206,7 @@ def qualifier_v2(args) -> int:
             }
             observations[nom] = {}
             for card in lock["axes"]:
+                verifier = resoudre_sous(RACINE, card["verifier_path"])
                 resultat = noter_v5(temoin, verifier, card["id"], card["watchdog_s"])
                 scored = resultat.get("etat") == "SCORED"
                 observation = {

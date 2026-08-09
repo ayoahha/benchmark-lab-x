@@ -1,7 +1,16 @@
 {
-  "_etat": "préenregistré, en attente d’une nouvelle qualification Chromium",
+  "_etat": "task-v4/verify-v6 préparés, en attente d’un lock source puis d’une nouvelle qualification Chromium",
   "_lisez_moi": "Provenance des témoins au sens R-016. Un témoin ne qualifie un palier que si son producteur n'avait pas accès au vérificateur. Les sept ci-dessous ont été écrits par l'auteur du vérificateur : ils sont déclarés tels quels, donc non qualifiants. La polarité ne se déclare pas sur une carte à paliers, elle se déduit : un témoin qui atteint le niveau L est positif pour les paliers 1 à L et négatif pour les suivants. Les champs `predicats_couverts` et `polarite` ont été retirés le 2026-08-06 : ils nommaient `P_precision_ref`, un identifiant qui n'existe dans aucun vérificateur.",
   "_observation": "Mesuré le 2026-08-06 par `tools/qualifier_temoins.py`. Les sept témoins atteignent 1, 3, 10, 10, 11, 11 et 20 paliers sur 51. Même produits indépendamment, ils laisseraient 31 paliers sans témoin positif, du 21e au 51e, et le 1er sans témoin négatif. Deux manques distincts : l'un de procédure, l'autre de substance. Le second exige qu'une implémentation atteignant le haut de l'échelle soit écrite par quelqu'un qui n'a pas vu le vérificateur ; le meilleur modèle mesuré atteint 43.",
+  "_revision_b0_02": {
+    "approved_by": "Ayo",
+    "approved_on": "2026-08-09",
+    "change": "E75_PRECISION retiré de task-v4/verify-v6 après divergence des références numériques à 75 secondes",
+    "failed_receipt_path": "runs/2026-08-08-pentagone-v3/witness-coverage-receipt.e70d483059294c237e02add34ec60f1eed52a6f006d25b6bfd4e26efe99c3439.json",
+    "failed_receipt_sha256": "120d087f16938cad5cbc8bbe6017f74982d20cbca4e63eeb4238cb03623d95c8",
+    "retained_expectations": 50,
+    "retained_expectations_changed": false
+  },
   "_r016_positive_v3_source": {
     "package_dir": "temoins/r016-positive-v3-source",
     "preregistration_sha256": "af94ffebf8d598816d17dbce60e785f49c20adae905549d23ef27cd55b8a1aa0",
@@ -122,8 +131,7 @@
         },
         "pentagone-horizons-longs": {
           "E35_PRECISION": false,
-          "E55_PRECISION": false,
-          "E75_PRECISION": false
+          "E55_PRECISION": false
         }
       },
       "statut_octets": "copie conforme de /tmp/temoins-r016/neg-05-etat-initial-faux.html ; sha256 4ae84cadad094c86f6c2fb20409ba2e63248f00cb0b1ef98ad40021b7f405d98 vérifié contre le manifeste puis revérifié après copie"
@@ -265,8 +273,7 @@
           "C55_CONFINEMENT": true,
           "C75_CONFINEMENT": true,
           "E35_PRECISION": true,
-          "E55_PRECISION": true,
-          "E75_PRECISION": true
+          "E55_PRECISION": true
         },
         "pentagone-precision-24s": {
           "P24_1e+0": true,
@@ -312,7 +319,7 @@
     },
     "temoins/pos-03-solution.md": {
       "acces_au_verificateur": false,
-      "consignes": "task-v3.md sha256 7acfb34a2e4e68d5fe8b75d2972cc97bb949f99d36e92b12e80de1339e9a77bf, donnees.md sha256 2f4dd0872b4377ea61df278396898f4cd7354d1bfa2a105ef6bfe1cdd3c77045, préenregistrement sha256 af94ffebf8d598816d17dbce60e785f49c20adae905549d23ef27cd55b8a1aa0 ; aucune observation du juge avant fixation des 51 attentes",
+      "consignes": "task-v3.md sha256 7acfb34a2e4e68d5fe8b75d2972cc97bb949f99d36e92b12e80de1339e9a77bf, donnees.md sha256 2f4dd0872b4377ea61df278396898f4cd7354d1bfa2a105ef6bfe1cdd3c77045, préenregistrement sha256 af94ffebf8d598816d17dbce60e785f49c20adae905549d23ef27cd55b8a1aa0 ; aucune observation du juge avant fixation des 51 attentes d’origine ; les 50 attentes conservées sous task-v4/verify-v6 sont inchangées",
       "producteur": "agent producteur indépendant local, sans accès au vérificateur ; dérivation physique et contractuelle limitée aux deux sources publiques hashées",
       "resultat_attendu": {
         "pentagone-api": {
@@ -334,8 +341,7 @@
           "C55_CONFINEMENT": true,
           "C75_CONFINEMENT": true,
           "E35_PRECISION": true,
-          "E55_PRECISION": true,
-          "E75_PRECISION": true
+          "E55_PRECISION": true
         },
         "pentagone-precision-24s": {
           "P24_1e+0": true,

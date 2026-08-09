@@ -118,9 +118,10 @@ def _valider_collecte(
     return response
 
 
-def _sortie_unknown(card_id: str, cause: str, detail: str) -> dict[str, Any]:
+def _sortie_unknown(card: dict[str, Any], cause: str, detail: str) -> dict[str, Any]:
     return {"etat": "UNKNOWN", "cause_code": cause, "predicates": {}, "measurements": {},
-            "detail": detail, "card_id": card_id, "verify_version": "verify-v5"}
+            "detail": detail, "card_id": card["id"],
+            "verify_version": card["verify_version"]}
 
 
 def _noter_une_carte(card: dict[str, Any], response: Path) -> dict[str, Any]:
@@ -143,19 +144,19 @@ def _noter_une_carte(card: dict[str, Any], response: Path) -> dict[str, Any]:
                 int(card["watchdog_s"]),
             )
         except subprocess.TimeoutExpired:
-            return _sortie_unknown(card["id"], "VERIFY_TIMEOUT", "garde-fou de 180 s dépassé")
+            return _sortie_unknown(card, "VERIFY_TIMEOUT", "garde-fou de 180 s dépassé")
     if out.returncode != 0:
         marqueurs_environnement = ("MoteurNonConforme", "BrowserType.launch", "TargetClosedError")
         cause = ("ENVIRONMENT_MISMATCH" if any(m in out.stderr for m in marqueurs_environnement)
                  else "VERIFY_PROCESS_ERROR")
-        return _sortie_unknown(card["id"], cause,
+        return _sortie_unknown(card, cause,
                                f"processus du vérificateur sorti avec le code {out.returncode}")
     try:
         result = json.loads(out.stdout)
     except json.JSONDecodeError as exc:
-        return _sortie_unknown(card["id"], "VERIFY_PROCESS_ERROR", f"JSON invalide: {exc}")
+        return _sortie_unknown(card, "VERIFY_PROCESS_ERROR", f"JSON invalide: {exc}")
     if not isinstance(result, dict) or result.get("card_id") != card["id"]:
-        return _sortie_unknown(card["id"], "VERIFY_PROCESS_ERROR", "sortie liée à une autre carte")
+        return _sortie_unknown(card, "VERIFY_PROCESS_ERROR", "sortie liée à une autre carte")
     return result
 
 
