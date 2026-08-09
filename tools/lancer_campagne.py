@@ -238,7 +238,12 @@ def _poser_hold_v2(
     cause_code: str,
     collection_id: str | None = None,
     tentative: int | None = None,
-) -> None:
+) -> dict:
+    hold_path = racine / "operator-hold.json"
+    if hold_path.exists():
+        if hold_path.is_symlink() or not hold_path.is_file():
+            raise ContratV2Invalide("HOLD opérateur existant invalide")
+        return valider_hold_operateur(charger_json(hold_path), lock, lock_hash)
     hold = {
         "schema_version": "benchmark-lab-x/operator-hold/v1",
         "campaign_lock_hash": lock_hash,
@@ -248,9 +253,52 @@ def _poser_hold_v2(
         "attempt": tentative,
     }
     valider_hold_operateur(hold, lock, lock_hash)
-    ecrire_json_immuable(
-        racine / "operator-hold.json", hold
+    ecrire_json_immuable(hold_path, hold)
+    return hold
+
+
+def _expurger_erreur_enfant(texte: str) -> str:
+    substitutions = (
+        (
+            r"(?i)([\"']?authorization[\"']?\s*[:=]\s*[\"']?"
+            r"(?:bearer\s+)?)[^\"'\s,;}\]]+",
+            r"\1[EXPURGÉ]",
+        ),
+        (
+            r"(?i)([\"']?(?:[A-Z0-9_-]*api[_-]?key|access_token|refresh_token|"
+            r"id_token|token)[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;}\]]+",
+            r"\1[EXPURGÉ]",
+        ),
+        (r"\bsk-[A-Za-z0-9_-]+\b", "[EXPURGÉ]"),
     )
+    resultat = texte
+    for motif, remplacement in substitutions:
+        resultat = re.sub(motif, remplacement, resultat)
+    return resultat
+
+
+def _ecrire_erreur_enfant_v2(
+    racine: Path,
+    lock_hash: str,
+    resultat: dict,
+) -> dict:
+    erreur = resultat.get("error")
+    if not isinstance(erreur, str):
+        erreur = ""
+    diagnostic = {
+        "schema_version": "benchmark-lab-x/launcher-child-failure/v1",
+        "campaign_lock_hash": lock_hash,
+        "collection_id": resultat["collection_id"],
+        "attempt": resultat["attempt"],
+        "child_exit_code": resultat.get("code"),
+        "stderr_redacted": _expurger_erreur_enfant(erreur),
+    }
+    path = (
+        racine / "launcher-failures"
+        / f"{resultat['collection_id']}__a{resultat['attempt']}.json"
+    )
+    ecrire_json_immuable(path, diagnostic)
+    return diagnostic
 
 
 def _abandonner_hold_v2(
@@ -355,8 +403,96 @@ def _collecter_v2(
         "reservation_id": reservation_id,
         "code": out.returncode,
         "receipt": receipt,
-        "error": (out.stderr.strip().splitlines() or [""])[-1],
+        "error": out.stderr.strip(),
     }
+
+
+def _resultat_futur_v2(futur, cellule: dict, tentative: int) -> dict:
+    try:
+        return futur.result()
+    except Exception as exc:
+        return {
+            "collection_id": cellule["collection_id"],
+            "attempt": tentative,
+            "reservation_id": f"{cellule['collection_id']}__a{tentative}",
+            "code": None,
+            "receipt": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _traiter_resultat_v2(
+    racine: Path,
+    ledger: RegistreBudget,
+    lock: dict,
+    lock_hash: str,
+    cellule: dict,
+    resultat: dict,
+    arrete: bool,
+) -> tuple[bool, tuple[dict, int] | None]:
+    receipt = resultat["receipt"]
+    if receipt is None or receipt.get("schema_version") != SCHEMA_ATTEMPT:
+        ledger.finaliser(resultat["reservation_id"], None)
+        diagnostic = _ecrire_erreur_enfant_v2(racine, lock_hash, resultat)
+        _poser_hold_v2(
+            racine, lock, lock_hash, "ATTEMPT_RECEIPT_MISSING",
+            cellule["collection_id"], resultat["attempt"],
+        )
+        detail = diagnostic["stderr_redacted"]
+        suffixe = f" : {detail}" if detail else ""
+        print(
+            f"HOLD {cellule['collection_id']}: reçu de tentative absent"
+            f" (code enfant {resultat.get('code')}){suffixe}",
+            file=sys.stderr,
+        )
+        return True, None
+    try:
+        valider_recu_tentative(receipt, cellule, lock_hash)
+    except ContratV2Invalide as exc:
+        ledger.finaliser(resultat["reservation_id"], None)
+        _ecrire_erreur_enfant_v2(racine, lock_hash, resultat)
+        _poser_hold_v2(
+            racine, lock, lock_hash, "ATTEMPT_RECEIPT_INVALID",
+            cellule["collection_id"], resultat["attempt"],
+        )
+        print(
+            f"HOLD {cellule['collection_id']}: reçu de tentative invalide: {exc}",
+            file=sys.stderr,
+        )
+        return True, None
+    accounting = receipt.get("cost_accounting") or {}
+    cout = (
+        accounting.get("cost_microdollars")
+        if accounting.get("status") in {"known", "upper_bound"}
+        else None
+    )
+    ledger.finaliser(resultat["reservation_id"], cout)
+    if cout is None:
+        _poser_hold_v2(
+            racine, lock, lock_hash, "COST_ACCOUNTING_UNKNOWN",
+            cellule["collection_id"], resultat["attempt"],
+        )
+        print(f"HOLD {cellule['collection_id']}: coût non opposable", file=sys.stderr)
+        return True, None
+    decision = decision_reprise(
+        receipt, cellule, lock_hash, lock["attempts_max"]
+    )
+    if decision["action"] == "retry":
+        if not arrete:
+            return False, (cellule, int(receipt["attempt"]) + 1)
+    elif decision["action"] == "infra_error":
+        _fermer_collecte_v2(
+            racine, lock_hash, cellule, "INFRA_ERROR",
+            "ATTEMPTS_EXHAUSTED", int(receipt["attempt"]),
+        )
+    elif decision["action"] == "hold":
+        _poser_hold_v2(
+            racine, lock, lock_hash, receipt["cause_code"],
+            cellule["collection_id"], int(receipt["attempt"]),
+        )
+        print(f"HOLD {cellule['collection_id']}: {decision['reason']}", file=sys.stderr)
+        return True, None
+    return arrete, None
 
 
 def lancer_v2(args, conf: dict) -> int:
@@ -475,7 +611,7 @@ def lancer_v2(args, conf: dict) -> int:
         manifeste = cellule["execution_manifest"]
         backend = manifeste["backend"]
         provider = manifeste["provider_pinned"]
-        actifs = list(futurs.values())
+        actifs = [actif for actif, _ in futurs.values()]
         actifs_backend = sum(
             c["execution_manifest"]["backend"] == backend for c in actifs
         )
@@ -518,69 +654,18 @@ def lancer_v2(args, conf: dict) -> int:
                     _collecter_v2, runner, racine, lock_path, auth_path, ledger_path,
                     cellule, tentative,
                 )
-                futurs[futur] = cellule
+                futurs[futur] = (cellule, tentative)
                 tentatives_soumises += 1
             if not futurs:
                 break
             for futur in as_completed(list(futurs)):
-                cellule = futurs.pop(futur)
-                result = futur.result()
-                receipt = result["receipt"]
-                if receipt is None or receipt.get("schema_version") != SCHEMA_ATTEMPT:
-                    ledger.finaliser(result["reservation_id"], None)
-                    _poser_hold_v2(
-                        racine, lock, lock_hash, "ATTEMPT_RECEIPT_MISSING",
-                        cellule["collection_id"], result["attempt"],
-                    )
-                    print(f"HOLD {cellule['collection_id']}: reçu de tentative absent", file=sys.stderr)
-                    arrete = True
-                    break
-                try:
-                    valider_recu_tentative(receipt, cellule, lock_hash)
-                except ContratV2Invalide as exc:
-                    ledger.finaliser(result["reservation_id"], None)
-                    _poser_hold_v2(
-                        racine, lock, lock_hash, "ATTEMPT_RECEIPT_INVALID",
-                        cellule["collection_id"], result["attempt"],
-                    )
-                    print(
-                        f"HOLD {cellule['collection_id']}: reçu de tentative invalide: {exc}",
-                        file=sys.stderr,
-                    )
-                    arrete = True
-                    break
-                accounting = receipt.get("cost_accounting") or {}
-                cout = (
-                    accounting.get("cost_microdollars")
-                    if accounting.get("status") in {"known", "upper_bound"}
-                    else None
+                cellule, tentative = futurs.pop(futur)
+                result = _resultat_futur_v2(futur, cellule, tentative)
+                arrete, reprise = _traiter_resultat_v2(
+                    racine, ledger, lock, lock_hash, cellule, result, arrete
                 )
-                ledger.finaliser(result["reservation_id"], cout)
-                if ledger.etat().get("hold"):
-                    _poser_hold_v2(
-                        racine, lock, lock_hash, "COST_ACCOUNTING_UNKNOWN",
-                        cellule["collection_id"], result["attempt"],
-                    )
-                    print(f"HOLD {cellule['collection_id']}: coût non opposable", file=sys.stderr)
-                    arrete = True
-                    break
-                decision = decision_reprise(
-                    receipt, cellule, lock_hash, lock["attempts_max"]
-                )
-                if decision["action"] == "retry":
-                    restants.append((cellule, int(receipt["attempt"]) + 1))
-                elif decision["action"] == "infra_error":
-                    _fermer_collecte_v2(
-                        racine, lock_hash, cellule, "INFRA_ERROR",
-                        "ATTEMPTS_EXHAUSTED", int(receipt["attempt"]),
-                    )
-                elif decision["action"] == "hold":
-                    _poser_hold_v2(
-                        racine, lock, lock_hash, receipt["cause_code"],
-                        cellule["collection_id"], int(receipt["attempt"]),
-                    )
-                    print(f"HOLD {cellule['collection_id']}: {decision['reason']}", file=sys.stderr)
-                    arrete = True
+                if reprise is not None:
+                    restants.append(reprise)
                 break
     state = ledger.etat()
     print(json.dumps({

@@ -12,7 +12,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1695,6 +1695,155 @@ class ProtocolV2Tests(unittest.TestCase):
             state = registre.etat()
             self.assertTrue(state["hold"])
             self.assertEqual(RegistreBudget._reserve_total(state), 60)
+
+    def test_hold_operateur_conserve_la_premiere_cause(self):
+        lock = lock_minimal()
+        lock_hash = empreinte_lock(lock)
+        cellule = lock["collections"][0]
+        with tempfile.TemporaryDirectory() as tmp:
+            campagne = Path(tmp)
+            premier = lancer_campagne._poser_hold_v2(
+                campagne, lock, lock_hash, "ATTEMPT_RECEIPT_MISSING",
+                cellule["collection_id"], 1,
+            )
+            second = lancer_campagne._poser_hold_v2(
+                campagne, lock, lock_hash, "COST_ACCOUNTING_UNKNOWN",
+                cellule["collection_id"], 2,
+            )
+            self.assertEqual(second, premier)
+            self.assertEqual(
+                json.loads((campagne / "operator-hold.json").read_text(encoding="utf-8")),
+                premier,
+            )
+
+    def test_erreur_enfant_est_expurgee_et_conserve_le_code_sortie(self):
+        erreur = (
+            'warning\n"Authorization": "Bearer bearer-secret"\n'
+            'OPENROUTER_API_KEY=env-secret\n"api_key": "json-secret"\n'
+            'token: plain-secret\nsk-route-secret\n'
+            'https://example.invalid/?access_token=query-secret'
+        )
+        lock = lock_minimal()
+        cellule = lock["collections"][0]
+        with tempfile.TemporaryDirectory() as tmp:
+            campagne = Path(tmp)
+            with patch.object(lancer_campagne.subprocess, "run") as run:
+                run.return_value.returncode = 2
+                run.return_value.stderr = erreur
+                resultat = lancer_campagne._collecter_v2(
+                    {"transport_timeout_s": 1},
+                    campagne,
+                    campagne / "campaign.lock.json",
+                    campagne / "paid-authorization.json",
+                    campagne / "budget-ledger.json",
+                    cellule,
+                    1,
+                )
+            diagnostic = lancer_campagne._ecrire_erreur_enfant_v2(
+                campagne, "e" * 64, resultat
+            )
+            expurge = diagnostic["stderr_redacted"]
+            for secret in (
+                "bearer-secret", "env-secret", "json-secret", "plain-secret",
+                "sk-route-secret", "query-secret",
+            ):
+                self.assertNotIn(secret, expurge)
+            self.assertEqual(len(expurge.splitlines()), len(erreur.splitlines()))
+            self.assertEqual(diagnostic["child_exit_code"], 2)
+            self.assertEqual(set(diagnostic), {
+                "schema_version",
+                "campaign_lock_hash",
+                "collection_id",
+                "attempt",
+                "child_exit_code",
+                "stderr_redacted",
+            })
+
+    def test_hold_draine_un_appel_en_vol_sans_programmer_de_reprise(self):
+        lock = lock_minimal()
+        lock_hash = empreinte_lock(lock)
+        cellule = lock["collections"][0]
+        reservation_1 = f"{cellule['collection_id']}__a1"
+        reservation_2 = f"{cellule['collection_id']}__a2"
+        with tempfile.TemporaryDirectory() as tmp:
+            campagne = Path(tmp)
+            ledger = RegistreBudget(
+                campagne / "budget-ledger.json",
+                lock["budget"]["cap_microdollars"],
+                lock_hash,
+            )
+            ledger.reserver(reservation_1, cellule["max_cost_microdollars"])
+            ledger.reserver(reservation_2, cellule["max_cost_microdollars"])
+            futur = Future()
+            futur.set_exception(
+                RuntimeError('"api_key": "future-secret"\néchec du worker')
+            )
+            resultat = lancer_campagne._resultat_futur_v2(futur, cellule, 1)
+            arrete, reprise = lancer_campagne._traiter_resultat_v2(
+                campagne,
+                ledger,
+                lock,
+                lock_hash,
+                cellule,
+                resultat,
+                False,
+            )
+            self.assertTrue(arrete)
+            self.assertIsNone(reprise)
+            diagnostic = json.loads((
+                campagne / "launcher-failures"
+                / f"{cellule['collection_id']}__a1.json"
+            ).read_text(encoding="utf-8"))
+            self.assertNotIn("future-secret", diagnostic["stderr_redacted"])
+            self.assertIn("échec du worker", diagnostic["stderr_redacted"])
+
+            tentative = {
+                "schema_version": SCHEMA_ATTEMPT,
+                "protocol_version": PROTOCOLE_VERSION,
+                "campaign_lock_hash": lock_hash,
+                "collection_id": cellule["collection_id"],
+                "attempt": 2,
+                "result": "FAILED_RETRYABLE",
+                "cause_code": "HTTP_429",
+                "execution_manifest_hash": cellule["execution_manifest_hash"],
+                "payload_hash": cellule["payload_hash"],
+                "http_response_received": True,
+                "candidate_artifact_accepted": False,
+                "cost_accounting": {
+                    "status": "known",
+                    "cost_microdollars": 1,
+                    "reservation_id": reservation_2,
+                },
+                "retry_after": None,
+            }
+            arrete, reprise = lancer_campagne._traiter_resultat_v2(
+                campagne,
+                ledger,
+                lock,
+                lock_hash,
+                cellule,
+                {
+                    "collection_id": cellule["collection_id"],
+                    "attempt": 2,
+                    "reservation_id": reservation_2,
+                    "code": 0,
+                    "receipt": tentative,
+                    "error": "",
+                },
+                arrete,
+            )
+            state = ledger.etat()
+            self.assertTrue(arrete)
+            self.assertIsNone(reprise)
+            self.assertEqual(state["reservations"][reservation_1]["status"], "unknown")
+            self.assertEqual(state["reservations"][reservation_2]["status"], "finalized")
+            self.assertEqual(state["engaged_microdollars"], 1)
+            self.assertEqual(
+                json.loads((campagne / "operator-hold.json").read_text(encoding="utf-8"))[
+                    "cause_code"
+                ],
+                "ATTEMPT_RECEIPT_MISSING",
+            )
 
     def test_autorisation_payante_liee_au_lock_et_au_plafond(self):
         auth = {"schema_version": "benchmark-lab-x/paid-authorization/v1",
