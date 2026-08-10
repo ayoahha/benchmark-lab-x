@@ -1690,6 +1690,37 @@ class ProtocolV2Tests(unittest.TestCase):
                     octets_attendus,
                 )
 
+    def test_rapport_v2_conserve_la_route_servie_sans_score(self):
+        fixture = self._preparer_collecte_simulee()
+        payload_reponse = {
+            "model": fixture["cell"]["execution_manifest"]["model_requested"],
+            "provider": "Example",
+            "choices": [{
+                "message": {"content": "fixture"},
+                "finish_reason": "stop",
+            }],
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "cost": 0.0001,
+            },
+        }
+        code, _post = self._appeler_collecteur_simule(
+            fixture, ReponseHTTPFixture(200, payload_reponse)
+        )
+        self.assertEqual(code, 0)
+        score = rapport_campagne._score_v2(
+            fixture["campaign_dir"],
+            fixture["lock"],
+            fixture["lock_hash"],
+            fixture["lock"]["axes"][0],
+            fixture["cell"]["alias"],
+            fixture["cell"]["run"],
+        )
+        self.assertEqual(score["etat"], "MISSING")
+        self.assertEqual(score["served"]["provider"], "Example")
+        self.assertEqual(score["provider_route_order"], ["example"])
+
     def test_collecteur_v3_emet_les_reprises_fermees_sans_remplacement_tardif(self):
         for status, cause in ((429, "HTTP_429"), (503, "HTTP_503")):
             with self.subTest(cause=cause):

@@ -23,6 +23,7 @@ Usage :
     uv run tools/rapport_campagne.py <carte> <dossier_de_runs>... > runs/<campagne>/results-data.json
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -326,12 +327,21 @@ def _score_v2(
             != collection.get("response_json_sha256")):
         raise ContratV2Invalide(f"preuve raw.json absente ou modifiée: {collection_id}")
     collection_hash = empreinte(collection)
+    routes_programmees = cellule["execution_manifest"].get("provider_routes") or [{
+        "provider_pinned": cellule["execution_manifest"]["provider_pinned"]
+    }]
+    routage = {
+        "served": copy.deepcopy(collection["served"]),
+        "provider_route_order": [
+            route["provider_pinned"] for route in routes_programmees
+        ],
+    }
     score_path = (campaign_dir / "scores" / collection_hash / card["id"]
                   / f"{card['verify_hash']}.json")
     if not score_path.is_file():
         return {"alias": alias, "run": run, "etat": "MISSING",
                 "cause_code": "SCORE_RECEIPT_MISSING",
-                "collection_receipt_hash": collection_hash}
+                "collection_receipt_hash": collection_hash, **routage}
     score = charger_json(score_path)
     valider_recu_score(score, lock, lock_hash, card, cellule, collection, collection_hash)
     return {
@@ -346,6 +356,7 @@ def _score_v2(
         "mesures": score.get("mesures") or {},
         "measurement_context_hash": score.get("measurement_context_hash"),
         "collection_receipt_hash": collection_hash,
+        **routage,
     }
 
 
@@ -413,6 +424,15 @@ def rapport_v2(campaign_dir: Path, conf: dict) -> int:
                 candidats.append({
                     "alias": alias,
                     "panel_state": "RETIRE" if alias in retraites else None,
+                    "providers_served": sorted({
+                        score["served"]["provider"] for score in scores
+                        if isinstance(score.get("served"), dict)
+                        and score["served"].get("provider")
+                    }),
+                    "provider_route_order": next((
+                        score["provider_route_order"] for score in scores
+                        if score.get("provider_route_order")
+                    ), []),
                     "scores": scores,
                     "agregat": agregat,
                 })
