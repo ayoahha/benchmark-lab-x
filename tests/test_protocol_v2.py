@@ -1235,6 +1235,49 @@ class ProtocolV2Tests(unittest.TestCase):
         with self.assertRaisesRegex(ContratV2Invalide, "programme provider"):
             valider_manifeste_execution(ordre_inverse)
 
+        cellule = {
+            "collection_id": "hy3__r1",
+            "payload_hash": "b" * 64,
+            "execution_manifest_hash": empreinte(manifeste),
+            "execution_manifest": manifeste,
+            "max_cost_microdollars": 105_543,
+        }
+        recu = {
+            "schema_version": SCHEMA_COLLECTION,
+            "protocol_version": PROTOCOLE_VERSION,
+            "campaign_lock_hash": "c" * 64,
+            "collection_id": "hy3__r1",
+            "attempt": 1,
+            "result": "COLLECTED",
+            "payload_hash": "b" * 64,
+            "execution_manifest_hash": empreinte(manifeste),
+            "served": {"model": manifeste["model_requested"], "provider": "DeepInfra"},
+            "candidate": {
+                "sha256": "d" * 64,
+                "bytes": 1,
+                "kind": "content",
+                "truncated": False,
+            },
+            "response_json_sha256": "e" * 64,
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "reasoning_tokens": 0,
+            },
+            "cost_accounting": {
+                "status": "known",
+                "cost_microdollars": 1,
+                "reservation_id": "hy3__r1__a1",
+            },
+            "duration_ns": 1,
+            "cause_code": None,
+        }
+        valider_recu_collecte(recu, "c" * 64, cellule)
+        recu_hors_programme = copy.deepcopy(recu)
+        recu_hors_programme["served"]["provider"] = "Other"
+        with self.assertRaisesRegex(ContratV2Invalide, "provider servi"):
+            valider_recu_collecte(recu_hors_programme, "c" * 64, cellule)
+
     def test_lock_v4_refuse_not_disclosed_hors_api_editeur(self):
         lock = lock_minimal_v4()
         valider_lock(lock)

@@ -2458,10 +2458,21 @@ def valider_recu_collecte(
     )
     _exiger(normaliser(served["model"]) == normaliser(manifeste["model_requested"]),
             "modèle servi différent du lock")
-    _exiger(normaliser(served["provider"]) in {
-        normaliser(manifeste["provider_pinned"]),
-        normaliser(manifeste["provider_expected"]),
-    }, "provider servi différent du lock")
+    routes_servables = (
+        manifeste["provider_routes"]
+        if manifeste.get("schema_version") == SCHEMA_EXECUTION_ROUTE_PROGRAM
+        else [{
+            "provider_pinned": manifeste["provider_pinned"],
+            "provider_expected": manifeste["provider_expected"],
+        }]
+    )
+    providers_attendus = {
+        normaliser(route[champ])
+        for route in routes_servables
+        for champ in ("provider_pinned", "provider_expected")
+    }
+    _exiger(normaliser(served["provider"]) in providers_attendus,
+            "provider servi différent du lock")
     candidate = collection.get("candidate")
     _exiger(isinstance(candidate, dict) and set(candidate) == {
         "sha256", "bytes", "kind", "truncated"
