@@ -222,9 +222,21 @@ class SerieIncrementaleTests(unittest.TestCase):
             },
         }
         self.assertEqual(
-            _projection_microdollars(budget, set(valeurs), 6), 6_525_060
+            _projection_microdollars(
+                budget, {alias: 6 for alias in valeurs}
+            ),
+            6_525_060,
         )
-        self.assertEqual(_projection_microdollars(budget, set(), 6), 0)
+        self.assertEqual(
+            _projection_microdollars(budget, {
+                "mimo-v2-5": 1,
+                "hy3": 5,
+                "kimi-k3-max": 6,
+                "muse-spark-1-2-max": 6,
+            }),
+            5_945_652,
+        )
+        self.assertEqual(_projection_microdollars(budget, {}), 0)
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ from protocole_v2 import (  # noqa: E402
     SCHEMA_EXECUTION_V3,
     SCHEMA_LOCK,
     SCHEMA_LOCK_CONTINUATION,
+    SCHEMA_LOCK_CONTINUATION_V5,
     SCHEMA_LOCK_HISTORIQUE,
     SCHEMA_LOCK_V3,
     SCHEMA_PANEL_EVENTS,
@@ -689,9 +690,9 @@ def tentative_complete(lock: dict, cellule: dict, collection: dict) -> dict:
 
 
 class ProtocolV2Tests(unittest.TestCase):
-    def test_lock_v5_separe_collecte_instrument_et_budget_global(self):
+    def _lock_continuation_fixture(self, schema: str) -> dict:
         lock = lock_minimal_v4()
-        lock["schema_version"] = SCHEMA_LOCK_CONTINUATION
+        lock["schema_version"] = schema
         lock["operation"] = "continuation_collection"
         lock["instrument_source"] = {
             "commit": "c" * 40,
@@ -710,11 +711,193 @@ class ProtocolV2Tests(unittest.TestCase):
             "approved_estimate_microdollars": 100_000,
             "approved_fallback_routes": [],
         }
+        if schema == SCHEMA_LOCK_CONTINUATION:
+            lock["failure_scope_policy"] = {
+                "version": "benchmark-lab-x/failure-scope/v1",
+            }
+        return lock
+
+    def test_lock_v6_separe_collecte_instrument_budget_et_portee_echec(self):
+        lock = self._lock_continuation_fixture(SCHEMA_LOCK_CONTINUATION)
         self.assertEqual(valider_lock(lock), lock)
         invalide = copy.deepcopy(lock)
         invalide["series_source"]["global_cap_microdollars"] += 1
         with self.assertRaises(ContratV2Invalide):
             valider_lock(invalide)
+
+    def test_lock_v5_historique_reste_valide_sans_politique_locale(self):
+        lock = self._lock_continuation_fixture(SCHEMA_LOCK_CONTINUATION_V5)
+        self.assertEqual(valider_lock(lock), lock)
+
+    def test_http_non_retryable_v6_bloque_route_sans_hold_global(self):
+        lock = self._lock_continuation_fixture(SCHEMA_LOCK_CONTINUATION)
+        lock_hash = empreinte_lock(lock)
+        cellule = lock["collections"][0]
+        meme_alias_en_vol = lock["collections"][1]
+        autre_alias = next(
+            item for item in lock["collections"] if item["alias"] != cellule["alias"]
+        )
+        receipt = {
+            "schema_version": SCHEMA_ATTEMPT,
+            "protocol_version": PROTOCOLE_VERSION,
+            "campaign_lock_hash": lock_hash,
+            "collection_id": cellule["collection_id"],
+            "attempt": 1,
+            "result": "FAILED_NON_RETRYABLE",
+            "cause_code": "HTTP_NON_RETRYABLE",
+            "execution_manifest_hash": cellule["execution_manifest_hash"],
+            "payload_hash": cellule["payload_hash"],
+            "http_response_received": True,
+            "candidate_artifact_accepted": False,
+            "cost_accounting": {
+                "status": "upper_bound",
+                "cost_microdollars": cellule["max_cost_microdollars"],
+                "reservation_id": f"{cellule['collection_id']}__a1",
+            },
+            "retry_after": None,
+        }
+        artefact_accepte = copy.deepcopy(receipt)
+        artefact_accepte["candidate_artifact_accepted"] = True
+        self.assertEqual(
+            decision_reprise(
+                artefact_accepte,
+                cellule,
+                lock_hash,
+                lock["attempts_max"],
+                "benchmark-lab-x/failure-scope/v1",
+            )["action"],
+            "hold",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            campagne = Path(tmp)
+            ledger = RegistreBudget(
+                campagne / "budget-ledger.json",
+                lock["budget"]["cap_microdollars"],
+                lock_hash,
+            )
+            ledger.reserver(
+                receipt["cost_accounting"]["reservation_id"],
+                cellule["max_cost_microdollars"],
+            )
+            arrete, reprise = lancer_campagne._traiter_resultat_v2(
+                campagne,
+                ledger,
+                lock,
+                lock_hash,
+                cellule,
+                {
+                    "collection_id": cellule["collection_id"],
+                    "attempt": 1,
+                    "reservation_id": receipt["cost_accounting"]["reservation_id"],
+                    "code": 5,
+                    "receipt": receipt,
+                    "error": "",
+                },
+                False,
+                {meme_alias_en_vol["collection_id"]},
+            )
+            self.assertFalse(arrete)
+            self.assertIsNone(reprise)
+            self.assertFalse((campagne / "operator-hold.json").exists())
+            self.assertFalse((
+                campagne / "collections" / meme_alias_en_vol["collection_id"]
+                / "collection-state.json"
+            ).exists())
+            self.assertFalse((
+                campagne / "collections" / autre_alias["collection_id"]
+                / "collection-state.json"
+            ).exists())
+            fermes = [
+                item for item in lock["collections"]
+                if item["alias"] == cellule["alias"]
+                and item["collection_id"] != meme_alias_en_vol["collection_id"]
+            ]
+            for item in fermes:
+                state = json.loads((
+                    campagne / "collections" / item["collection_id"]
+                    / "collection-state.json"
+                ).read_text(encoding="utf-8"))
+                self.assertEqual(state["state"], "INFRA_ERROR")
+                self.assertEqual(state["cause_code"], "PROVIDER_ROUTE_UNAVAILABLE")
+
+            reservation_en_vol = f"{meme_alias_en_vol['collection_id']}__a1"
+            ledger.reserver(
+                reservation_en_vol, meme_alias_en_vol["max_cost_microdollars"]
+            )
+            tentative_en_vol = copy.deepcopy(receipt)
+            tentative_en_vol.update({
+                "collection_id": meme_alias_en_vol["collection_id"],
+                "result": "FAILED_RETRYABLE",
+                "cause_code": "HTTP_503",
+                "execution_manifest_hash": meme_alias_en_vol[
+                    "execution_manifest_hash"
+                ],
+                "payload_hash": meme_alias_en_vol["payload_hash"],
+                "cost_accounting": {
+                    "status": "upper_bound",
+                    "cost_microdollars": meme_alias_en_vol["max_cost_microdollars"],
+                    "reservation_id": reservation_en_vol,
+                },
+            })
+            arrete, reprise = lancer_campagne._traiter_resultat_v2(
+                campagne,
+                ledger,
+                lock,
+                lock_hash,
+                meme_alias_en_vol,
+                {
+                    "collection_id": meme_alias_en_vol["collection_id"],
+                    "attempt": 1,
+                    "reservation_id": reservation_en_vol,
+                    "code": 5,
+                    "receipt": tentative_en_vol,
+                    "error": "",
+                },
+                False,
+                set(),
+            )
+            self.assertFalse(arrete)
+            self.assertIsNone(reprise)
+            state = json.loads((
+                campagne / "collections" / meme_alias_en_vol["collection_id"]
+                / "collection-state.json"
+            ).read_text(encoding="utf-8"))
+            self.assertEqual(state["cause_code"], "PROVIDER_ROUTE_UNAVAILABLE")
+
+    def test_marqueur_http_expurge_identifiants_fournisseur(self):
+        brut = json.dumps({
+            "error": {
+                "metadata": {
+                    "raw": json.dumps({
+                        "error": {"request_id": "request-fixture-secret"}
+                    })
+                }
+            },
+            "user_id": "user-fixture-secret",
+        })
+        expurge = collecteur.redact_http_body(brut)
+        self.assertNotIn("request-fixture-secret", expurge)
+        self.assertNotIn("user-fixture-secret", expurge)
+        self.assertIn("[REDACTED]", expurge)
+
+    def test_marqueur_http_expurge_json_doublement_encode_avec_prefixe(self):
+        imbrique = json.dumps({
+            "error": {
+                "request_id": "request-deep-fixture-secret",
+            }
+        })
+        brut = "http_400\n\n" + json.dumps({
+            "error": {
+                "metadata": {
+                    "raw": json.dumps({"details": imbrique}),
+                },
+            },
+            "user_id": "user-prefix-fixture-secret",
+        })
+        expurge = collecteur.redact_http_body(brut)
+        self.assertNotIn("request-deep-fixture-secret", expurge)
+        self.assertNotIn("user-prefix-fixture-secret", expurge)
+        self.assertGreaterEqual(expurge.count("[REDACTED]"), 2)
 
     def _preparer_collecte_simulee(self) -> dict:
         temporaire = tempfile.TemporaryDirectory()

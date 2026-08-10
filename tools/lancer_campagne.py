@@ -231,6 +231,52 @@ def _fermer_collecte_v2(
     )
 
 
+def _route_bloquee_v2(
+    racine: Path, lock: dict, lock_hash: str, cellule: dict
+) -> bool:
+    for autre in lock["collections"]:
+        if autre["alias"] != cellule["alias"]:
+            continue
+        etat = _etat_collecte_v2(
+            racine, autre["collection_id"], lock_hash, autre
+        )
+        if etat is not None and etat["cause_code"] == "PROVIDER_ROUTE_UNAVAILABLE":
+            return True
+    return False
+
+
+def _fermer_route_v2(
+    racine: Path,
+    lock: dict,
+    lock_hash: str,
+    cellule: dict,
+    tentative: int,
+    collections_en_vol: set[str],
+) -> None:
+    for autre in lock["collections"]:
+        collection_id = autre["collection_id"]
+        if autre["alias"] != cellule["alias"] or collection_id in collections_en_vol:
+            continue
+        if _collecte_complete_v2(racine, collection_id):
+            continue
+        if _etat_collecte_v2(racine, collection_id, lock_hash, autre) is not None:
+            continue
+        dernier = _dernier_recu_v2(racine, collection_id)
+        derniere_tentative = (
+            tentative
+            if collection_id == cellule["collection_id"]
+            else dernier.get("attempt") if dernier is not None else None
+        )
+        _fermer_collecte_v2(
+            racine,
+            lock_hash,
+            autre,
+            "INFRA_ERROR",
+            "PROVIDER_ROUTE_UNAVAILABLE",
+            derniere_tentative,
+        )
+
+
 def _poser_hold_v2(
     racine: Path,
     lock: dict,
@@ -429,6 +475,7 @@ def _traiter_resultat_v2(
     cellule: dict,
     resultat: dict,
     arrete: bool,
+    collections_en_vol: set[str] | None = None,
 ) -> tuple[bool, tuple[dict, int] | None]:
     receipt = resultat["receipt"]
     if receipt is None or receipt.get("schema_version") != SCHEMA_ATTEMPT:
@@ -475,9 +522,23 @@ def _traiter_resultat_v2(
         print(f"HOLD {cellule['collection_id']}: coût non opposable", file=sys.stderr)
         return True, None
     decision = decision_reprise(
-        receipt, cellule, lock_hash, lock["attempts_max"]
+        receipt,
+        cellule,
+        lock_hash,
+        lock["attempts_max"],
+        (lock.get("failure_scope_policy") or {}).get("version"),
     )
     if decision["action"] == "retry":
+        if _route_bloquee_v2(racine, lock, lock_hash, cellule):
+            _fermer_collecte_v2(
+                racine,
+                lock_hash,
+                cellule,
+                "INFRA_ERROR",
+                "PROVIDER_ROUTE_UNAVAILABLE",
+                int(receipt["attempt"]),
+            )
+            return arrete, None
         if not arrete:
             return False, (cellule, int(receipt["attempt"]) + 1)
     elif decision["action"] == "infra_error":
@@ -485,6 +546,20 @@ def _traiter_resultat_v2(
             racine, lock_hash, cellule, "INFRA_ERROR",
             "ATTEMPTS_EXHAUSTED", int(receipt["attempt"]),
         )
+    elif decision["action"] == "block_route":
+        _fermer_route_v2(
+            racine,
+            lock,
+            lock_hash,
+            cellule,
+            int(receipt["attempt"]),
+            collections_en_vol or set(),
+        )
+        print(
+            f"ROUTE BLOQUÉE {cellule['alias']}: {decision['reason']}",
+            file=sys.stderr,
+        )
+        return arrete, None
     elif decision["action"] == "hold":
         _poser_hold_v2(
             racine, lock, lock_hash, receipt["cause_code"],
@@ -574,7 +649,11 @@ def lancer_v2(args, conf: dict) -> int:
             continue
         try:
             decision = decision_reprise(
-                dernier, cellule, lock_hash, lock["attempts_max"]
+                dernier,
+                cellule,
+                lock_hash,
+                lock["attempts_max"],
+                (lock.get("failure_scope_policy") or {}).get("version"),
             )
         except ContratV2Invalide as exc:
             bloquants.append(f"{cid}: reçu de tentative invalide: {exc}")
@@ -585,6 +664,15 @@ def lancer_v2(args, conf: dict) -> int:
             _fermer_collecte_v2(
                 racine, lock_hash, cellule, "INFRA_ERROR", "ATTEMPTS_EXHAUSTED",
                 int(dernier["attempt"]),
+            )
+        elif decision["action"] == "block_route":
+            _fermer_route_v2(
+                racine,
+                lock,
+                lock_hash,
+                cellule,
+                int(dernier["attempt"]),
+                set(),
             )
         elif decision["action"] == "hold":
             bloquants.append(f"{cid}: {decision['reason']}")
@@ -638,6 +726,10 @@ def lancer_v2(args, conf: dict) -> int:
                 if index is None:
                     break
                 cellule, tentative = restants.pop(index)
+                if _etat_collecte_v2(
+                    racine, cellule["collection_id"], lock_hash, cellule
+                ) is not None:
+                    continue
                 reservation_id = f"{cellule['collection_id']}__a{tentative}"
                 try:
                     ledger.reserver(reservation_id, cellule["max_cost_microdollars"])
@@ -662,10 +754,29 @@ def lancer_v2(args, conf: dict) -> int:
                 cellule, tentative = futurs.pop(futur)
                 result = _resultat_futur_v2(futur, cellule, tentative)
                 arrete, reprise = _traiter_resultat_v2(
-                    racine, ledger, lock, lock_hash, cellule, result, arrete
+                    racine,
+                    ledger,
+                    lock,
+                    lock_hash,
+                    cellule,
+                    result,
+                    arrete,
+                    {
+                        actif["collection_id"]
+                        for actif, _ in futurs.values()
+                    },
                 )
                 if reprise is not None:
                     restants.append(reprise)
+                restants = [
+                    travail for travail in restants
+                    if _etat_collecte_v2(
+                        racine,
+                        travail[0]["collection_id"],
+                        lock_hash,
+                        travail[0],
+                    ) is None
+                ]
                 break
     state = ledger.etat()
     print(json.dumps({

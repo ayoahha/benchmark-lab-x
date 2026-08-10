@@ -27,7 +27,8 @@ PROTOCOLE_VERSION = "benchmark-lab-x/protocol/v2"
 SCHEMA_LOCK_V3 = "benchmark-lab-x/campaign-lock/v3"
 SCHEMA_EXECUTION_V3 = "benchmark-lab-x/execution-manifest/v3"
 SCHEMA_LOCK = "benchmark-lab-x/campaign-lock/v4"
-SCHEMA_LOCK_CONTINUATION = "benchmark-lab-x/campaign-lock/v5"
+SCHEMA_LOCK_CONTINUATION_V5 = "benchmark-lab-x/campaign-lock/v5"
+SCHEMA_LOCK_CONTINUATION = "benchmark-lab-x/campaign-lock/v6"
 SCHEMA_EXECUTION = "benchmark-lab-x/execution-manifest/v4"
 SCHEMA_ATTEMPT = "benchmark-lab-x/attempt-receipt/v3"
 SCHEMA_COLLECTION = "benchmark-lab-x/collection-receipt/v3"
@@ -42,6 +43,7 @@ SCHEMA_LEDGER = "benchmark-lab-x/budget-ledger/v2"
 SCHEMA_CONTEXT = "benchmark-lab-x/measurement-context/v3"
 SCHEMA_PAID_AUTH = "benchmark-lab-x/paid-authorization/v1"
 SCHEMA_ENVIRONMENT = "benchmark-lab-x/environment/v1"
+POLITIQUE_PORTEE_ECHEC = "benchmark-lab-x/failure-scope/v1"
 
 SCHEMA_LOCK_HISTORIQUE = "benchmark-lab-x/campaign-lock/v2"
 SCHEMA_EXECUTION_HISTORIQUE = "benchmark-lab-x/execution-manifest/v2"
@@ -97,7 +99,7 @@ CAUSES_TENTATIVE_NON_RETRYABLE = {
 }
 CAUSES_COLLECTE_TERMINALE = {
     "ATTEMPTS_EXHAUSTED", "ROUTE_INELIGIBLE",
-    "ABANDONED_AFTER_IDENTITY_MISMATCH",
+    "ABANDONED_AFTER_IDENTITY_MISMATCH", "PROVIDER_ROUTE_UNAVAILABLE",
 }
 CAUSES_HOLD_OPERATEUR = CAUSES_TENTATIVE_NON_RETRYABLE | {
     "IN_FLIGHT_UNRECONCILED", "RETRY_RECONCILIATION_FAILED",
@@ -557,7 +559,9 @@ def _git_lire(racine_depot: Path, arguments: list[str], motif: str) -> bytes:
 
 
 def _chemins_source_lock(lock: dict[str, Any]) -> list[str]:
-    continuation = lock.get("schema_version") == SCHEMA_LOCK_CONTINUATION
+    continuation = lock.get("schema_version") in {
+        SCHEMA_LOCK_CONTINUATION_V5, SCHEMA_LOCK_CONTINUATION,
+    }
     chemins = set(
         CHEMINS_SOURCE_COLLECTE if continuation else CHEMINS_SOURCE_RUNTIME
     )
@@ -576,7 +580,8 @@ def _chemins_source_lock(lock: dict[str, Any]) -> list[str]:
     objets_mesure = ([] if continuation else (
         lock.get("axes")
         if lock.get("schema_version") in {
-            SCHEMA_LOCK_V3, SCHEMA_LOCK, SCHEMA_LOCK_CONTINUATION
+            SCHEMA_LOCK_V3, SCHEMA_LOCK,
+            SCHEMA_LOCK_CONTINUATION_V5, SCHEMA_LOCK_CONTINUATION,
         }
         else lock.get("score_cards")
     )) or []
@@ -1425,7 +1430,10 @@ def _valider_axe_v3(
 def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict[str, Any]:
     """Valider les locks actifs sans accepter un lock historique v2"""
     schema_lock = lock.get("schema_version") if isinstance(lock, dict) else None
-    cible_v5 = schema_lock == SCHEMA_LOCK_CONTINUATION
+    cible_v6 = schema_lock == SCHEMA_LOCK_CONTINUATION
+    cible_continuation = schema_lock in {
+        SCHEMA_LOCK_CONTINUATION_V5, SCHEMA_LOCK_CONTINUATION,
+    }
     champs_lock = {
         "schema_version", "protocol_version", "campaign_id", "operation",
         "question", "created_at", "paid_authorization_required",
@@ -1433,13 +1441,19 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
         "runner", "quotas", "selection_policy", "task", "axes", "collections",
         "budget", "registry_source", "route_snapshot_source",
     }
-    if cible_v5:
+    if cible_continuation:
         champs_lock |= {"instrument_source", "series_source"}
+    if cible_v6:
+        champs_lock.add("failure_scope_policy")
     _exiger(isinstance(lock, dict) and set(lock) == champs_lock,
             "champs du campaign-lock différents du contrat fermé")
-    _exiger(schema_lock in {SCHEMA_LOCK_V3, SCHEMA_LOCK, SCHEMA_LOCK_CONTINUATION},
-            "campaign-lock/v3, v4 ou v5 absent")
-    cible_route_v3 = schema_lock in {SCHEMA_LOCK, SCHEMA_LOCK_CONTINUATION}
+    _exiger(schema_lock in {
+        SCHEMA_LOCK_V3, SCHEMA_LOCK,
+        SCHEMA_LOCK_CONTINUATION_V5, SCHEMA_LOCK_CONTINUATION,
+    }, "campaign-lock/v3, v4, v5 ou v6 absent")
+    cible_route_v3 = schema_lock in {
+        SCHEMA_LOCK, SCHEMA_LOCK_CONTINUATION_V5, SCHEMA_LOCK_CONTINUATION,
+    }
     _exiger(lock.get("protocol_version") == PROTOCOLE_VERSION, "protocole v2 absent")
     _exiger(lock.get("operation") in {
         "renotation", "reproduction", "new_collection", "longitudinal_comparison",
@@ -1447,9 +1461,16 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     }, "opération de campagne invalide")
     _exiger(
         lock["operation"]
-        == ("continuation_collection" if cible_v5 else "new_collection"),
+        == ("continuation_collection" if cible_continuation else "new_collection"),
         "opération différente du schéma de lock",
     )
+    if cible_v6:
+        politique = lock.get("failure_scope_policy")
+        _exiger(
+            isinstance(politique, dict)
+            and politique == {"version": POLITIQUE_PORTEE_ECHEC},
+            "politique de portée des échecs absente ou différente",
+        )
     for champ in ("campaign_id", "question", "created_at"):
         _exiger(isinstance(lock.get(champ), str) and lock[champ].strip(), f"{champ} absent")
     _exiger(lock.get("paid_authorization_required") is True,
@@ -1552,7 +1573,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     _exiger(isinstance(route_source.get("observed_at"), str) and route_source["observed_at"],
             "date du snapshot absente")
     if cible_route_v3:
-        if not cible_v5:
+        if not cible_continuation:
             _exiger(
                 route_source.get("budget_estimate_microdollars") == estimation
                 and route_source.get("budget_cap_microdollars") == cap,
@@ -1587,7 +1608,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     for index, axe in enumerate(axes):
         _valider_axe_v3(
             axe, index, runs, len(panel) * runs,
-            None if cible_v5 else racine_depot,
+            None if cible_continuation else racine_depot,
         )
     _exiger(tuple(axe["id"] for axe in axes) == AXES_PENTAGONE,
             "ordre des axes différent du contrat")
@@ -1603,7 +1624,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     snapshot_routes: dict[str, Any] | None = None
     prompt: str | None = None
     if racine_depot is not None:
-        if not cible_v5:
+        if not cible_continuation:
             registry_file = resoudre_sous(racine_depot, registry_path)
             _exiger(
                 registry_file.is_file()
@@ -1623,7 +1644,10 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
         snapshot_panel = snapshot.get("panel") if isinstance(snapshot, dict) else None
         panel_conforme = (
             isinstance(snapshot_panel, list)
-            and (set(panel) <= set(snapshot_panel) if cible_v5 else snapshot_panel == panel)
+            and (
+                set(panel) <= set(snapshot_panel)
+                if cible_continuation else snapshot_panel == panel
+            )
         )
         _exiger(isinstance(snapshot, dict)
                 and snapshot.get("schema_version") == route_source["schema_version"]
@@ -1819,7 +1843,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
             "quotas provider différents des routes")
     _exiger(concurrence <= sum(quotas["in_flight_by_backend"].values()),
             "concurrence supérieure aux quotas backend")
-    if cible_v5:
+    if cible_continuation:
         _valider_sources_continuation(lock, racine_depot)
     if racine_depot is not None:
         _verifier_source_depot(lock, racine_depot)
@@ -1860,6 +1884,7 @@ def decision_reprise(
     cellule: dict[str, Any],
     lock_hash: str,
     attempts_max: int = 3,
+    failure_scope_policy: str | None = None,
 ) -> dict[str, str]:
     """Décision fermée, sans lire le contenu de la réponse candidate"""
     valider_recu_tentative(attempt, cellule, lock_hash)
@@ -1867,6 +1892,15 @@ def decision_reprise(
     if attempt["result"] == "COMPLETE":
         return {"action": "complete", "reason": "artefact candidat accepté"}
     if attempt["result"] == "FAILED_NON_RETRYABLE":
+        if (
+            failure_scope_policy == POLITIQUE_PORTEE_ECHEC
+            and attempt["cause_code"] == "HTTP_NON_RETRYABLE"
+            and attempt["candidate_artifact_accepted"] is False
+        ):
+            return {
+                "action": "block_route",
+                "reason": "route fournisseur indisponible",
+            }
         return {"action": "hold", "reason": attempt["cause_code"]}
     if tentative >= attempts_max:
         return {"action": "infra_error", "reason": "tentatives épuisées"}

@@ -28,6 +28,7 @@ from choisir_provider import budget_de, editeur_canonique, est_editeur, evaluer,
 from empreintes import empreinte  # noqa: E402
 from protocole_v2 import (  # noqa: E402
     ContratV2Invalide,
+    POLITIQUE_PORTEE_ECHEC,
     SCHEMA_LOCK_CONTINUATION,
     charger_json,
     ecrire_json_immuable,
@@ -396,38 +397,49 @@ def _route_autorisee(
 
 
 def _projection_microdollars(
-    budget: dict[str, Any], aliases: set[str], runs_futurs: int
+    budget: dict[str, Any], slots_futurs: dict[str, int]
 ) -> int:
-    if not aliases:
+    if not slots_futurs:
         return 0
     par_alias = budget.get("by_alias")
-    _exiger(isinstance(par_alias, dict) and aliases <= set(par_alias), "base B0-09 incomplète")
-    base = sum(int(par_alias[alias]["repriced_microdollars"]) for alias in aliases)
-    runs_historiques = {int(par_alias[alias]["runs"]) for alias in aliases}
-    _exiger(len(runs_historiques) == 1, "nombre de runs historiques divergent")
+    _exiger(
+        isinstance(par_alias, dict) and set(slots_futurs) <= set(par_alias),
+        "base B0-09 incomplète",
+    )
+    base = Decimal(0)
+    for alias, nombre in slots_futurs.items():
+        _exiger(
+            isinstance(nombre, int) and not isinstance(nombre, bool) and nombre > 0,
+            f"nombre de slots invalide pour {alias}",
+        )
+        runs_historiques = int(par_alias[alias]["runs"])
+        _exiger(runs_historiques > 0, f"runs historiques absents pour {alias}")
+        base += (
+            Decimal(int(par_alias[alias]["repriced_microdollars"]))
+            * Decimal(nombre)
+            / Decimal(runs_historiques)
+        )
     historique_runs = int(budget["historical_runs"])
     prompts = int(budget["historical_provider_prompts"])
-    projection = (
-        Decimal(base)
-        * Decimal(runs_futurs)
-        / Decimal(runs_historiques.pop())
-        * Decimal(prompts)
-        / Decimal(historique_runs)
-    )
+    projection = base * Decimal(prompts) / Decimal(historique_runs)
     return int(projection.to_integral_value(rounding=ROUND_CEILING))
 
 
 def _projection_fallback(
-    budget: dict[str, Any], plans: dict[str, dict[str, Any]], runs_futurs: int
+    budget: dict[str, Any],
+    plans: dict[str, dict[str, Any]],
+    slots_futurs: dict[str, int],
 ) -> dict[str, Any]:
-    base_secondaire = 0
-    base_primaire = 0
+    base_secondaire = Decimal(0)
+    base_primaire = Decimal(0)
     aliases = []
     for alias, plan in plans.items():
         fallback = plan.get("fallback")
         if fallback is None:
             continue
         compteurs = budget["by_alias"][alias]
+        nombre = slots_futurs[alias]
+        runs_historiques = int(compteurs["runs"])
         prix = fallback["pricing"]
         cout = (
             _decimal_prix(prix["input_usd_per_million_tokens"], alias)
@@ -438,8 +450,12 @@ def _projection_fallback(
             * Decimal(1_000_000)
             * Decimal(compteurs["runs"])
         )
-        base_secondaire += int(cout.to_integral_value(rounding=ROUND_CEILING))
-        base_primaire += int(compteurs["repriced_microdollars"])
+        base_secondaire += cout * Decimal(nombre) / Decimal(runs_historiques)
+        base_primaire += (
+            Decimal(int(compteurs["repriced_microdollars"]))
+            * Decimal(nombre)
+            / Decimal(runs_historiques)
+        )
         aliases.append(alias)
     if not aliases:
         return {
@@ -449,11 +465,8 @@ def _projection_fallback(
             "delta_vs_primary_routes_microdollars": 0,
             "excludes_failed_primary_attempt_costs": True,
         }
-    runs_historiques = int(budget["by_alias"][aliases[0]]["runs"])
     facteur = (
-        Decimal(runs_futurs)
-        / Decimal(runs_historiques)
-        * Decimal(budget["historical_provider_prompts"])
+        Decimal(budget["historical_provider_prompts"])
         / Decimal(budget["historical_runs"])
     )
     projection_secondaire = int(
@@ -464,7 +477,7 @@ def _projection_fallback(
     )
     return {
         "aliases": sorted(aliases),
-        "slots": len(aliases) * runs_futurs,
+        "slots": sum(slots_futurs[alias] for alias in aliases),
         "secondary_route_projection_microdollars": projection_secondaire,
         "delta_vs_primary_routes_microdollars": projection_secondaire - projection_primaire,
         "excludes_failed_primary_attempt_costs": True,
@@ -627,9 +640,16 @@ def construire_serie(
     _exiger(manifest["costs"]["global_cap_remaining_microdollars"] >= 0, "plafond global déjà dépassé")
 
     pending_aliases = {slot["alias"] for slot in slots if slot["status"] == "pending"}
+    pending_slots_by_alias = {
+        alias: sum(
+            slot["status"] == "pending" and slot["alias"] == alias
+            for slot in slots
+        )
+        for alias in pending_aliases
+    }
     budget = snapshot.get("budget_reestimate")
     _exiger(isinstance(budget, dict), "base B0-09 absente du snapshot")
-    estimate = _projection_microdollars(budget, pending_aliases, reference_lock["runs"])
+    estimate = _projection_microdollars(budget, pending_slots_by_alias)
     continuation = {
         "schema_version": SCHEMA_BROUILLON_CONTINUATION,
         "series_id": series_id,
@@ -656,11 +676,14 @@ def construire_serie(
             "combined_projection_microdollars": engaged + estimate,
             "global_cap_microdollars": global_cap_microdollars,
             "continuation_cap_max_microdollars": global_cap_microdollars - engaged,
-            "formula": "ceil(sum(repriced_pending_4_runs) * 6/4 * 83/76)",
+            "formula": (
+                "ceil(sum(repriced_alias_4_runs * pending_slots_alias / 4) "
+                "* 83/76)"
+            ),
             "fallback_pricing_scenario": _projection_fallback(
                 budget,
                 {alias: plans[alias] for alias in pending_aliases},
-                reference_lock["runs"],
+                pending_slots_by_alias,
             ),
         },
         "gates": {
@@ -767,6 +790,7 @@ def construire_lock_continuation(
     lock = {
         "schema_version": SCHEMA_LOCK_CONTINUATION,
         "protocol_version": reference_lock["protocol_version"],
+        "failure_scope_policy": {"version": POLITIQUE_PORTEE_ECHEC},
         "campaign_id": campaign_id,
         "operation": "continuation_collection",
         "question": (
@@ -910,7 +934,7 @@ def main() -> int:
             continuation,
         )
         valider_lock(lock, RACINE)
-        lock_path = args.out_dir / "campaign.lock.v5.json"
+        lock_path = args.out_dir / "campaign.lock.v6.json"
         ecrire_json_immuable(lock_path, lock)
         continuation["campaign_lock"] = {
             "path": _relatif_depot(lock_path),

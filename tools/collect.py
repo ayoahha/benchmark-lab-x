@@ -202,8 +202,7 @@ def assemble_prompt(task_dir: Path) -> tuple[str, dict[str, str], list[str]]:
     return "\n".join(parts), inputs, warnings
 
 
-def redact_http_body(text: str) -> str:
-    """Strip Authorization-like secrets from an error body before disk write"""
+def _redact_tokens(text: str) -> str:
     redacted = re.sub(
         r"(?i)(authorization\s*[:=]\s*bearer\s+)\S+",
         r"\1[REDACTED]",
@@ -214,9 +213,61 @@ def redact_http_body(text: str) -> str:
         r"\1[REDACTED]",
         redacted,
     )
-    # OpenRouter sk-or-... style tokens if they leaked into the body
     redacted = re.sub(r"\bsk-[a-zA-Z0-9_-]{8,}\b", "[REDACTED]", redacted)
+    redacted = re.sub(
+        r"(?i)((?:\\*[\"'])?(?:request_id|user_id)(?:\\*[\"'])?"
+        r"\s*:\s*(?:\\*[\"'])?)([^\s,\"'\\}\]]+)",
+        lambda match: f"{match.group(1)}[REDACTED]",
+        redacted,
+    )
     return redacted
+
+
+def _redact_diagnostic_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: (
+                "[REDACTED]"
+                if key.lower() in {"request_id", "user_id"}
+                else _redact_diagnostic_value(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_diagnostic_value(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    redacted = _redact_tokens(value)
+    stripped = redacted.strip()
+    if not stripped.startswith(("{", "[")):
+        return redacted
+    try:
+        nested = json.loads(stripped)
+    except json.JSONDecodeError:
+        return redacted
+    if not isinstance(nested, (dict, list)):
+        return redacted
+    return json.dumps(
+        _redact_diagnostic_value(nested),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def redact_http_body(text: str) -> str:
+    """Expurger secrets et identifiants techniques avant écriture"""
+    redacted = _redact_tokens(text)
+    try:
+        parsed = json.loads(redacted)
+    except json.JSONDecodeError:
+        return redacted
+    return json.dumps(
+        _redact_diagnostic_value(parsed),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def normalize_cost_usd(usage: Any) -> float | None:
