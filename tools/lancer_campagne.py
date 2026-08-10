@@ -417,15 +417,6 @@ def _collecter_v2(
     cellule: dict,
     tentative: int,
 ) -> dict:
-    dernier = _dernier_recu_v2(racine, cellule["collection_id"])
-    if tentative > 1 and dernier:
-        retry_after = dernier.get("retry_after")
-        try:
-            pause = max(0.0, float(retry_after)) if retry_after is not None else 0.0
-        except (TypeError, ValueError):
-            pause = 0.0
-        if pause:
-            time.sleep(pause)
     reservation_id = f"{cellule['collection_id']}__a{tentative}"
     cmd = [
         "uv", "run", str(COLLECT),
@@ -451,6 +442,37 @@ def _collecter_v2(
         "receipt": receipt,
         "error": out.stderr.strip(),
     }
+
+
+def _enregistrer_cooldown_alias_v2(
+    cooldowns: dict[str, float],
+    cellule: dict,
+    receipt: dict,
+    maintenant: float,
+) -> None:
+    if receipt.get("cause_code") not in {"HTTP_429", "HTTP_503"}:
+        return
+    try:
+        delai = float(receipt.get("retry_after"))
+    except (TypeError, ValueError):
+        return
+    if delai <= 0:
+        return
+    alias = cellule["alias"]
+    cooldowns[alias] = max(cooldowns.get(alias, maintenant), maintenant + delai)
+
+
+def _alias_admissible_v2(
+    cellule: dict,
+    actifs: list[dict],
+    cooldowns: dict[str, float],
+    maintenant: float,
+) -> bool:
+    alias = cellule["alias"]
+    return (
+        all(actif["alias"] != alias for actif in actifs)
+        and cooldowns.get(alias, 0.0) <= maintenant
+    )
 
 
 def _resultat_futur_v2(futur, cellule: dict, tentative: int) -> dict:
@@ -690,6 +712,7 @@ def lancer_v2(args, conf: dict) -> int:
     arrete = False
     quota_epuise = False
     plafond_atteint = False
+    cooldowns_alias: dict[str, float] = {}
     tentatives_soumises = sum(
         len(_tentatives_v2(racine, cellule["collection_id"]))
         for cellule in lock["collections"]
@@ -707,7 +730,10 @@ def lancer_v2(args, conf: dict) -> int:
             c["execution_manifest"]["provider_pinned"] == provider for c in actifs
         )
         return (
-            actifs_backend < lock["quotas"]["in_flight_by_backend"][backend]
+            _alias_admissible_v2(
+                cellule, actifs, cooldowns_alias, time.monotonic()
+            )
+            and actifs_backend < lock["quotas"]["in_flight_by_backend"][backend]
             and actifs_provider < lock["quotas"]["in_flight_by_provider"][provider]
         )
 
@@ -749,6 +775,14 @@ def lancer_v2(args, conf: dict) -> int:
                 futurs[futur] = (cellule, tentative)
                 tentatives_soumises += 1
             if not futurs:
+                attentes = [
+                    cooldowns_alias.get(cellule["alias"], 0.0) - time.monotonic()
+                    for cellule, _ in restants
+                ]
+                attentes = [attente for attente in attentes if attente > 0]
+                if attentes and not arrete:
+                    time.sleep(min(attentes))
+                    continue
                 break
             for futur in as_completed(list(futurs)):
                 cellule, tentative = futurs.pop(futur)
@@ -767,6 +801,12 @@ def lancer_v2(args, conf: dict) -> int:
                     },
                 )
                 if reprise is not None:
+                    _enregistrer_cooldown_alias_v2(
+                        cooldowns_alias,
+                        cellule,
+                        result["receipt"],
+                        time.monotonic(),
+                    )
                     restants.append(reprise)
                 restants = [
                     travail for travail in restants

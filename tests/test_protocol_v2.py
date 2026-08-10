@@ -1580,6 +1580,12 @@ class ProtocolV2Tests(unittest.TestCase):
                 self.assertEqual(tentative["result"], "FAILED_RETRYABLE")
                 self.assertEqual(tentative["cause_code"], cause)
                 self.assertFalse(tentative["candidate_artifact_accepted"])
+                if status == 429:
+                    self.assertEqual(tentative["cost_accounting"], {
+                        "status": "known",
+                        "cost_microdollars": 0,
+                        "reservation_id": f"{fixture['cell']['collection_id']}__a1",
+                    })
 
         fixture = self._preparer_collecte_simulee()
         code, post = self._appeler_collecteur_simule(
@@ -1891,6 +1897,31 @@ class ProtocolV2Tests(unittest.TestCase):
         self.assertEqual(
             decision_reprise(epuise, cellule, lock_hash)["action"], "infra_error"
         )
+
+    def test_429_suspend_tout_l_alias_sans_bloquer_les_autres(self):
+        lock = lock_minimal()
+        cellule = lock["collections"][0]
+        meme_alias = lock["collections"][1]
+        autre_alias = next(
+            candidate for candidate in lock["collections"]
+            if candidate["alias"] != cellule["alias"]
+        )
+        cooldowns = {}
+        lancer_campagne._enregistrer_cooldown_alias_v2(
+            cooldowns,
+            cellule,
+            {"cause_code": "HTTP_429", "retry_after": "60"},
+            100.0,
+        )
+        self.assertFalse(lancer_campagne._alias_admissible_v2(
+            meme_alias, [cellule], cooldowns, 159.9
+        ))
+        self.assertTrue(lancer_campagne._alias_admissible_v2(
+            autre_alias, [cellule], cooldowns, 100.0
+        ))
+        self.assertTrue(lancer_campagne._alias_admissible_v2(
+            meme_alias, [], cooldowns, 160.0
+        ))
 
     def test_corps_vide_epuise_ferme_la_cellule_sans_hold_global(self):
         lock = lock_minimal()

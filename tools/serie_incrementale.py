@@ -37,12 +37,22 @@ from protocole_v2 import (  # noqa: E402
     sha256_octets,
     valider_chaine_collecte,
     valider_lock,
+    valider_recu_tentative,
 )
 
 
 SCHEMA_SERIE = "benchmark-lab-x/acquisition-inventory/v1"
 SCHEMA_BROUILLON_CONTINUATION = "benchmark-lab-x/continuation-draft/v1"
 POLITIQUE_FALLBACK = "benchmark-lab-x/fallback-route/v1"
+POLITIQUE_FACTURATION_ECHEC = "openrouter/failed-attempt-unbilled/v1"
+PREUVE_FACTURATION_ECHEC = {
+    "url": "https://openrouter.ai/pricing",
+    "observed_at": "2026-08-10",
+    "statement": (
+        "No. When routing/fallback is enabled, you're billed only for the "
+        "successful model run."
+    ),
+}
 
 
 def _exiger(condition: bool, message: str) -> None:
@@ -350,20 +360,83 @@ def _preuve_acquisition(
     }
 
 
-def _ledger_engage(campaign_dir: Path, lock_hash: str) -> int:
+def _comptabilite_ledger_v2(
+    campaign_dir: Path, lock: dict[str, Any], lock_hash: str
+) -> dict[str, Any]:
     ledger_path = campaign_dir / "budget-ledger.json"
     _exiger(ledger_path.is_file() and not ledger_path.is_symlink(), f"ledger absent: {campaign_dir}")
     ledger = charger_json(ledger_path)
     _exiger(ledger.get("campaign_lock_hash") == lock_hash, f"ledger lié à un autre lock: {campaign_dir}")
     reservations = ledger.get("reservations")
     _exiger(isinstance(reservations, dict), f"réservations absentes: {campaign_dir}")
-    engaged = sum(
+    recorded = sum(
         int(reservation["cost_microdollars"])
         for reservation in reservations.values()
         if reservation.get("status") == "finalized"
     )
-    _exiger(engaged == ledger.get("engaged_microdollars"), f"total engagé incohérent: {campaign_dir}")
-    return engaged
+    _exiger(recorded == ledger.get("engaged_microdollars"), f"total engagé incohérent: {campaign_dir}")
+    cellules = {cellule["collection_id"]: cellule for cellule in lock["collections"]}
+    recus: dict[str, tuple[Path, dict[str, Any]]] = {}
+    for path in sorted((campaign_dir / "collections").glob("*/attempt-*/attempt-receipt.json")):
+        receipt = charger_json(path)
+        accounting = receipt.get("cost_accounting") or {}
+        reservation_id = accounting.get("reservation_id")
+        if reservation_id not in reservations:
+            continue
+        cellule = cellules.get(receipt.get("collection_id"))
+        _exiger(cellule is not None, f"reçu budgétaire sans cellule: {path}")
+        valider_recu_tentative(receipt, cellule, lock_hash)
+        _exiger(reservation_id not in recus, f"reçu budgétaire dupliqué: {reservation_id}")
+        recus[reservation_id] = (path, receipt)
+
+    adjustments = []
+    for reservation_id, reservation in sorted(reservations.items()):
+        if reservation.get("status") != "finalized":
+            continue
+        preuve = recus.get(reservation_id)
+        if preuve is None:
+            continue
+        path, receipt = preuve
+        cellule = cellules[receipt["collection_id"]]
+        manifeste = cellule["execution_manifest"]
+        routage = manifeste.get("request_parameters", {}).get("provider")
+        accounting = receipt["cost_accounting"]
+        if not (
+            manifeste.get("backend") == "openrouter"
+            and isinstance(routage, dict)
+            and receipt.get("result") == "FAILED_RETRYABLE"
+            and receipt.get("cause_code") == "HTTP_429"
+            and receipt.get("http_response_received") is True
+            and receipt.get("candidate_artifact_accepted") is False
+            and accounting.get("status") == "upper_bound"
+        ):
+            continue
+        cout = int(reservation["cost_microdollars"])
+        _exiger(
+            cout == accounting["cost_microdollars"] == reservation["max_microdollars"],
+            f"borne 429 incohérente: {reservation_id}",
+        )
+        adjustments.append({
+            "reservation_id": reservation_id,
+            "attempt_receipt_path": path.relative_to(campaign_dir).as_posix(),
+            "attempt_receipt_sha256": sha256_fichier(path),
+            "recorded_microdollars": cout,
+            "reconciled_microdollars": 0,
+            "cause_code": "HTTP_429",
+        })
+    reconciled = sum(item["recorded_microdollars"] for item in adjustments)
+    preuve = copy.deepcopy(PREUVE_FACTURATION_ECHEC)
+    preuve["statement_sha256"] = sha256_octets(
+        preuve["statement"].encode("utf-8")
+    )
+    return {
+        "policy_version": POLITIQUE_FACTURATION_ECHEC,
+        "authority": preuve,
+        "recorded_microdollars": recorded,
+        "reconciled_microdollars": reconciled,
+        "engaged_microdollars": recorded - reconciled,
+        "adjustments": adjustments,
+    }
 
 
 def _acquisitions_campagne(campaign_dir: Path) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
@@ -373,6 +446,7 @@ def _acquisitions_campagne(campaign_dir: Path) -> tuple[dict[str, dict[str, Any]
         preuve = _preuve_acquisition(campaign_dir, lock_path, lock, lock_hash, cellule)
         if preuve is not None:
             acquis[cellule["collection_id"]] = {"cell": cellule, "proof": preuve}
+    accounting = _comptabilite_ledger_v2(campaign_dir, lock, lock_hash)
     source = {
         "campaign_id": lock["campaign_id"],
         "path": _relatif_depot(campaign_dir),
@@ -380,7 +454,14 @@ def _acquisitions_campagne(campaign_dir: Path) -> tuple[dict[str, dict[str, Any]
         "lock_sha256": sha256_fichier(lock_path),
         "campaign_lock_hash": lock_hash,
         "acquisitions": len(acquis),
-        "engaged_microdollars": _ledger_engage(campaign_dir, lock_hash),
+        "engaged_microdollars": accounting["engaged_microdollars"],
+        "ledger_recorded_microdollars": accounting["recorded_microdollars"],
+        "billing_reconciliation": {
+            "policy_version": accounting["policy_version"],
+            "authority": accounting["authority"],
+            "reconciled_microdollars": accounting["reconciled_microdollars"],
+            "adjustments": accounting["adjustments"],
+        },
     }
     return acquis, source
 
@@ -589,6 +670,11 @@ def construire_serie(
         for slot in slots if slot["acquisition"] is not None
     )
     engaged = sum(source["engaged_microdollars"] for source in sources)
+    recorded = sum(source["ledger_recorded_microdollars"] for source in sources)
+    reconciled = sum(
+        source["billing_reconciliation"]["reconciled_microdollars"]
+        for source in sources
+    )
 
     manifest = {
         "schema_version": SCHEMA_SERIE,
@@ -631,6 +717,8 @@ def construire_serie(
         },
         "costs": {
             "accepted_acquisitions_microdollars": accepted_cost,
+            "source_ledger_recorded_microdollars": recorded,
+            "source_billing_reconciled_microdollars": reconciled,
             "source_ledger_engaged_microdollars": engaged,
             "source_non_acquisition_microdollars": engaged - accepted_cost,
             "global_cap_microdollars": global_cap_microdollars,

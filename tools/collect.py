@@ -420,11 +420,15 @@ def _recu_tentative(
         etat = "FAILED_RETRYABLE"
     else:
         etat = "FAILED_NON_RETRYABLE"
-    statut_cout = "known" if cout is not None else "upper_bound"
-    if cout is None:
-        cout = V2_ATTEMPT_CONTEXT["max_cost_microdollars"]
     http_recu = bool(V2_ATTEMPT_CONTEXT.get("http_response_received"))
     artefact_accepte = bool(V2_ATTEMPT_CONTEXT.get("candidate_artifact_accepted"))
+    if cause == "HTTP_429" and http_recu and not artefact_accepte:
+        statut_cout = "known"
+        cout = 0
+    else:
+        statut_cout = "known" if cout is not None else "upper_bound"
+        if cout is None:
+            cout = V2_ATTEMPT_CONTEXT["max_cost_microdollars"]
     receipt = {
         "schema_version": SCHEMA_ATTEMPT,
         "protocol_version": PROTOCOLE_V2,
