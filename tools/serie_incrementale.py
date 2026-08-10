@@ -404,8 +404,12 @@ def _comptabilite_ledger_v2(
         if not (
             manifeste.get("backend") == "openrouter"
             and isinstance(routage, dict)
-            and receipt.get("result") == "FAILED_RETRYABLE"
-            and receipt.get("cause_code") == "HTTP_429"
+            and (
+                receipt.get("result") == "FAILED_RETRYABLE"
+                and receipt.get("cause_code") == "HTTP_429"
+                or receipt.get("result") == "FAILED_NON_RETRYABLE"
+                and receipt.get("cause_code") == "API_ERROR"
+            )
             and receipt.get("http_response_received") is True
             and receipt.get("candidate_artifact_accepted") is False
             and accounting.get("status") == "upper_bound"
@@ -422,7 +426,7 @@ def _comptabilite_ledger_v2(
             "attempt_receipt_sha256": sha256_fichier(path),
             "recorded_microdollars": cout,
             "reconciled_microdollars": 0,
-            "cause_code": "HTTP_429",
+            "cause_code": receipt["cause_code"],
         })
     reconciled = sum(item["recorded_microdollars"] for item in adjustments)
     preuve = copy.deepcopy(PREUVE_FACTURATION_ECHEC)

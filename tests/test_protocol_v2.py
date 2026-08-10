@@ -802,6 +802,18 @@ class ProtocolV2Tests(unittest.TestCase):
             )["action"],
             "hold",
         )
+        api_error = copy.deepcopy(receipt)
+        api_error["cause_code"] = "API_ERROR"
+        self.assertEqual(
+            decision_reprise(
+                api_error,
+                cellule,
+                lock_hash,
+                lock["attempts_max"],
+                "benchmark-lab-x/failure-scope/v1",
+            )["action"],
+            "block_route",
+        )
         with tempfile.TemporaryDirectory() as tmp:
             campagne = Path(tmp)
             ledger = RegistreBudget(
@@ -1586,6 +1598,25 @@ class ProtocolV2Tests(unittest.TestCase):
                         "cost_microdollars": 0,
                         "reservation_id": f"{fixture['cell']['collection_id']}__a1",
                     })
+
+        fixture = self._preparer_collecte_simulee()
+        code, post = self._appeler_collecteur_simule(
+            fixture,
+            ReponseHTTPFixture(
+                200,
+                {"error": {"code": 502, "message": "Network connection lost."}},
+            ),
+        )
+        self.assertEqual(code, collecteur.EXIT_API_ERROR)
+        self.assertEqual(post.call_count, 1)
+        tentative = charger_json(fixture["attempt_dir"] / "attempt-receipt.json")
+        self.assertEqual(tentative["result"], "FAILED_RETRYABLE")
+        self.assertEqual(tentative["cause_code"], "HTTP_502")
+        self.assertEqual(tentative["cost_accounting"]["cost_microdollars"], 0)
+        self.assertEqual(
+            decision_reprise(tentative, fixture["cell"], fixture["lock_hash"])["action"],
+            "retry",
+        )
 
         fixture = self._preparer_collecte_simulee()
         code, post = self._appeler_collecteur_simule(

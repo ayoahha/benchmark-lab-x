@@ -450,7 +450,7 @@ def _enregistrer_cooldown_alias_v2(
     receipt: dict,
     maintenant: float,
 ) -> None:
-    if receipt.get("cause_code") not in {"HTTP_429", "HTTP_503"}:
+    if receipt.get("cause_code") not in {"HTTP_429", "HTTP_502", "HTTP_503"}:
         return
     try:
         delai = float(receipt.get("retry_after"))

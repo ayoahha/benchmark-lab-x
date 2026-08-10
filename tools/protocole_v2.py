@@ -87,7 +87,8 @@ ETATS_TENTATIVE = {"COMPLETE", "FAILED_RETRYABLE", "FAILED_NON_RETRYABLE"}
 ETATS_COLLECTE = {"COLLECTED", "INELIGIBLE", "INFRA_ERROR", "MISSING"}
 ETATS_SCORE = {"SCORED", "UNKNOWN", "INELIGIBLE", "INFRA_ERROR", "MISSING"}
 CAUSES_REPRISE = {
-    "HTTP_429", "HTTP_503", "TRANSPORT_NO_HTTP_RESPONSE", "EMPTY_HTTP_BODY",
+    "HTTP_429", "HTTP_502", "HTTP_503", "TRANSPORT_NO_HTTP_RESPONSE",
+    "EMPTY_HTTP_BODY",
 }
 # EMPTY_HTTP_BODY reste admis ici pour valider les reçus historiques immuables
 CAUSES_TENTATIVE_NON_RETRYABLE = {
@@ -1940,7 +1941,7 @@ def decision_reprise(
     if attempt["result"] == "FAILED_NON_RETRYABLE":
         if (
             failure_scope_policy == POLITIQUE_PORTEE_ECHEC
-            and attempt["cause_code"] == "HTTP_NON_RETRYABLE"
+            and attempt["cause_code"] in {"HTTP_NON_RETRYABLE", "API_ERROR"}
             and attempt["candidate_artifact_accepted"] is False
         ):
             return {
@@ -2003,7 +2004,7 @@ def valider_recu_tentative(
     if cause == "TRANSPORT_NO_HTTP_RESPONSE":
         _exiger(attempt["http_response_received"] is False,
                 "absence HTTP contradictoire")
-    if cause in {"HTTP_429", "HTTP_503"}:
+    if cause in {"HTTP_429", "HTTP_502", "HTTP_503"}:
         _exiger(attempt["http_response_received"] is True,
                 "réponse HTTP attendue pour 429 ou 503")
     if cause == "ROUTE_MISMATCH":

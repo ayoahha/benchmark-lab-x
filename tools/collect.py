@@ -394,6 +394,7 @@ def _recu_tentative(
     cause = {
         "http_transport": "TRANSPORT_NO_HTTP_RESPONSE",
         "http_429": "HTTP_429",
+        "http_502": "HTTP_502",
         "http_503": "HTTP_503",
         "lock_parameter_mismatch": "LOCK_PARAMETER_MISMATCH",
         "lock_payload_mismatch": "LOCK_PAYLOAD_MISMATCH",
@@ -422,7 +423,7 @@ def _recu_tentative(
         etat = "FAILED_NON_RETRYABLE"
     http_recu = bool(V2_ATTEMPT_CONTEXT.get("http_response_received"))
     artefact_accepte = bool(V2_ATTEMPT_CONTEXT.get("candidate_artifact_accepted"))
-    if cause == "HTTP_429" and http_recu and not artefact_accepte:
+    if cause in {"HTTP_429", "HTTP_502", "API_ERROR"} and http_recu and not artefact_accepte:
         statut_cout = "known"
         cout = 0
     else:
@@ -1105,9 +1106,18 @@ def main() -> None:
 
     if isinstance(data, dict) and data.get("error"):
         err = data["error"]
+        code_erreur = err.get("code") if isinstance(err, dict) else None
+        try:
+            code_erreur = int(code_erreur)
+        except (TypeError, ValueError):
+            code_erreur = None
+        raison = f"http_{code_erreur}" if code_erreur in {429, 502, 503} else "api_error"
+        if lock_v2 and code_erreur in {429, 502, 503}:
+            retry_after = resp.headers.get("Retry-After")
+            V2_ATTEMPT_CONTEXT["retry_after"] = retry_after if retry_after else None
         # Never dump secrets; serialize error object only
         detail = redact_http_body(json.dumps(err, ensure_ascii=False, indent=2))
-        cleanup_or_fail(out, "api_error", detail)
+        cleanup_or_fail(out, raison, detail)
         die(EXIT_API_ERROR, "API returned error object (see FAILED receipt)")
 
     model_served = data.get("model") if isinstance(data.get("model"), str) else None
