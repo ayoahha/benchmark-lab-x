@@ -408,7 +408,7 @@ def _comptabilite_ledger_v2(
                 receipt.get("result") == "FAILED_RETRYABLE"
                 and receipt.get("cause_code") == "HTTP_429"
                 or receipt.get("result") == "FAILED_NON_RETRYABLE"
-                and receipt.get("cause_code") == "API_ERROR"
+                and receipt.get("cause_code") in {"HTTP_NON_RETRYABLE", "API_ERROR"}
             )
             and receipt.get("http_response_received") is True
             and receipt.get("candidate_artifact_accepted") is False

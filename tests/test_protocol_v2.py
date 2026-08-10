@@ -1620,6 +1620,20 @@ class ProtocolV2Tests(unittest.TestCase):
 
         fixture = self._preparer_collecte_simulee()
         code, post = self._appeler_collecteur_simule(
+            fixture, ReponseHTTPFixture(400, text="route fournisseur absente")
+        )
+        self.assertEqual(code, collecteur.EXIT_HTTP)
+        self.assertEqual(post.call_count, 1)
+        tentative = charger_json(fixture["attempt_dir"] / "attempt-receipt.json")
+        self.assertEqual(tentative["cause_code"], "HTTP_NON_RETRYABLE")
+        self.assertEqual(tentative["cost_accounting"], {
+            "status": "known",
+            "cost_microdollars": 0,
+            "reservation_id": f"{fixture['cell']['collection_id']}__a1",
+        })
+
+        fixture = self._preparer_collecte_simulee()
+        code, post = self._appeler_collecteur_simule(
             fixture, ReponseHTTPFixture(200, text="")
         )
         self.assertEqual(code, collecteur.EXIT_VALIDATION)

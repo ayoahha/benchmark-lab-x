@@ -423,7 +423,11 @@ def _recu_tentative(
         etat = "FAILED_NON_RETRYABLE"
     http_recu = bool(V2_ATTEMPT_CONTEXT.get("http_response_received"))
     artefact_accepte = bool(V2_ATTEMPT_CONTEXT.get("candidate_artifact_accepted"))
-    if cause in {"HTTP_429", "HTTP_502", "API_ERROR"} and http_recu and not artefact_accepte:
+    if (
+        cause in {"HTTP_429", "HTTP_502", "HTTP_NON_RETRYABLE", "API_ERROR"}
+        and http_recu
+        and not artefact_accepte
+    ):
         statut_cout = "known"
         cout = 0
     else:
