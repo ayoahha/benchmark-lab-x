@@ -237,8 +237,8 @@ provider = "gmicloud"
 
 # Kimi K3 sur routes alternatives, ajoutées le 2026-08-05. La route Morph rend
 # 429 « temporarily rate-limited upstream » sur douze tentatives consécutives.
-# Sous R-003 et R-004 une route différente est un candidat différent : ces
-# alias ne se comparent pas à `kimi-k3` sur Morph, ils s'ajoutent au tableau
+# Sous R-003 une autre route reste visible. Elle rejoint la même série seulement
+# si révision, quantification, paramètres, contexte et politique sont identiques
 
 # BaseTen impose top_p : « Cannot override enforced sampling params »
 

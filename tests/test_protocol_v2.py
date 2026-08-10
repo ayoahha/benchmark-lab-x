@@ -36,6 +36,7 @@ from protocole_v2 import (  # noqa: E402
     SCHEMA_EXECUTION,
     SCHEMA_EXECUTION_V3,
     SCHEMA_LOCK,
+    SCHEMA_LOCK_CONTINUATION,
     SCHEMA_LOCK_HISTORIQUE,
     SCHEMA_LOCK_V3,
     SCHEMA_PANEL_EVENTS,
@@ -688,6 +689,33 @@ def tentative_complete(lock: dict, cellule: dict, collection: dict) -> dict:
 
 
 class ProtocolV2Tests(unittest.TestCase):
+    def test_lock_v5_separe_collecte_instrument_et_budget_global(self):
+        lock = lock_minimal_v4()
+        lock["schema_version"] = SCHEMA_LOCK_CONTINUATION
+        lock["operation"] = "continuation_collection"
+        lock["instrument_source"] = {
+            "commit": "c" * 40,
+            "reference_lock_path": "runs/reference/campaign.lock.v4.json",
+            "reference_lock_sha256": "d" * 64,
+            "reference_campaign_lock_hash": "e" * 64,
+        }
+        lock["series_source"] = {
+            "series_id": "pentagone-v0",
+            "inventory_path": "runs/continuation/series-manifest.v1.json",
+            "inventory_sha256": "f" * 64,
+            "inventory_hash": "a" * 64,
+            "global_cap_microdollars": 1_500_000,
+            "source_ledger_engaged_microdollars": 500_000,
+            "continuation_cap_microdollars": 1_000_000,
+            "approved_estimate_microdollars": 100_000,
+            "approved_fallback_routes": [],
+        }
+        self.assertEqual(valider_lock(lock), lock)
+        invalide = copy.deepcopy(lock)
+        invalide["series_source"]["global_cap_microdollars"] += 1
+        with self.assertRaises(ContratV2Invalide):
+            valider_lock(invalide)
+
     def _preparer_collecte_simulee(self) -> dict:
         temporaire = tempfile.TemporaryDirectory()
         self.addCleanup(temporaire.cleanup)
@@ -1338,6 +1366,22 @@ class ProtocolV2Tests(unittest.TestCase):
 
         fixture = self._preparer_collecte_simulee()
         code, post = self._appeler_collecteur_simule(
+            fixture, ReponseHTTPFixture(200, text="")
+        )
+        self.assertEqual(code, collecteur.EXIT_VALIDATION)
+        self.assertEqual(post.call_args.kwargs["data"], fixture["payload"])
+        tentative = charger_json(fixture["attempt_dir"] / "attempt-receipt.json")
+        self.assertEqual(tentative["result"], "FAILED_RETRYABLE")
+        self.assertEqual(tentative["cause_code"], "EMPTY_HTTP_BODY")
+        self.assertTrue(tentative["http_response_received"])
+        self.assertFalse(tentative["candidate_artifact_accepted"])
+        self.assertEqual(
+            decision_reprise(tentative, fixture["cell"], fixture["lock_hash"])["action"],
+            "retry",
+        )
+
+        fixture = self._preparer_collecte_simulee()
+        code, post = self._appeler_collecteur_simule(
             fixture, collecteur.requests.Timeout("aucune réponse HTTP")
         )
         self.assertEqual(code, collecteur.EXIT_HTTP)
@@ -1631,6 +1675,64 @@ class ProtocolV2Tests(unittest.TestCase):
             decision_reprise(epuise, cellule, lock_hash)["action"], "infra_error"
         )
 
+    def test_corps_vide_epuise_ferme_la_cellule_sans_hold_global(self):
+        lock = lock_minimal()
+        lock_hash = empreinte_lock(lock)
+        cellule = lock["collections"][0]
+        reservation = f"{cellule['collection_id']}__a3"
+        tentative = {
+            "schema_version": SCHEMA_ATTEMPT,
+            "protocol_version": PROTOCOLE_VERSION,
+            "campaign_lock_hash": lock_hash,
+            "collection_id": cellule["collection_id"],
+            "attempt": 3,
+            "result": "FAILED_RETRYABLE",
+            "cause_code": "EMPTY_HTTP_BODY",
+            "execution_manifest_hash": cellule["execution_manifest_hash"],
+            "payload_hash": cellule["payload_hash"],
+            "http_response_received": True,
+            "candidate_artifact_accepted": False,
+            "cost_accounting": {
+                "status": "upper_bound",
+                "cost_microdollars": cellule["max_cost_microdollars"],
+                "reservation_id": reservation,
+            },
+            "retry_after": None,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            campagne = Path(tmp)
+            ledger = RegistreBudget(
+                campagne / "budget-ledger.json",
+                lock["budget"]["cap_microdollars"],
+                lock_hash,
+            )
+            ledger.reserver(reservation, cellule["max_cost_microdollars"])
+            arrete, reprise = lancer_campagne._traiter_resultat_v2(
+                campagne,
+                ledger,
+                lock,
+                lock_hash,
+                cellule,
+                {
+                    "collection_id": cellule["collection_id"],
+                    "attempt": 3,
+                    "reservation_id": reservation,
+                    "code": collecteur.EXIT_VALIDATION,
+                    "receipt": tentative,
+                    "error": "",
+                },
+                False,
+            )
+            self.assertFalse(arrete)
+            self.assertIsNone(reprise)
+            self.assertFalse((campagne / "operator-hold.json").exists())
+            etat = charger_json(
+                campagne / "collections" / cellule["collection_id"]
+                / "collection-state.json"
+            )
+            self.assertEqual(etat["state"], "INFRA_ERROR")
+            self.assertEqual(etat["cause_code"], "ATTEMPTS_EXHAUSTED")
+
     def test_registre_budget_atomique_ne_depasse_pas_le_plafond(self):
         with tempfile.TemporaryDirectory() as tmp:
             registre = RegistreBudget(Path(tmp) / "ledger.json", 100, "c" * 64)
@@ -1856,7 +1958,7 @@ class ProtocolV2Tests(unittest.TestCase):
         with self.assertRaises(ContratV2Invalide):
             valider_autorisation_payante(auth, "e" * 64, 55_000_000)
 
-    def test_recu_r016_complet_et_peremption(self):
+    def test_recu_r016_reutilisable_entre_lots_identiques(self):
         with tempfile.TemporaryDirectory() as tmp:
             racine = Path(tmp)
             lock, lock_hash, receipt = couverture_complete(racine)
@@ -1864,11 +1966,19 @@ class ProtocolV2Tests(unittest.TestCase):
                 valider_recu_couverture(receipt, lock, lock_hash, racine),
                 (True, []),
             )
-            stale = copy.deepcopy(receipt)
-            stale["campaign_lock_hash"] = "f" * 64
-            ok, motifs = valider_recu_couverture(stale, lock, lock_hash, racine)
+            autre_lot = copy.deepcopy(receipt)
+            autre_lot["campaign_lock_hash"] = "f" * 64
+            self.assertEqual(
+                valider_recu_couverture(autre_lot, lock, lock_hash, racine),
+                (True, []),
+            )
+            autre_prompt = copy.deepcopy(receipt)
+            autre_prompt["prompt_sha256"] = "f" * 64
+            ok, motifs = valider_recu_couverture(
+                autre_prompt, lock, lock_hash, racine
+            )
             self.assertFalse(ok)
-            self.assertIn("reçu R-016 lié à un autre lock", motifs)
+            self.assertIn("reçu R-016 lié à un autre prompt", motifs)
             non_aveugle = copy.deepcopy(receipt)
             non_aveugle["witnesses"]["positif.md"]["access_to_verifier"] = True
             non_aveugle["qualified"] = False

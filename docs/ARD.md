@@ -4,13 +4,13 @@ style_gate: pass
 
 # ARD : Benchmark Lab-X
 
-Version documentaire 3.0, 8 août 2026
+Version documentaire 3.2, 10 août 2026
 
 ## 1. Rôle et autorité
 
 Cet ARD, pour *Architecture Requirements Document*, décrit les objets, identités, flux, états, frontières de confiance et preuves techniques de Benchmark Lab-X.
 
-Benchmark Lab-X détermine quel modèle, quelle configuration ou quel agent réussit un travail réel, avec quelle fiabilité, à quel coût et en combien de temps, puis vérifie si cette recommandation reste valable lorsque les systèmes évoluent.
+Benchmark Lab-X détermine quelle configuration réussit un travail réel, avec quelle fiabilité, à quel coût et en combien de temps, puis vérifie si cette recommandation reste valable lorsque les systèmes évoluent. L’objet mesuré est la configuration complète, jamais le nom du modèle seul.
 
 | Surface | Autorité |
 |---|---|
@@ -30,9 +30,14 @@ Les décisions d’architecture restent ici, près des exigences concernées. Au
 |---|---|
 | Carte d’usage | travail réel, stimulus, décision visée et contrat |
 | Axe de score | mesure déterministe appliquée à l’artefact d’une carte |
-| Identité de base | mode, modèle, backend, provider épinglé et effort ; nom et version de l’agent en mode agent |
-| Configuration mesurée | paramètres exacts d’une exécution, identifiés par `execution_manifest_hash` |
+| Identité de modèle | mode, modèle canonique demandé et révision déclarée |
+| Identité de route | backend, provider et endpoint d’une acquisition |
+| Configuration scientifique | identité de modèle, quantification, effort, paramètres, contexte et politique de données |
+| Configuration mesurée | configuration scientifique et route exactes d’une exécution, identifiées par `execution_manifest_hash` |
 | Candidat lisible | libellé humain de la configuration, sans pouvoir de jointure |
+| Série de mesure | grille scientifique complète de slots compatibles |
+| Lot d’acquisition | sous-ensemble technique de slots soumis sous un même lock |
+| Slot | alias × index de run dans la série |
 | Collecte planifiée | carte d’usage × configuration × index de run |
 | Tentative | appel numéroté destiné à une collecte planifiée |
 | Adaptateur de route | composant qui valide la réponse fournisseur et matérialise les octets candidats |
@@ -45,7 +50,7 @@ Les décisions d’architecture restent ici, près des exigences concernées. Au
 
 Une carte d’usage peut alimenter plusieurs axes. Elle ne compte qu’une fois dans la couverture et ne déclenche qu’une collecte par configuration et run.
 
-### 2.2 Identité de base et configuration exacte
+### 2.2 Identités et configuration exacte
 
 Exemple direct :
 
@@ -53,9 +58,16 @@ Exemple direct :
 |---|---|
 | mode | `direct` |
 | modèle demandé | `deepseek/deepseek-v4-flash-0731` |
+| révision | `deepseek/deepseek-v4-flash-0731` |
+| effort | `high` |
+
+Route de l’acquisition :
+
+| Composant | Exemple |
+|---|---|
 | backend | `OpenRouter` |
 | provider épinglé | `Novita` |
-| effort | `high` |
+| endpoint | `novita/fp8` |
 
 Exemple agent :
 
@@ -64,7 +76,7 @@ Exemple agent :
 | agent | `lab-x-runner` |
 | version | `3` |
 
-L’identité de base reste lisible. La configuration exacte porte les paramètres, versions et composants qui influencent l’exécution. Deux configurations ayant des `max_tokens` différents ont des `execution_manifest_hash` différents, même si leur identité de base est commune.
+L’identité de modèle reste stable lorsqu’un autre provider sert la même révision. La configuration exacte porte la quantification, les paramètres, les versions et la route qui influencent l’exécution. Deux configurations ayant des `max_tokens` différents ont des `execution_manifest_hash` différents, même si leur identité de modèle est commune.
 
 ### 2.3 Contrats de hash cibles
 
@@ -81,6 +93,9 @@ Le protocole de mesure reste `benchmark-lab-x/protocol/v2`. La signification des
 | `verify_hash` | vérificateur, oracle, prédicats, seuils, actifs juge et témoins qualifiants de l’axe | sorties candidates et identité du candidat |
 | `benchmark-lab-x/axis-audit-receipt/v1` | hash du lock, axe, `verify_hash`, contexte de mesure, plan d’audit, méthode aveugle, unités examinées, conformité de chaque note, absence de correction et conclusion permise | identité du candidat pendant l’audit et toute note modifiée |
 | `benchmark-lab-x/campaign-lock/v4` | panel, politique de sélection, snapshot approuvé, approbation B0-09 et snapshot proposé exact liés par empreinte, routes résolues, prix datés, quotas, concurrence, plafonds, collectes, plans d’audit par axe, protocoles et hashes attendus | secrets et observations postérieures |
+| `benchmark-lab-x/campaign-lock/v5` | sous-ensemble de slots pendants, commit de collecte, commit d’instrument et lock de référence, inventaire haché, budget restant, fallbacks approuvés, routes primaires et cellules reprises octet pour octet du lock de référence | acquisition déjà acceptée, bascule de route dans le lot, autorisation payante et score |
+| `benchmark-lab-x/acquisition-inventory/v1` | série, contexte d’instrument, 114 slots, contrat de compatibilité par alias, route primaire, fallback proposé, locks et reçus sources hachés, coûts engagés et état acquis ou pendant | copie des réponses, score et autorisation payante |
+| `benchmark-lab-x/continuation-draft/v1` | slots absents, routes primaire et secondaire proposées, projection B0-09, plafond global restant et portes B0 | appel modèle, autorisation payante et score |
 
 `measurement_context_hash` est produit par reçu de score et par axe. Un actif juge partagé peut donc modifier plusieurs `verify_hash` et plusieurs contextes.
 
@@ -381,6 +396,9 @@ La colonne **Source** porte la traçabilité inverse. Chaque exigence cite au mo
 | AR-R-009 | P0 | ENF-006 | Le temps mural et le travail utilisateur sont mesurés avant approbation d’une cible | campagne complète chronométrée sur des axes valides |
 | AR-R-010 | P1 | EF-015, R-015 | Renotation, reproduction sur autre hôte, nouvelle collecte et comparaison longitudinale sont quatre opérations distinctes | quatre scénarios |
 | AR-R-011 | P3 | EF-017, ENF-011 | Chaque profil public porte date, contexte, fraîcheur et abstention | courant, périmé, absent et incompatible |
+| AR-R-012 | P0 | R-003a, R-015 | Une série compose plusieurs lots uniquement après validation de chaque lock, chaîne de reçus, artefact et contrat de compatibilité | 72 acquisitions importées, reçu altéré refusé |
+| AR-R-013 | P0 | R-003a, R-015 | Un slot reçoit au plus une acquisition ; le lot de continuation contient seulement les slots absents | doublon refusé, inventaire 72/42 |
+| AR-R-014 | P0 | R-015, R-016 | Un lock de continuation sépare le commit de collecte du commit d’instrument et reprend les cellules primaires du lock de référence sans mutation | changement du collecteur sans nouveau `verify_hash`, cellule modifiée refusée |
 
 ### 7.6 Restitution et évolution
 

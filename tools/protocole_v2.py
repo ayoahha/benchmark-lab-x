@@ -27,6 +27,7 @@ PROTOCOLE_VERSION = "benchmark-lab-x/protocol/v2"
 SCHEMA_LOCK_V3 = "benchmark-lab-x/campaign-lock/v3"
 SCHEMA_EXECUTION_V3 = "benchmark-lab-x/execution-manifest/v3"
 SCHEMA_LOCK = "benchmark-lab-x/campaign-lock/v4"
+SCHEMA_LOCK_CONTINUATION = "benchmark-lab-x/campaign-lock/v5"
 SCHEMA_EXECUTION = "benchmark-lab-x/execution-manifest/v4"
 SCHEMA_ATTEMPT = "benchmark-lab-x/attempt-receipt/v3"
 SCHEMA_COLLECTION = "benchmark-lab-x/collection-receipt/v3"
@@ -73,11 +74,20 @@ CHEMINS_SOURCE_RUNTIME = (
     "tools/rapport_campagne.py",
     "tools/verifier_pentagone_v5.py",
 )
+CHEMINS_SOURCE_COLLECTE = (
+    "tools/collect.py",
+    "tools/empreintes.py",
+    "tools/lancer_campagne.py",
+    "tools/protocole_v2.py",
+)
 
 ETATS_TENTATIVE = {"COMPLETE", "FAILED_RETRYABLE", "FAILED_NON_RETRYABLE"}
 ETATS_COLLECTE = {"COLLECTED", "INELIGIBLE", "INFRA_ERROR", "MISSING"}
 ETATS_SCORE = {"SCORED", "UNKNOWN", "INELIGIBLE", "INFRA_ERROR", "MISSING"}
-CAUSES_REPRISE = {"HTTP_429", "HTTP_503", "TRANSPORT_NO_HTTP_RESPONSE"}
+CAUSES_REPRISE = {
+    "HTTP_429", "HTTP_503", "TRANSPORT_NO_HTTP_RESPONSE", "EMPTY_HTTP_BODY",
+}
+# EMPTY_HTTP_BODY reste admis ici pour valider les reçus historiques immuables
 CAUSES_TENTATIVE_NON_RETRYABLE = {
     "LOCK_PARAMETER_MISMATCH", "LOCK_PAYLOAD_MISMATCH", "HTTP_REDIRECT",
     "HTTP_NON_RETRYABLE", "EMPTY_HTTP_BODY", "INVALID_JSON", "API_ERROR",
@@ -547,9 +557,12 @@ def _git_lire(racine_depot: Path, arguments: list[str], motif: str) -> bytes:
 
 
 def _chemins_source_lock(lock: dict[str, Any]) -> list[str]:
-    chemins = set(CHEMINS_SOURCE_RUNTIME)
+    continuation = lock.get("schema_version") == SCHEMA_LOCK_CONTINUATION
+    chemins = set(
+        CHEMINS_SOURCE_COLLECTE if continuation else CHEMINS_SOURCE_RUNTIME
+    )
     registry = lock.get("registry_source")
-    if isinstance(registry, dict):
+    if isinstance(registry, dict) and not continuation:
         chemins.add(chemin_relatif_sur(registry.get("path"), "registry_source.path"))
     task = lock.get("task")
     if isinstance(task, dict):
@@ -560,10 +573,13 @@ def _chemins_source_lock(lock: dict[str, Any]) -> list[str]:
                 entree.get("path"), f"task.task_tree[{i}].path"
             )
             chemins.add((Path(task_dir) / relatif).as_posix())
-    objets_mesure = (
-        lock.get("axes") if lock.get("schema_version") in {SCHEMA_LOCK_V3, SCHEMA_LOCK}
+    objets_mesure = ([] if continuation else (
+        lock.get("axes")
+        if lock.get("schema_version") in {
+            SCHEMA_LOCK_V3, SCHEMA_LOCK, SCHEMA_LOCK_CONTINUATION
+        }
         else lock.get("score_cards")
-    ) or []
+    )) or []
     for i, card in enumerate(objets_mesure):
         _exiger(isinstance(card, dict), f"axe[{i}] invalide")
         manifeste = card.get("verify_manifest")
@@ -599,6 +615,247 @@ def _verifier_source_depot(lock: dict[str, Any], racine_depot: Path) -> None:
         )
         _exiger(path.read_bytes() == octets_commit,
                 f"source courante différente du commit: {relatif}")
+
+
+def _valider_sources_continuation(
+    lock: dict[str, Any], racine_depot: Path | None
+) -> None:
+    instrument = lock.get("instrument_source")
+    champs_instrument = {
+        "commit", "reference_lock_path", "reference_lock_sha256",
+        "reference_campaign_lock_hash",
+    }
+    _exiger(isinstance(instrument, dict) and set(instrument) == champs_instrument,
+            "source d'instrument de continuation invalide")
+    commit_instrument = _git_oid(
+        instrument.get("commit"), "instrument_source.commit"
+    )
+    reference_lock_path = chemin_relatif_sur(
+        instrument.get("reference_lock_path"),
+        "instrument_source.reference_lock_path",
+    )
+    _sha(instrument.get("reference_lock_sha256"),
+         "instrument_source.reference_lock_sha256")
+    _sha(instrument.get("reference_campaign_lock_hash"),
+         "instrument_source.reference_campaign_lock_hash")
+
+    serie = lock.get("series_source")
+    champs_serie = {
+        "series_id", "inventory_path", "inventory_sha256", "inventory_hash",
+        "global_cap_microdollars", "source_ledger_engaged_microdollars",
+        "continuation_cap_microdollars", "approved_estimate_microdollars",
+        "approved_fallback_routes",
+    }
+    _exiger(isinstance(serie, dict) and set(serie) == champs_serie,
+            "source de série de continuation invalide")
+    _exiger(isinstance(serie.get("series_id"), str) and serie["series_id"],
+            "series_source.series_id absent")
+    inventory_path = chemin_relatif_sur(
+        serie.get("inventory_path"), "series_source.inventory_path"
+    )
+    _sha(serie.get("inventory_sha256"), "series_source.inventory_sha256")
+    _sha(serie.get("inventory_hash"), "series_source.inventory_hash")
+    global_cap = _entier_positif(
+        serie.get("global_cap_microdollars"),
+        "series_source.global_cap_microdollars",
+    )
+    engage = _entier_positif(
+        serie.get("source_ledger_engaged_microdollars"),
+        "series_source.source_ledger_engaged_microdollars",
+        zero=True,
+    )
+    cap_continuation = _entier_positif(
+        serie.get("continuation_cap_microdollars"),
+        "series_source.continuation_cap_microdollars",
+    )
+    estimation = _entier_positif(
+        serie.get("approved_estimate_microdollars"),
+        "series_source.approved_estimate_microdollars",
+    )
+    _exiger(global_cap == engage + cap_continuation,
+            "plafond de continuation différent du reliquat global")
+    _exiger(
+        lock["budget"]["cap_microdollars"] == cap_continuation
+        and lock["budget"]["estimate_microdollars"] == estimation,
+        "budget du lock différent de l'approbation de continuation",
+    )
+    fallbacks = serie.get("approved_fallback_routes")
+    _exiger(isinstance(fallbacks, list), "routes fallback approuvées absentes")
+    aliases_fallback: list[str] = []
+    for index, fallback in enumerate(fallbacks):
+        _exiger(
+            isinstance(fallback, dict)
+            and set(fallback) == {"alias", "provider", "endpoint_tag"},
+            f"fallback approuvé invalide à l'index {index}",
+        )
+        for champ in ("alias", "provider", "endpoint_tag"):
+            _exiger(isinstance(fallback.get(champ), str) and fallback[champ],
+                    f"{champ} absent dans le fallback approuvé {index}")
+        aliases_fallback.append(fallback["alias"])
+    _exiger(aliases_fallback == sorted(set(aliases_fallback)),
+            "fallbacks approuvés non triés ou dupliqués")
+
+    if racine_depot is None:
+        return
+
+    confirme = _git_lire(
+        racine_depot,
+        ["rev-parse", "--verify", f"{commit_instrument}^{{commit}}"],
+        "commit instrument",
+    ).decode("ascii", errors="strict").strip()
+    _exiger(confirme == commit_instrument,
+            "le commit instrument ne désigne pas le commit exact")
+
+    reference_path = resoudre_sous(racine_depot, reference_lock_path)
+    _exiger(reference_path.is_file() and not reference_path.is_symlink(),
+            "lock de référence absent ou lié")
+    reference_data = reference_path.read_bytes()
+    _exiger(sha256_octets(reference_data) == instrument["reference_lock_sha256"],
+            "lock de référence modifié")
+    try:
+        reference_lock = json.loads(reference_data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ContratV2Invalide("lock de référence illisible") from exc
+    valider_lock(reference_lock)
+    _exiger(
+        empreinte(reference_lock) == instrument["reference_campaign_lock_hash"],
+        "empreinte sémantique du lock de référence invalide",
+    )
+    _exiger(
+        reference_lock.get("repository_source", {}).get("commit")
+        == commit_instrument,
+        "commit instrument différent du lock de référence",
+    )
+    _exiger(
+        lock["task"] == reference_lock["task"]
+        and lock["axes"] == reference_lock["axes"],
+        "instrument de continuation différent du lock de référence",
+    )
+    cellules_reference = {
+        cellule["collection_id"]: cellule
+        for cellule in reference_lock["collections"]
+    }
+    _exiger(
+        all(cellules_reference.get(cellule["collection_id"]) == cellule
+            for cellule in lock["collections"]),
+        "cellule de continuation différente du lock de référence",
+    )
+    for entree in lock["task"]["task_tree"]:
+        relatif = (
+            Path(lock["task"]["task_dir"]) / entree["path"]
+        ).as_posix()
+        data = _git_lire(
+            racine_depot,
+            ["cat-file", "blob", f"{commit_instrument}:{relatif}"],
+            relatif,
+        )
+        _exiger(
+            len(data) == entree["bytes"]
+            and sha256_octets(data) == entree["sha256"],
+            f"actif de tâche différent du commit instrument: {relatif}",
+        )
+    for axe in lock["axes"]:
+        for asset in axe["verify_manifest"]["assets"]:
+            relatif = asset["path"]
+            data = _git_lire(
+                racine_depot,
+                ["cat-file", "blob", f"{commit_instrument}:{relatif}"],
+                relatif,
+            )
+            _exiger(
+                len(data) == asset["bytes"]
+                and sha256_octets(data) == asset["sha256"],
+                f"actif juge différent du commit instrument: {relatif}",
+            )
+    registry = lock["registry_source"]
+    registry_path = registry["path"]
+    registry_data = _git_lire(
+        racine_depot,
+        ["cat-file", "blob", f"{commit_instrument}:{registry_path}"],
+        registry_path,
+    )
+    _exiger(sha256_octets(registry_data) == registry["sha256"],
+            "registre différent du commit instrument")
+
+    inventory_file = resoudre_sous(racine_depot, inventory_path)
+    _exiger(inventory_file.is_file() and not inventory_file.is_symlink(),
+            "inventaire de série absent ou lié")
+    inventory_data = inventory_file.read_bytes()
+    _exiger(sha256_octets(inventory_data) == serie["inventory_sha256"],
+            "inventaire de série modifié")
+    try:
+        inventory = json.loads(inventory_data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ContratV2Invalide("inventaire de série illisible") from exc
+    _exiger(
+        inventory.get("schema_version")
+        == "benchmark-lab-x/acquisition-inventory/v1"
+        and empreinte(inventory) == serie["inventory_hash"]
+        and inventory.get("series_id") == serie["series_id"],
+        "inventaire de série différent du lock",
+    )
+    inventory_reference = inventory.get("reference")
+    _exiger(
+        isinstance(inventory_reference, dict)
+        and inventory_reference.get("campaign_lock_hash")
+        == instrument["reference_campaign_lock_hash"],
+        "inventaire lié à un autre lock de référence",
+    )
+    counts = inventory.get("counts")
+    _exiger(
+        isinstance(counts, dict)
+        and all(isinstance(counts.get(cle), int)
+                and not isinstance(counts.get(cle), bool)
+                and counts[cle] >= 0
+                for cle in ("total", "acquired", "pending"))
+        and counts["total"] == 114
+        and counts["acquired"] + counts["pending"] == counts["total"],
+        "comptage de l'inventaire invalide",
+    )
+    slots = inventory.get("slots")
+    _exiger(isinstance(slots, list), "slots absents de l'inventaire")
+    pending_ids = {
+        slot.get("slot_id")
+        for slot in slots
+        if isinstance(slot, dict) and slot.get("status") == "pending"
+    }
+    _exiger(
+        pending_ids == {cellule["collection_id"] for cellule in lock["collections"]}
+        and counts.get("pending") == len(lock["collections"]),
+        "grille de continuation différente des slots pendants",
+    )
+    costs = inventory.get("costs")
+    _exiger(
+        isinstance(costs, dict)
+        and costs.get("source_ledger_engaged_microdollars") == engage
+        and costs.get("global_cap_microdollars") == global_cap
+        and costs.get("global_cap_remaining_microdollars") == cap_continuation,
+        "budget de l'inventaire différent du lock",
+    )
+    plans = inventory.get("route_plans")
+    _exiger(isinstance(plans, dict), "plans de route absents de l'inventaire")
+    attendus_fallback = []
+    for alias in lock["panel"]:
+        plan = plans.get(alias)
+        _exiger(isinstance(plan, dict), f"plan de route absent pour {alias}")
+        fallback = plan.get("fallback")
+        if fallback is None:
+            continue
+        _exiger(isinstance(fallback, dict), f"fallback invalide pour {alias}")
+        route = fallback.get("route_identity", {})
+        _exiger(
+            isinstance(route, dict)
+            and isinstance(route.get("provider_pinned"), str)
+            and isinstance(route.get("endpoint_tag"), str),
+            f"identité du fallback invalide pour {alias}",
+        )
+        attendus_fallback.append({
+            "alias": alias,
+            "provider": route.get("provider_pinned"),
+            "endpoint_tag": route.get("endpoint_tag"),
+        })
+    _exiger(sorted(attendus_fallback, key=lambda x: x["alias"]) == fallbacks,
+            "approbation des fallbacks différente de l'inventaire")
 
 
 def valider_environnement_observe(
@@ -1166,7 +1423,9 @@ def _valider_axe_v3(
 
 
 def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict[str, Any]:
-    """Valider les locks cibles v3 et v4 sans accepter un lock historique v2"""
+    """Valider les locks actifs sans accepter un lock historique v2"""
+    schema_lock = lock.get("schema_version") if isinstance(lock, dict) else None
+    cible_v5 = schema_lock == SCHEMA_LOCK_CONTINUATION
     champs_lock = {
         "schema_version", "protocol_version", "campaign_id", "operation",
         "question", "created_at", "paid_authorization_required",
@@ -1174,18 +1433,23 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
         "runner", "quotas", "selection_policy", "task", "axes", "collections",
         "budget", "registry_source", "route_snapshot_source",
     }
+    if cible_v5:
+        champs_lock |= {"instrument_source", "series_source"}
     _exiger(isinstance(lock, dict) and set(lock) == champs_lock,
             "champs du campaign-lock différents du contrat fermé")
-    schema_lock = lock.get("schema_version")
-    _exiger(schema_lock in {SCHEMA_LOCK_V3, SCHEMA_LOCK},
-            "campaign-lock/v3 ou v4 absent")
-    cible_v4 = schema_lock == SCHEMA_LOCK
+    _exiger(schema_lock in {SCHEMA_LOCK_V3, SCHEMA_LOCK, SCHEMA_LOCK_CONTINUATION},
+            "campaign-lock/v3, v4 ou v5 absent")
+    cible_route_v3 = schema_lock in {SCHEMA_LOCK, SCHEMA_LOCK_CONTINUATION}
     _exiger(lock.get("protocol_version") == PROTOCOLE_VERSION, "protocole v2 absent")
     _exiger(lock.get("operation") in {
-        "renotation", "reproduction", "new_collection", "longitudinal_comparison"
+        "renotation", "reproduction", "new_collection", "longitudinal_comparison",
+        "continuation_collection",
     }, "opération de campagne invalide")
-    _exiger(lock["operation"] == "new_collection",
-            "ce chemin actif prépare uniquement une nouvelle collecte")
+    _exiger(
+        lock["operation"]
+        == ("continuation_collection" if cible_v5 else "new_collection"),
+        "opération différente du schéma de lock",
+    )
     for champ in ("campaign_id", "question", "created_at"):
         _exiger(isinstance(lock.get(champ), str) and lock[champ].strip(), f"{champ} absent")
     _exiger(lock.get("paid_authorization_required") is True,
@@ -1261,7 +1525,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     champs_route_source = {
         "path", "sha256", "schema_version", "criterion_version", "observed_at"
     }
-    if cible_v4:
+    if cible_route_v3:
         champs_route_source |= {
             "budget_estimate_microdollars", "budget_cap_microdollars",
             "b0_09_approval_sha256", "b0_09_proposal_snapshot_sha256",
@@ -1272,7 +1536,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     _sha(route_source.get("sha256"), "route_snapshot_source.sha256")
     schema_snapshot = (
         "benchmark-lab-x/route-preflight-snapshot/v3"
-        if cible_v4
+        if cible_route_v3
         else "benchmark-lab-x/route-preflight-snapshot/v2"
     )
     _exiger(route_source.get("schema_version") == schema_snapshot,
@@ -1281,17 +1545,23 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
             "critère de route différent de la politique de sélection")
     _exiger(
         selection["version"]
-        == ("benchmark-lab-x/selection-route/v3" if cible_v4
+        == ("benchmark-lab-x/selection-route/v3" if cible_route_v3
             else "benchmark-lab-x/selection-route/v2"),
         "version du critère incompatible avec le lock",
     )
     _exiger(isinstance(route_source.get("observed_at"), str) and route_source["observed_at"],
             "date du snapshot absente")
-    if cible_v4:
+    if cible_route_v3:
+        if not cible_v5:
+            _exiger(
+                route_source.get("budget_estimate_microdollars") == estimation
+                and route_source.get("budget_cap_microdollars") == cap,
+                "budget du snapshot différent du lock",
+            )
         _exiger(
-            route_source.get("budget_estimate_microdollars") == estimation
-            and route_source.get("budget_cap_microdollars") == cap,
-            "budget du snapshot différent du lock",
+            isinstance(route_source.get("budget_estimate_microdollars"), int)
+            and isinstance(route_source.get("budget_cap_microdollars"), int),
+            "budget du snapshot absent",
         )
         _sha(route_source.get("b0_09_approval_sha256"),
              "route_snapshot_source.b0_09_approval_sha256")
@@ -1315,7 +1585,10 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     _exiger(isinstance(axes, list) and len(axes) == len(AXES_PENTAGONE),
             "cinq axes sont requis pour la carte pentagone-rotatif")
     for index, axe in enumerate(axes):
-        _valider_axe_v3(axe, index, runs, len(panel) * runs, racine_depot)
+        _valider_axe_v3(
+            axe, index, runs, len(panel) * runs,
+            None if cible_v5 else racine_depot,
+        )
     _exiger(tuple(axe["id"] for axe in axes) == AXES_PENTAGONE,
             "ordre des axes différent du contrat")
     version_attendue = {"task-v3": "verify-v5", "task-v4": "verify-v6"}.get(
@@ -1330,9 +1603,13 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     snapshot_routes: dict[str, Any] | None = None
     prompt: str | None = None
     if racine_depot is not None:
-        registry_file = resoudre_sous(racine_depot, registry_path)
-        _exiger(registry_file.is_file() and sha256_fichier(registry_file) == registre["sha256"],
-                "registre verrouillé absent ou modifié")
+        if not cible_v5:
+            registry_file = resoudre_sous(racine_depot, registry_path)
+            _exiger(
+                registry_file.is_file()
+                and sha256_fichier(registry_file) == registre["sha256"],
+                "registre verrouillé absent ou modifié",
+            )
         snapshot_file = resoudre_sous(racine_depot, route_path)
         _exiger(snapshot_file.is_file() and not snapshot_file.is_symlink(),
                 "snapshot de routes absent ou lié")
@@ -1343,15 +1620,20 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
             snapshot = json.loads(snapshot_data.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ContratV2Invalide("snapshot de routes illisible") from exc
+        snapshot_panel = snapshot.get("panel") if isinstance(snapshot, dict) else None
+        panel_conforme = (
+            isinstance(snapshot_panel, list)
+            and (set(panel) <= set(snapshot_panel) if cible_v5 else snapshot_panel == panel)
+        )
         _exiger(isinstance(snapshot, dict)
                 and snapshot.get("schema_version") == route_source["schema_version"]
                 and snapshot.get("criterion_version") == route_source["criterion_version"]
                 and snapshot.get("observed_at") == route_source["observed_at"]
-                and snapshot.get("panel") == panel
+                and panel_conforme
                 and snapshot.get("models_file") == registry_path
                 and snapshot.get("models_file_sha256") == registre["sha256"],
                 "contexte du snapshot différent du lock")
-        if cible_v4:
+        if cible_route_v3:
             snapshot_budget = snapshot.get("budget_reestimate")
             snapshot_approval = snapshot.get("b0_09_approval")
             proposal_source = snapshot.get("proposal_source")
@@ -1360,8 +1642,10 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
                 and snapshot.get("hold_reasons") == []
                 and snapshot.get("pin_changes") == []
                 and isinstance(snapshot_budget, dict)
-                and snapshot_budget.get("repriced_estimate_microdollars") == estimation
-                and snapshot_budget.get("approved_cap_microdollars") == cap
+                and snapshot_budget.get("repriced_estimate_microdollars")
+                == route_source["budget_estimate_microdollars"]
+                and snapshot_budget.get("approved_cap_microdollars")
+                == route_source["budget_cap_microdollars"]
                 and isinstance(snapshot_approval, dict)
                 and _empreinte_contractuelle(snapshot_approval, "approbation B0-09")
                 == route_source["b0_09_approval_sha256"],
@@ -1401,7 +1685,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
             _exiger(attendu_snapshot == snapshot,
                     "snapshot approuvé différent de sa proposition B0-09")
         snapshot_routes = snapshot.get("resolved")
-        _exiger(isinstance(snapshot_routes, dict) and set(snapshot_routes) == set(panel),
+        _exiger(isinstance(snapshot_routes, dict) and set(panel) <= set(snapshot_routes),
                 "routes résolues incomplètes")
         prompt, _ = assembler_prompt_verrouille(racine_depot, task)
 
@@ -1435,7 +1719,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
         manifeste = valider_manifeste_execution(cellule.get("execution_manifest"))
         _exiger(
             manifeste.get("schema_version")
-            == (SCHEMA_EXECUTION if cible_v4 else SCHEMA_EXECUTION_V3),
+            == (SCHEMA_EXECUTION if cible_route_v3 else SCHEMA_EXECUTION_V3),
             f"version du manifeste incompatible avec {schema_lock}",
         )
         _sha(cellule.get("execution_manifest_hash"), f"{cid}.execution_manifest_hash")
@@ -1450,7 +1734,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
             "price_observed_at", "input_usd_per_million_tokens",
             "output_usd_per_million_tokens", "request_usd", "prompt_token_upper_bound",
         }
-        if cible_v4:
+        if cible_route_v3:
             champs_route |= {"endpoint_tag", "ownership", "metadata_evidence"}
         _exiger(isinstance(route, dict) and set(route) == champs_route,
                 f"route fermée invalide dans {cid}")
@@ -1464,7 +1748,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
             and route["criterion_version"] == selection["version"],
             f"route différente du manifeste ou du critère dans {cid}",
         )
-        if cible_v4:
+        if cible_route_v3:
             _exiger(route["endpoint_tag"] == manifeste["endpoint_tag"],
                     f"endpoint de pré-vol différent du manifeste dans {cid}")
             ownership = route.get("ownership")
@@ -1535,6 +1819,8 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
             "quotas provider différents des routes")
     _exiger(concurrence <= sum(quotas["in_flight_by_backend"].values()),
             "concurrence supérieure aux quotas backend")
+    if cible_v5:
+        _valider_sources_continuation(lock, racine_depot)
     if racine_depot is not None:
         _verifier_source_depot(lock, racine_depot)
     return lock
@@ -2176,8 +2462,10 @@ def valider_recu_couverture(
         motifs.append(str(exc))
     if receipt.get("schema_version") != SCHEMA_COVERAGE:
         motifs.append("schema de reçu R-016 invalide")
-    if receipt.get("campaign_lock_hash") != lock_hash:
-        motifs.append("reçu R-016 lié à un autre lock")
+    try:
+        _sha(receipt.get("campaign_lock_hash"), "lock source du reçu R-016")
+    except ContratV2Invalide as exc:
+        motifs.append(str(exc))
     if receipt.get("task_version") != lock.get("task", {}).get("task_version"):
         motifs.append("reçu R-016 lié à une autre tâche")
     if receipt.get("prompt_sha256") != lock.get("task", {}).get("prompt_sha256"):

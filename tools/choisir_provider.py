@@ -9,11 +9,11 @@ un choix à la main s'oublie : Kimi K3 avait été épinglé sur Modal pour son
 débit, alors que le débit ne compte pas dans une campagne qui n'est pas
 chronométrée. Un critère écrit rend ce genre d'arbitrage visible et rejouable.
 
-Ce que l'outil ne fait pas. Il ne bascule jamais de provider en cours de
-campagne. R-003 fait de la route une composante de l'identité du candidat :
-changer de route ne réessaie pas le même candidat, il en mesure un autre sous
-la même étiquette. La sélection est un acte préalable, déclaré, consigné, dont
-le résultat est un pin écrit dans `models.toml` avant la collecte.
+Ce que l'outil ne fait pas. Il ne bascule jamais de provider dans un lock.
+R-003 sépare l'identité du modèle de celle de la route. Un provider secondaire
+peut rejoindre la même série dans un nouveau lot lorsque le contrat de
+compatibilité est prouvé et préenregistré. La sélection reste un acte préalable,
+déclaré et consigné avant la collecte.
 
 Le critère, dans cet ordre strict :
 

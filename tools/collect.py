@@ -48,6 +48,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).parent))
 from empreintes import empreinte  # noqa: E402
 from protocole_v2 import (  # noqa: E402
+    CAUSES_REPRISE,
     PROTOCOLE_VERSION as PROTOCOLE_V2,
     SCHEMA_ATTEMPT,
     SCHEMA_COLLECTION,
@@ -81,7 +82,7 @@ BACKEND = "openrouter"
 # Le protocole désigne l'ensemble indissociable collecte + notation (ARD §2.2) :
 # tout changement de l'une des deux parties l'incrémente
 PROTOCOLE_VERSION = "benchmark-lab-x/protocol/v1"
-COLLECTEUR_VERSION = "collect.py/v2"
+COLLECTEUR_VERSION = "collect.py/v3"
 SCHEMA_MANIFESTE = "benchmark-lab-x/execution-manifest/v1"
 
 # Stable exit codes
@@ -364,7 +365,7 @@ def _recu_tentative(
     cout = _cout_microdollars(cost_usd)
     if result == "COMPLETE":
         etat = "COMPLETE"
-    elif cause in {"HTTP_429", "HTTP_503", "TRANSPORT_NO_HTTP_RESPONSE"}:
+    elif cause in CAUSES_REPRISE:
         etat = "FAILED_RETRYABLE"
     else:
         etat = "FAILED_NON_RETRYABLE"
