@@ -767,14 +767,17 @@ def instrument_fige(finalisation: FinalisationSerie, racine: Path = RACINE) -> I
 
 
 def _main_prepare(args: argparse.Namespace) -> dict[str, Any]:
-    composition = charger_composition(RACINE, args.composition)
-    valider_couverture(RACINE, composition, args.coverage_source)
-    destination = args.out_dir / "witness-coverage-receipt.json"
-    integrer_couverture_exacte(args.coverage_source, destination)
+    composition_path = args.composition.resolve()
+    coverage_source = args.coverage_source.resolve()
+    out_dir = args.out_dir.resolve()
+    composition = charger_composition(RACINE, composition_path)
+    valider_couverture(RACINE, composition, coverage_source)
+    destination = out_dir / "witness-coverage-receipt.json"
+    integrer_couverture_exacte(coverage_source, destination)
     lock = construire_verrou_finalisation(
         RACINE, composition, destination, args.source_commit, args.created_at
     )
-    lock_path = args.out_dir / "series-finalization.lock.v1.json"
+    lock_path = out_dir / "series-finalization.lock.v1.json"
     ecrire_json_immuable(lock_path, lock)
     finalisation = charger_finalisation(lock_path, RACINE)
     return {
