@@ -52,6 +52,7 @@ from protocole_v2 import (  # noqa: E402
     PROTOCOLE_VERSION as PROTOCOLE_V2,
     SCHEMA_ATTEMPT,
     SCHEMA_COLLECTION,
+    SCHEMA_EXECUTION_ROUTE_PROGRAM,
     ContratV2Invalide,
     RegistreBudget,
     assembler_prompt_verrouille,
@@ -732,6 +733,7 @@ def main() -> None:
     cellule_v2: dict[str, Any] | None = None
     lock_hash: str | None = None
     locked_alias: str | None = None
+    route_program = False
     task_file = "task.md"
     protocol_version = PROTOCOLE_VERSION
     runner_version = COLLECTEUR_VERSION
@@ -788,6 +790,9 @@ def main() -> None:
             die(EXIT_USAGE, f"HOLD v2 avant appel: {exc}")
         locked_alias = cellule_v2["alias"]
         execution_v3 = cellule_v2["execution_manifest"]
+        route_program = (
+            execution_v3["schema_version"] == SCHEMA_EXECUTION_ROUTE_PROGRAM
+        )
         args.model = execution_v3["model_requested"]
         args.provider = execution_v3["provider_pinned"]
         args.expect_provider = execution_v3["provider_expected"]
@@ -1013,6 +1018,8 @@ def main() -> None:
         },
         "usage": {"include": True},
     }
+    if route_program:
+        body["provider"] = params_v2["provider"]
     if reasoning_max_tokens is not None:
         body["reasoning"] = {"max_tokens": reasoning_max_tokens}
     # effort and max_tokens are mutually exclusive on OpenRouter's reasoning
@@ -1050,6 +1057,11 @@ def main() -> None:
         {
             "model": args.model,
             "provider": args.provider,
+            "provider_order": (
+                [route["provider_pinned"]
+                 for route in execution_v3["provider_routes"]]
+                if route_program else [args.provider]
+            ),
             "regime_confidentialite": args.regime,
         "params": {k: body[k] for k in ("temperature", "top_p", "max_tokens", "seed", "reasoning") if k in body},
             "timeout_s": args.timeout,
@@ -1061,13 +1073,17 @@ def main() -> None:
 
     started = datetime.now(timezone.utc)
     t0_ns = time.monotonic_ns()
+    request_headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    if route_program:
+        metadata_request = execution_v3["router_metadata"]
+        request_headers[metadata_request["header"]] = metadata_request["value"]
     try:
         resp = requests.post(
             API_URL,
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
+            headers=request_headers,
             data=payload_bytes,
             timeout=args.timeout,
             allow_redirects=False,
@@ -1139,6 +1155,10 @@ def main() -> None:
     expected_providers = {normalize_route(args.provider)}
     if args.expect_provider:
         expected_providers.add(normalize_route(args.expect_provider))
+    if route_program:
+        for route in execution_v3["provider_routes"]:
+            expected_providers.add(normalize_route(route["provider_pinned"]))
+            expected_providers.add(normalize_route(route["provider_expected"]))
     provider_ok = normalize_route(provider_served) in expected_providers
     model_ok = normalize_route(model_served) == normalize_route(args.model)
 
@@ -1323,6 +1343,14 @@ def main() -> None:
             "attempt": args.attempt,
             "reservation_id": args.reservation_id,
         })
+        if route_program:
+            meta.update({
+                "provider_route_order": [
+                    route["provider_pinned"]
+                    for route in execution_v3["provider_routes"]
+                ],
+                "openrouter_routing": data.get("openrouter_metadata"),
+            })
     # Invariant: meta/raw never hold the API key
     raw_text = json.dumps(data, indent=2, ensure_ascii=False)
     collection_receipt = None

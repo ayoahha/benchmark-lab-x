@@ -223,17 +223,15 @@ nom_public = "DeepSeek V4 Pro"
 provider = "deepseek"
 omit_params = ["seed"]
 
-# Route : GMICloud depuis le 2026-08-06, sur critère `selection-route/v2`.
-# Seul cas du panel où une route en pleine précision existe réellement : elle
-# déclare `bf16` là où l'éditeur lui-même sert en `fp8`. Elle gagne aussi sur
-# les deux autres axes, 253 952 jetons de complétion contre 128 000, et elle
-# accepte tout le contrat d'échantillonnage quand `tencent` refusait `top_p`
-# et `seed`. Le seul point où elle perd est de ne pas être l'éditeur, ce que
-# le critère place après la précision, précisément pour ce cas
+# Nouvelle configuration scientifique FP8, distincte des acquisitions BF16
+# historiques. AtlasCloud est la route primaire et DeepInfra la secondaire
+# préenregistrée dans le lock HY3 FP8
 [hy3]
 model = "tencent/hy3"
 nom_public = "Hy3"
-provider = "gmicloud"
+provider = "atlas-cloud"
+expect_provider = "AtlasCloud"
+format_reference = "fp8"
 
 # Kimi K3 sur routes alternatives, ajoutées le 2026-08-05. La route Morph rend
 # 429 « temporarily rate-limited upstream » sur douze tentatives consécutives.

@@ -34,6 +34,7 @@ from protocole_v2 import (  # noqa: E402
     SCHEMA_COVERAGE,
     SCHEMA_ENVIRONMENT,
     SCHEMA_EXECUTION,
+    SCHEMA_EXECUTION_ROUTE_PROGRAM,
     SCHEMA_EXECUTION_V3,
     SCHEMA_LOCK,
     SCHEMA_LOCK_CONTINUATION,
@@ -1165,6 +1166,74 @@ class ProtocolV2Tests(unittest.TestCase):
         endpoint_dans_v3["endpoint_tag"] = "example"
         with self.assertRaises(ContratV2Invalide):
             valider_manifeste_execution(endpoint_dans_v3)
+
+    def test_manifeste_v5_fige_le_fallback_avant_artefact(self):
+        manifeste = copy.deepcopy(
+            lock_minimal_v4()["collections"][0]["execution_manifest"]
+        )
+        manifeste.update({
+            "schema_version": SCHEMA_EXECUTION_ROUTE_PROGRAM,
+            "provider_routes": [
+                {
+                    "role": "primary",
+                    "provider_pinned": "atlas-cloud",
+                    "provider_expected": "AtlasCloud",
+                    "endpoint_tag": "atlas-cloud/fp8",
+                    "quantization": {"status": "declared", "value": "fp8"},
+                    "revision": manifeste["revision"],
+                    "max_tokens": 131_072,
+                    "metadata_evidence": manifeste["request_parameters"].get(
+                        "metadata_evidence",
+                        {
+                            "url": "https://example.invalid/endpoints",
+                            "observed_at": "2026-08-10T00:00:00Z",
+                            "response_sha256": "a" * 64,
+                        },
+                    ),
+                },
+                {
+                    "role": "secondary",
+                    "provider_pinned": "deepinfra",
+                    "provider_expected": "DeepInfra",
+                    "endpoint_tag": "deepinfra/fp8",
+                    "quantization": {"status": "declared", "value": "fp8"},
+                    "revision": manifeste["revision"],
+                    "max_tokens": 131_072,
+                    "metadata_evidence": {
+                        "url": "https://example.invalid/endpoints",
+                        "observed_at": "2026-08-10T00:00:00Z",
+                        "response_sha256": "a" * 64,
+                    },
+                },
+            ],
+            "router_metadata": {
+                "header": "X-OpenRouter-Metadata",
+                "value": "enabled",
+            },
+            "provider_pinned": "atlas-cloud",
+            "provider_expected": "AtlasCloud",
+            "endpoint_tag": "atlas-cloud/fp8",
+            "quantization": {"status": "declared", "value": "fp8"},
+            "max_tokens": 131_072,
+        })
+        manifeste["request_parameters"]["provider"] = {
+            "order": ["atlas-cloud", "deepinfra"],
+            "only": ["atlas-cloud", "deepinfra"],
+            "allow_fallbacks": True,
+            "require_parameters": True,
+            "data_collection": manifeste["data_policy_requested"],
+        }
+        valider_manifeste_execution(manifeste)
+        payload = json.loads(construire_payload(manifeste, "fixture").decode("utf-8"))
+        self.assertEqual(
+            payload["provider"]["order"], ["atlas-cloud", "deepinfra"]
+        )
+        self.assertTrue(payload["provider"]["allow_fallbacks"])
+
+        ordre_inverse = copy.deepcopy(manifeste)
+        ordre_inverse["request_parameters"]["provider"]["order"].reverse()
+        with self.assertRaisesRegex(ContratV2Invalide, "programme provider"):
+            valider_manifeste_execution(ordre_inverse)
 
     def test_lock_v4_refuse_not_disclosed_hors_api_editeur(self):
         lock = lock_minimal_v4()

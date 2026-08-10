@@ -29,7 +29,9 @@ SCHEMA_EXECUTION_V3 = "benchmark-lab-x/execution-manifest/v3"
 SCHEMA_LOCK = "benchmark-lab-x/campaign-lock/v4"
 SCHEMA_LOCK_CONTINUATION_V5 = "benchmark-lab-x/campaign-lock/v5"
 SCHEMA_LOCK_CONTINUATION = "benchmark-lab-x/campaign-lock/v6"
+SCHEMA_LOCK_ROUTE_PROGRAM = "benchmark-lab-x/campaign-lock/v7"
 SCHEMA_EXECUTION = "benchmark-lab-x/execution-manifest/v4"
+SCHEMA_EXECUTION_ROUTE_PROGRAM = "benchmark-lab-x/execution-manifest/v5"
 SCHEMA_ATTEMPT = "benchmark-lab-x/attempt-receipt/v3"
 SCHEMA_COLLECTION = "benchmark-lab-x/collection-receipt/v3"
 SCHEMA_SCORE = "benchmark-lab-x/score-receipt/v3"
@@ -44,6 +46,8 @@ SCHEMA_CONTEXT = "benchmark-lab-x/measurement-context/v3"
 SCHEMA_PAID_AUTH = "benchmark-lab-x/paid-authorization/v1"
 SCHEMA_ENVIRONMENT = "benchmark-lab-x/environment/v1"
 POLITIQUE_PORTEE_ECHEC = "benchmark-lab-x/failure-scope/v1"
+SCHEMA_ENDPOINTS_SNAPSHOT = "benchmark-lab-x/openrouter-endpoints-snapshot/v1"
+POLITIQUE_ROUTE_PROGRAM = "benchmark-lab-x/hy3-fp8-route-program/v1"
 
 SCHEMA_LOCK_HISTORIQUE = "benchmark-lab-x/campaign-lock/v2"
 SCHEMA_EXECUTION_HISTORIQUE = "benchmark-lab-x/execution-manifest/v2"
@@ -81,6 +85,11 @@ CHEMINS_SOURCE_COLLECTE = (
     "tools/empreintes.py",
     "tools/lancer_campagne.py",
     "tools/protocole_v2.py",
+)
+CHEMINS_SOURCE_ROUTE_PROGRAM = (
+    *CHEMINS_SOURCE_COLLECTE,
+    "models.toml",
+    "tools/preparer_hy3_fp8.py",
 )
 
 ETATS_TENTATIVE = {"COMPLETE", "FAILED_RETRYABLE", "FAILED_NON_RETRYABLE"}
@@ -145,6 +154,9 @@ CHAMPS_MANIFESTE_EXECUTION = {
     "local_environment",
 }
 CHAMPS_MANIFESTE_EXECUTION_V3 = CHAMPS_MANIFESTE_EXECUTION - {"endpoint_tag"}
+CHAMPS_MANIFESTE_EXECUTION_ROUTE_PROGRAM = CHAMPS_MANIFESTE_EXECUTION | {
+    "provider_routes", "router_metadata",
+}
 CHAMPS_CONTEXTE_MESURE = {
     "schema_version", "protocol_version", "task", "prompt_hash",
     "system_prompt_hash", "axis_id", "verify_version", "verify_hash",
@@ -563,11 +575,16 @@ def _chemins_source_lock(lock: dict[str, Any]) -> list[str]:
     continuation = lock.get("schema_version") in {
         SCHEMA_LOCK_CONTINUATION_V5, SCHEMA_LOCK_CONTINUATION,
     }
+    route_program = lock.get("schema_version") == SCHEMA_LOCK_ROUTE_PROGRAM
     chemins = set(
-        CHEMINS_SOURCE_COLLECTE if continuation else CHEMINS_SOURCE_RUNTIME
+        CHEMINS_SOURCE_ROUTE_PROGRAM
+        if route_program
+        else CHEMINS_SOURCE_COLLECTE
+        if continuation
+        else CHEMINS_SOURCE_RUNTIME
     )
     registry = lock.get("registry_source")
-    if isinstance(registry, dict) and not continuation:
+    if isinstance(registry, dict) and not continuation and not route_program:
         chemins.add(chemin_relatif_sur(registry.get("path"), "registry_source.path"))
     task = lock.get("task")
     if isinstance(task, dict):
@@ -583,6 +600,7 @@ def _chemins_source_lock(lock: dict[str, Any]) -> list[str]:
         if lock.get("schema_version") in {
             SCHEMA_LOCK_V3, SCHEMA_LOCK,
             SCHEMA_LOCK_CONTINUATION_V5, SCHEMA_LOCK_CONTINUATION,
+            SCHEMA_LOCK_ROUTE_PROGRAM,
         }
         else lock.get("score_cards")
     )) or []
@@ -1260,13 +1278,17 @@ def _valider_lock_historique_v2(
 
 
 def valider_manifeste_execution(manifeste: dict[str, Any]) -> dict[str, Any]:
-    """Valider les listes positives fermées des manifestes v3 et v4"""
+    """Valider les listes positives fermées des manifestes v3 à v5"""
     _exiger(isinstance(manifeste, dict), "manifeste d'exécution absent")
     schema = manifeste.get("schema_version")
-    _exiger(schema in {SCHEMA_EXECUTION_V3, SCHEMA_EXECUTION},
+    _exiger(schema in {
+        SCHEMA_EXECUTION_V3, SCHEMA_EXECUTION, SCHEMA_EXECUTION_ROUTE_PROGRAM,
+    },
             "schéma du manifeste d'exécution inconnu")
     champs = (
-        CHAMPS_MANIFESTE_EXECUTION
+        CHAMPS_MANIFESTE_EXECUTION_ROUTE_PROGRAM
+        if schema == SCHEMA_EXECUTION_ROUTE_PROGRAM
+        else CHAMPS_MANIFESTE_EXECUTION
         if schema == SCHEMA_EXECUTION
         else CHAMPS_MANIFESTE_EXECUTION_V3
     )
@@ -1335,15 +1357,76 @@ def valider_manifeste_execution(manifeste: dict[str, Any]) -> dict[str, Any]:
     _exiger(not ({"model", "messages", "max_tokens"} & set(params)),
             "model, messages et max_tokens doivent rester hors request_parameters")
     provider = params.get("provider")
-    _exiger(
-        isinstance(provider, dict)
-        and set(provider) == {"only", "allow_fallbacks", "require_parameters", "data_collection"}
-        and provider.get("only") == [manifeste["provider_pinned"]]
-        and provider.get("allow_fallbacks") is False
-        and provider.get("require_parameters") is True
-        and provider.get("data_collection") == manifeste["data_policy_requested"],
-        "paramètres provider différents du pin ou de la politique demandée",
-    )
+    if schema == SCHEMA_EXECUTION_ROUTE_PROGRAM:
+        routes = manifeste.get("provider_routes")
+        champs_route = {
+            "role", "provider_pinned", "provider_expected", "endpoint_tag",
+            "quantization", "revision", "max_tokens", "metadata_evidence",
+        }
+        _exiger(isinstance(routes, list) and len(routes) == 2
+                and all(isinstance(route, dict) and set(route) == champs_route
+                        for route in routes),
+                "deux routes provider fermées requises")
+        _exiger([route["role"] for route in routes] == ["primary", "secondary"],
+                "ordre primaire puis secondaire absent")
+        for index, route in enumerate(routes):
+            _exiger(all(isinstance(route.get(champ), str) and route[champ]
+                        for champ in (
+                            "provider_pinned", "provider_expected", "endpoint_tag"
+                        )), f"identité provider absente dans provider_routes[{index}]")
+            _entier_positif(route.get("max_tokens"),
+                            f"provider_routes[{index}].max_tokens")
+            evidence = route.get("metadata_evidence")
+            _exiger(isinstance(evidence, dict) and set(evidence) == {
+                "url", "observed_at", "response_sha256"
+            } and all(isinstance(evidence.get(champ), str) and evidence[champ]
+                      for champ in ("url", "observed_at", "response_sha256")),
+                    f"preuve provider absente dans provider_routes[{index}]")
+            _sha(evidence["response_sha256"],
+                 f"provider_routes[{index}].metadata_evidence.response_sha256")
+        _exiger(
+            routes[0]["provider_pinned"] == manifeste["provider_pinned"]
+            and routes[0]["provider_expected"] == manifeste["provider_expected"]
+            and routes[0]["endpoint_tag"] == manifeste["endpoint_tag"]
+            and all(
+                route["quantization"] == manifeste["quantization"]
+                and route["revision"] == manifeste["revision"]
+                and route["max_tokens"] >= manifeste["max_tokens"]
+                for route in routes
+            ),
+            "routes provider différentes de la configuration scientifique",
+        )
+        providers = [route["provider_pinned"] for route in routes]
+        _exiger(len(set(providers)) == 2,
+                "routes provider dupliquées")
+        _exiger(
+            isinstance(provider, dict)
+            and set(provider) == {
+                "order", "only", "allow_fallbacks", "require_parameters",
+                "data_collection",
+            }
+            and provider.get("order") == providers
+            and provider.get("only") == providers
+            and provider.get("allow_fallbacks") is True
+            and provider.get("require_parameters") is True
+            and provider.get("data_collection") == manifeste["data_policy_requested"],
+            "programme provider différent des routes verrouillées",
+        )
+        _exiger(manifeste.get("router_metadata") == {
+            "header": "X-OpenRouter-Metadata", "value": "enabled",
+        }, "métadonnées de routage non demandées")
+    else:
+        _exiger(
+            isinstance(provider, dict)
+            and set(provider) == {
+                "only", "allow_fallbacks", "require_parameters", "data_collection"
+            }
+            and provider.get("only") == [manifeste["provider_pinned"]]
+            and provider.get("allow_fallbacks") is False
+            and provider.get("require_parameters") is True
+            and provider.get("data_collection") == manifeste["data_policy_requested"],
+            "paramètres provider différents du pin ou de la politique demandée",
+        )
     _exiger(params.get("usage") == {"include": True},
             "usage.include doit être figé à true")
     if effort is not None:
@@ -1370,7 +1453,9 @@ def construire_payload(manifeste: dict[str, Any], prompt: str) -> bytes:
 
 def _valider_identite_base(identite: Any, manifeste: dict[str, Any], chemin: str) -> None:
     champs = {"mode", "model_requested", "backend", "provider_pinned", "reasoning_effort"}
-    if manifeste.get("schema_version") == SCHEMA_EXECUTION:
+    if manifeste.get("schema_version") in {
+        SCHEMA_EXECUTION, SCHEMA_EXECUTION_ROUTE_PROGRAM,
+    }:
         champs.add("endpoint_tag")
     _exiger(isinstance(identite, dict) and set(identite) == champs,
             f"identité de base fermée invalide dans {chemin}")
@@ -1460,10 +1545,80 @@ def _valider_axe_v3(
     _exiger(chemin_verifier in chemins, f"vérificateur principal absent pour {aid}")
 
 
+def _valider_snapshot_route_program(
+    snapshot: Any, route_source: dict[str, Any], cap_microdollars: int
+) -> dict[str, dict[str, Any]]:
+    champs = {
+        "schema_version", "criterion_version", "observed_at", "model",
+        "source_url", "response_sha256", "response_body", "approval",
+    }
+    _exiger(isinstance(snapshot, dict) and champs <= set(snapshot),
+            "snapshot HY3 incomplet")
+    _exiger(
+        snapshot.get("schema_version") == SCHEMA_ENDPOINTS_SNAPSHOT
+        == route_source["schema_version"]
+        and snapshot.get("criterion_version") == POLITIQUE_ROUTE_PROGRAM
+        == route_source["criterion_version"]
+        and snapshot.get("observed_at") == route_source["observed_at"]
+        and snapshot.get("model") == "tencent/hy3"
+        and snapshot.get("source_url")
+        == "https://openrouter.ai/api/v1/models/tencent/hy3/endpoints",
+        "contexte du snapshot HY3 différent du lock",
+    )
+    _sha(snapshot.get("response_sha256"), "snapshot HY3 response_sha256")
+    body = snapshot.get("response_body")
+    _exiger(isinstance(body, str)
+            and sha256_octets(body.encode("utf-8")) == snapshot["response_sha256"],
+            "réponse endpoints HY3 modifiée")
+    approval = snapshot.get("approval")
+    _exiger(isinstance(approval, dict) and set(approval) == {
+        "decision", "approved_by", "approved_at", "route_order",
+        "quantization", "max_tokens", "additional_cap_microdollars",
+        "global_cap_microdollars",
+    } and approval.get("decision") == "GO_HY3_FP8_ROUTE_PROGRAM"
+            and approval.get("approved_by") == "Ayo"
+            and isinstance(approval.get("approved_at"), str)
+            and approval["approved_at"]
+            and approval.get("route_order") == ["atlas-cloud", "deepinfra"]
+            and approval.get("quantization") == "fp8"
+            and approval.get("max_tokens") == 131_072
+            and approval.get("additional_cap_microdollars") == cap_microdollars
+            == 633_258
+            and approval.get("global_cap_microdollars") == 100_000_000,
+            "approbation HY3 différente de la décision")
+    try:
+        endpoints = json.loads(body)["data"]["endpoints"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ContratV2Invalide("réponse endpoints HY3 illisible") from exc
+    attendus = {
+        "atlas-cloud": ("atlas-cloud/fp8", "AtlasCloud"),
+        "deepinfra": ("deepinfra/fp8", "DeepInfra"),
+    }
+    resultat = {}
+    for provider, (tag, name) in attendus.items():
+        trouves = [endpoint for endpoint in endpoints
+                   if isinstance(endpoint, dict) and endpoint.get("tag") == tag]
+        _exiger(len(trouves) == 1, f"endpoint {tag} absent ou dupliqué")
+        endpoint = trouves[0]
+        _exiger(
+            endpoint.get("provider_name") == name
+            and endpoint.get("model_id") == "tencent/hy3"
+            and str(endpoint.get("quantization") or "").lower() == "fp8"
+            and isinstance(endpoint.get("max_completion_tokens"), int)
+            and endpoint["max_completion_tokens"] >= 131_072
+            and {"seed", "temperature", "top_p", "max_tokens"}
+            <= set(endpoint.get("supported_parameters") or []),
+            f"endpoint {tag} incompatible avec le contrat",
+        )
+        resultat[provider] = endpoint
+    return resultat
+
+
 def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict[str, Any]:
     """Valider les locks actifs sans accepter un lock historique v2"""
     schema_lock = lock.get("schema_version") if isinstance(lock, dict) else None
     cible_v6 = schema_lock == SCHEMA_LOCK_CONTINUATION
+    cible_route_program = schema_lock == SCHEMA_LOCK_ROUTE_PROGRAM
     cible_continuation = schema_lock in {
         SCHEMA_LOCK_CONTINUATION_V5, SCHEMA_LOCK_CONTINUATION,
     }
@@ -1483,9 +1638,11 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     _exiger(schema_lock in {
         SCHEMA_LOCK_V3, SCHEMA_LOCK,
         SCHEMA_LOCK_CONTINUATION_V5, SCHEMA_LOCK_CONTINUATION,
-    }, "campaign-lock/v3, v4, v5 ou v6 absent")
+        SCHEMA_LOCK_ROUTE_PROGRAM,
+    }, "campaign-lock/v3, v4, v5, v6 ou v7 absent")
     cible_route_v3 = schema_lock in {
         SCHEMA_LOCK, SCHEMA_LOCK_CONTINUATION_V5, SCHEMA_LOCK_CONTINUATION,
+        SCHEMA_LOCK_ROUTE_PROGRAM,
     }
     _exiger(lock.get("protocol_version") == PROTOCOLE_VERSION, "protocole v2 absent")
     _exiger(lock.get("operation") in {
@@ -1579,7 +1736,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     champs_route_source = {
         "path", "sha256", "schema_version", "criterion_version", "observed_at"
     }
-    if cible_route_v3:
+    if cible_route_v3 and not cible_route_program:
         champs_route_source |= {
             "budget_estimate_microdollars", "budget_cap_microdollars",
             "b0_09_approval_sha256", "b0_09_proposal_snapshot_sha256",
@@ -1589,7 +1746,9 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     route_path = chemin_relatif_sur(route_source.get("path"), "route_snapshot_source.path")
     _sha(route_source.get("sha256"), "route_snapshot_source.sha256")
     schema_snapshot = (
-        "benchmark-lab-x/route-preflight-snapshot/v3"
+        SCHEMA_ENDPOINTS_SNAPSHOT
+        if cible_route_program
+        else "benchmark-lab-x/route-preflight-snapshot/v3"
         if cible_route_v3
         else "benchmark-lab-x/route-preflight-snapshot/v2"
     )
@@ -1597,15 +1756,18 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
             f"snapshot de routes requis: {schema_snapshot}")
     _exiger(route_source.get("criterion_version") == selection["version"],
             "critère de route différent de la politique de sélection")
-    _exiger(
-        selection["version"]
-        == ("benchmark-lab-x/selection-route/v3" if cible_route_v3
-            else "benchmark-lab-x/selection-route/v2"),
-        "version du critère incompatible avec le lock",
+    selection_attendue = (
+        POLITIQUE_ROUTE_PROGRAM
+        if cible_route_program
+        else "benchmark-lab-x/selection-route/v3"
+        if cible_route_v3
+        else "benchmark-lab-x/selection-route/v2"
     )
+    _exiger(selection["version"] == selection_attendue,
+            "version du critère incompatible avec le lock")
     _exiger(isinstance(route_source.get("observed_at"), str) and route_source["observed_at"],
             "date du snapshot absente")
-    if cible_route_v3:
+    if cible_route_v3 and not cible_route_program:
         if not cible_continuation:
             _exiger(
                 route_source.get("budget_estimate_microdollars") == estimation
@@ -1655,6 +1817,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     )
 
     snapshot_routes: dict[str, Any] | None = None
+    route_program_endpoints: dict[str, dict[str, Any]] | None = None
     prompt: str | None = None
     if racine_depot is not None:
         if not cible_continuation:
@@ -1690,7 +1853,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
                 and snapshot.get("models_file") == registry_path
                 and snapshot.get("models_file_sha256") == registre["sha256"],
                 "contexte du snapshot différent du lock")
-        if cible_route_v3:
+        if cible_route_v3 and not cible_route_program:
             snapshot_budget = snapshot.get("budget_reestimate")
             snapshot_approval = snapshot.get("b0_09_approval")
             proposal_source = snapshot.get("proposal_source")
@@ -1744,6 +1907,10 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
         snapshot_routes = snapshot.get("resolved")
         _exiger(isinstance(snapshot_routes, dict) and set(panel) <= set(snapshot_routes),
                 "routes résolues incomplètes")
+        if cible_route_program:
+            route_program_endpoints = _valider_snapshot_route_program(
+                snapshot, route_source, cap
+            )
         prompt, _ = assembler_prompt_verrouille(racine_depot, task)
 
     collections = lock.get("collections")
@@ -1778,9 +1945,15 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
                 f"contexte de tâche différent dans {cid}")
 
         manifeste = valider_manifeste_execution(cellule.get("execution_manifest"))
+        schema_execution_attendu = (
+            SCHEMA_EXECUTION_ROUTE_PROGRAM
+            if cible_route_program
+            else SCHEMA_EXECUTION
+            if cible_route_v3
+            else SCHEMA_EXECUTION_V3
+        )
         _exiger(
-            manifeste.get("schema_version")
-            == (SCHEMA_EXECUTION if cible_route_v3 else SCHEMA_EXECUTION_V3),
+            manifeste.get("schema_version") == schema_execution_attendu,
             f"version du manifeste incompatible avec {schema_lock}",
         )
         _sha(cellule.get("execution_manifest_hash"), f"{cid}.execution_manifest_hash")
@@ -1862,6 +2035,40 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
                         f"{champ} différent du snapshot dans {cid}")
             _exiger(attendu_route.get("max_tokens") == manifeste["max_tokens"],
                     f"max_tokens différent du snapshot dans {cid}")
+        if route_program_endpoints is not None:
+            _exiger(alias == "hy3"
+                    and manifeste["model_requested"] == "tencent/hy3"
+                    and manifeste["quantization"] == {
+                        "status": "declared", "value": "fp8"
+                    }
+                    and manifeste["max_tokens"] == 131_072,
+                    f"configuration HY3 FP8 différente dans {cid}")
+            routes_programmees = manifeste["provider_routes"]
+            _exiger(
+                [(route["provider_pinned"], route["provider_expected"],
+                  route["endpoint_tag"])
+                 for route in routes_programmees]
+                == [
+                    ("atlas-cloud", "AtlasCloud", "atlas-cloud/fp8"),
+                    ("deepinfra", "DeepInfra", "deepinfra/fp8"),
+                ],
+                f"ordre de routes HY3 différent dans {cid}",
+            )
+            for route_programmee in routes_programmees:
+                endpoint = route_program_endpoints[
+                    route_programmee["provider_pinned"]
+                ]
+                _exiger(
+                    route_programmee["provider_expected"]
+                    == endpoint["provider_name"]
+                    and route_programmee["endpoint_tag"] == endpoint["tag"]
+                    and route_programmee["metadata_evidence"] == {
+                        "url": snapshot["source_url"],
+                        "observed_at": snapshot["observed_at"],
+                        "response_sha256": snapshot["response_sha256"],
+                    },
+                    f"preuve de route HY3 différente dans {cid}",
+                )
         identite_hash = _empreinte_contractuelle(
             {"base_identity": cellule["base_identity"],
              "execution_manifest_hash": cellule["execution_manifest_hash"]},
@@ -1871,7 +2078,12 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
                 f"configuration différente entre les runs de {alias}")
         identites[alias] = identite_hash
         backends.add(manifeste["backend"])
-        providers.add(manifeste["provider_pinned"])
+        if cible_route_program:
+            providers.update(
+                route["provider_pinned"] for route in manifeste["provider_routes"]
+            )
+        else:
+            providers.add(manifeste["provider_pinned"])
     if cible_v6:
         _exiger(
             {alias for alias, _ in couples} == set(panel)
