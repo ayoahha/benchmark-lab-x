@@ -715,6 +715,7 @@ class ProtocolV2Tests(unittest.TestCase):
             lock["failure_scope_policy"] = {
                 "version": "benchmark-lab-x/failure-scope/v1",
             }
+            lock["series_source"]["deferred_pending_slots"] = []
         return lock
 
     def test_lock_v6_separe_collecte_instrument_budget_et_portee_echec(self):
@@ -728,6 +729,39 @@ class ProtocolV2Tests(unittest.TestCase):
     def test_lock_v5_historique_reste_valide_sans_politique_locale(self):
         lock = self._lock_continuation_fixture(SCHEMA_LOCK_CONTINUATION_V5)
         self.assertEqual(valider_lock(lock), lock)
+
+    def test_lock_v6_accepte_un_sous_ensemble_irregulier_explicitement_differe(self):
+        lock = self._lock_continuation_fixture(SCHEMA_LOCK_CONTINUATION)
+        aliases = lock["panel"][:3]
+        lock["panel"] = aliases
+        lock["collections"] = [
+            cellule
+            for cellule in lock["collections"]
+            if (
+                cellule["alias"] in aliases[1:]
+                or cellule["alias"] == aliases[0] and cellule["run"] == 5
+            )
+        ]
+        lock["quotas"]["attempts_total_max"] = len(lock["collections"]) * 3
+        alias_differe = PANEL_B0[3]
+        lock["series_source"]["deferred_pending_slots"] = [
+            {
+                "collection_id": f"{alias_differe}__r{run}",
+                "reason": "HOLD_RUNTIME_METADATA_CONFLICT",
+            }
+            for run in range(2, 7)
+        ]
+        self.assertEqual(len(lock["collections"]), 13)
+        self.assertEqual(valider_lock(lock), lock)
+
+        invalide = copy.deepcopy(lock)
+        invalide["series_source"]["deferred_pending_slots"][0][
+            "collection_id"
+        ] = lock["collections"][0]["collection_id"]
+        with self.assertRaisesRegex(
+            ContratV2Invalide, "slots différés dupliqués ou encore ciblés"
+        ):
+            valider_lock(invalide)
 
     def test_http_non_retryable_v6_bloque_route_sans_hold_global(self):
         lock = self._lock_continuation_fixture(SCHEMA_LOCK_CONTINUATION)

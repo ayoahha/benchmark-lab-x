@@ -651,6 +651,9 @@ def _valider_sources_continuation(
         "continuation_cap_microdollars", "approved_estimate_microdollars",
         "approved_fallback_routes",
     }
+    cible_v6 = lock.get("schema_version") == SCHEMA_LOCK_CONTINUATION
+    if cible_v6:
+        champs_serie.add("deferred_pending_slots")
     _exiger(isinstance(serie, dict) and set(serie) == champs_serie,
             "source de série de continuation invalide")
     _exiger(isinstance(serie.get("series_id"), str) and serie["series_id"],
@@ -699,6 +702,34 @@ def _valider_sources_continuation(
         aliases_fallback.append(fallback["alias"])
     _exiger(aliases_fallback == sorted(set(aliases_fallback)),
             "fallbacks approuvés non triés ou dupliqués")
+
+    deferred_ids: set[str] = set()
+    if cible_v6:
+        deferred = serie.get("deferred_pending_slots")
+        _exiger(isinstance(deferred, list), "slots différés absents")
+        for index, item in enumerate(deferred):
+            _exiger(
+                isinstance(item, dict)
+                and set(item) == {"collection_id", "reason"}
+                and isinstance(item.get("collection_id"), str)
+                and re.fullmatch(
+                    r"[a-zA-Z0-9._-]+__r[1-6]", item["collection_id"]
+                ) is not None
+                and item.get("reason") == "HOLD_RUNTIME_METADATA_CONFLICT",
+                f"slot différé invalide à l'index {index}",
+            )
+            deferred_ids.add(item["collection_id"])
+        _exiger(
+            len(deferred_ids) == len(deferred)
+            and deferred_ids.isdisjoint({
+                cellule["collection_id"] for cellule in lock["collections"]
+            })
+            and all(
+                collection_id.split("__r", 1)[0] not in lock["panel"]
+                for collection_id in deferred_ids
+            ),
+            "slots différés dupliqués ou encore ciblés",
+        )
 
     if racine_depot is None:
         return
@@ -824,10 +855,11 @@ def _valider_sources_continuation(
         for slot in slots
         if isinstance(slot, dict) and slot.get("status") == "pending"
     }
+    target_ids = {cellule["collection_id"] for cellule in lock["collections"]}
     _exiger(
-        pending_ids == {cellule["collection_id"] for cellule in lock["collections"]}
-        and counts.get("pending") == len(lock["collections"]),
-        "grille de continuation différente des slots pendants",
+        pending_ids == target_ids | deferred_ids
+        and counts.get("pending") == len(target_ids) + len(deferred_ids),
+        "grille de continuation différente des slots ciblés et différés",
     )
     costs = inventory.get("costs")
     _exiger(
@@ -1714,8 +1746,12 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
         prompt, _ = assembler_prompt_verrouille(racine_depot, task)
 
     collections = lock.get("collections")
-    _exiger(isinstance(collections, list) and len(collections) == len(panel) * runs,
-            "grille de collecte incomplète")
+    _exiger(
+        isinstance(collections, list)
+        and bool(collections)
+        and (cible_v6 or len(collections) == len(panel) * runs),
+        "grille de collecte incomplète",
+    )
     couples: set[tuple[str, int]] = set()
     identites: dict[str, str] = {}
     backends: set[str] = set()
@@ -1835,8 +1871,18 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
         identites[alias] = identite_hash
         backends.add(manifeste["backend"])
         providers.add(manifeste["provider_pinned"])
-    _exiger(couples == {(alias, run) for alias in panel for run in range(1, runs + 1)},
-            "grille de collecte incomplète")
+    if cible_v6:
+        _exiger(
+            {alias for alias, _ in couples} == set(panel)
+            and total_tentatives <= len(collections) * lock["attempts_max"],
+            "sous-ensemble de continuation ou quota incohérent",
+        )
+    else:
+        _exiger(
+            couples
+            == {(alias, run) for alias in panel for run in range(1, runs + 1)},
+            "grille de collecte incomplète",
+        )
     _exiger(set(quotas["in_flight_by_backend"]) == backends,
             "quotas backend différents des routes")
     _exiger(set(quotas["in_flight_by_provider"]) == providers,

@@ -787,6 +787,15 @@ def construire_lock_continuation(
     quotas_reference = reference_lock["quotas"]
     budget_continuation = continuation["budget"]
     approvals = continuation["approvals"]
+    deferred = continuation.get("deferred_pending_slots") or {
+        "slots": [], "reason": "HOLD_RUNTIME_METADATA_CONFLICT"
+    }
+    _exiger(
+        isinstance(deferred, dict)
+        and isinstance(deferred.get("slots"), list)
+        and deferred.get("reason") == "HOLD_RUNTIME_METADATA_CONFLICT",
+        "slots différés invalides dans le brouillon",
+    )
     lock = {
         "schema_version": SCHEMA_LOCK_CONTINUATION,
         "protocol_version": reference_lock["protocol_version"],
@@ -826,6 +835,13 @@ def construire_lock_continuation(
             "approved_fallback_routes": copy.deepcopy(
                 approvals["fallback_routes"]
             ),
+            "deferred_pending_slots": [
+                {
+                    "collection_id": collection_id,
+                    "reason": deferred["reason"],
+                }
+                for collection_id in sorted(deferred["slots"])
+            ],
         },
         "environments": copy.deepcopy(reference_lock["environments"]),
         "panel": panel,
