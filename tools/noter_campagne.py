@@ -28,6 +28,12 @@ RACINE = Path(__file__).parent.parent
 sys.path.insert(0, str(Path(__file__).parent))
 
 from empreintes import empreinte  # noqa: E402
+from finalisation_serie import (  # noqa: E402
+    charger_finalisation,
+    chemin_score,
+    instrument_fige,
+    valider_autorisation_notation,
+)
 from moteur_rendu import descripteur  # noqa: E402
 from protocole_v2 import (  # noqa: E402
     CAUSE_CODES,
@@ -50,9 +56,11 @@ from protocole_v2 import (  # noqa: E402
 )
 
 
-def _executer_borne(cmd: list[str], delai: int) -> subprocess.CompletedProcess[str]:
+def _executer_borne(
+    cmd: list[str], delai: int, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, start_new_session=True)
+                            text=True, start_new_session=True, env=env)
     try:
         sortie, erreur = proc.communicate(timeout=delai)
     except subprocess.TimeoutExpired:
@@ -124,24 +132,34 @@ def _sortie_unknown(card: dict[str, Any], cause: str, detail: str) -> dict[str, 
             "verify_version": card["verify_version"]}
 
 
-def _noter_une_carte(card: dict[str, Any], response: Path) -> dict[str, Any]:
-    verifier = resoudre_sous(RACINE, card["verifier_path"])
+def _noter_une_carte(
+    card: dict[str, Any],
+    response: Path,
+    instrument_root: Path = RACINE,
+    offline: bool = False,
+) -> dict[str, Any]:
+    verifier = resoudre_sous(instrument_root, card["verifier_path"])
     if not verifier.is_file():
         raise ContratV2Invalide(f"vérificateur absent: {verifier}")
     manifeste = card.get("verify_manifest")
     if not isinstance(manifeste, dict) or empreinte(manifeste) != card["verify_hash"]:
         raise ContratV2Invalide(f"manifeste du vérificateur invalide: {card['id']}")
     for asset in manifeste.get("assets", []):
-        path = resoudre_sous(RACINE, asset["path"])
+        path = resoudre_sous(instrument_root, asset["path"])
         if not path.is_file() or sha256_fichier(path) != asset["sha256"]:
             raise ContratV2Invalide(f"actif du vérificateur modifié: {asset['path']}")
     with tempfile.TemporaryDirectory(prefix="score-v2-") as tmp:
         neutre = Path(tmp) / "response.md"
         shutil.copyfile(response, neutre)
+        environnement = None
+        if offline:
+            environnement = dict(os.environ)
+            environnement["UV_OFFLINE"] = "1"
         try:
             out = _executer_borne(
                 ["uv", "run", str(verifier), "--card", card["id"], str(neutre)],
                 int(card["watchdog_s"]),
+                env=environnement,
             )
         except subprocess.TimeoutExpired:
             return _sortie_unknown(card, "VERIFY_TIMEOUT", "garde-fou de 180 s dépassé")
@@ -184,7 +202,15 @@ def _valider_sortie(result: dict[str, Any], card: dict[str, Any]) -> None:
         raise ContratV2Invalide(f"ensemble des prédicats différent pour {card['id']}")
 
 
-def noter_collection(campaign_dir: Path, lock: dict[str, Any], collection_id: str) -> list[Path]:
+def noter_collection(
+    campaign_dir: Path,
+    lock: dict[str, Any],
+    collection_id: str,
+    *,
+    score_dir: Path | None = None,
+    instrument_root: Path = RACINE,
+    offline: bool = False,
+) -> list[Path]:
     lock_hash = empreinte_lock(lock)
     cellule = cellule_du_lock(lock, collection_id)
     receipt_path, collection = _recu_collecte(campaign_dir, collection_id)
@@ -195,7 +221,9 @@ def noter_collection(campaign_dir: Path, lock: dict[str, Any], collection_id: st
     environment_hash = empreinte(environment)
     produits = []
     for card in lock["axes"]:
-        result = _noter_une_carte(card, response)
+        result = _noter_une_carte(
+            card, response, instrument_root=instrument_root, offline=offline
+        )
         _valider_sortie(result, card)
         context = {
             "schema_version": SCHEMA_CONTEXT,
@@ -238,26 +266,71 @@ def noter_collection(campaign_dir: Path, lock: dict[str, Any], collection_id: st
         valider_recu_score(
             score, lock, lock_hash, card, cellule, collection, collection_hash
         )
-        path = (campaign_dir / "scores" / collection_hash / card["id"]
+        racine_scores = campaign_dir / "scores" if score_dir is None else score_dir / lock_hash
+        path = (racine_scores / collection_hash / card["id"]
                 / f"{card['verify_hash']}.json")
         ecrire_json_immuable(path, score)
         produits.append(path)
     return produits
 
 
+def noter_serie(finalization_lock: Path) -> list[Path]:
+    finalisation = charger_finalisation(finalization_lock, RACINE)
+    valider_autorisation_notation(finalisation, RACINE)
+    produits: list[Path] = []
+    with instrument_fige(finalisation, RACINE) as instrument_root:
+        for acquisition in finalisation.composition.acquisitions:
+            recus = noter_collection(
+                acquisition.source_campaign_dir,
+                acquisition.source_lock,
+                acquisition.slot_id,
+                score_dir=finalisation.score_dir,
+                instrument_root=instrument_root,
+                offline=True,
+            )
+            for card, path in zip(acquisition.source_lock["axes"], recus):
+                attendu = chemin_score(finalisation, acquisition, card)
+                if path != attendu:
+                    raise ContratV2Invalide(
+                        f"sortie de score différente du verrou: "
+                        f"{acquisition.slot_id}/{card['id']}"
+                    )
+            produits.extend(recus)
+    attendu = finalisation.lock["expected"]["score_receipts"]
+    if len(produits) != attendu:
+        raise ContratV2Invalide(
+            f"nombre de reçus de score différent: {len(produits)} au lieu de {attendu}"
+        )
+    return produits
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("campaign_dir", type=Path)
+    ap.add_argument("campaign_dir", type=Path, nargs="?")
     ap.add_argument("--lock", type=Path)
     ap.add_argument("--collection-id")
+    ap.add_argument("--finalization-lock", type=Path)
     args = ap.parse_args()
-    lock_path = args.lock or args.campaign_dir / "campaign.lock.json"
     try:
-        lock = valider_lock(charger_json(lock_path), RACINE)
-        ids = [args.collection_id] if args.collection_id else [c["collection_id"] for c in lock["collections"]]
-        produits = []
-        for collection_id in ids:
-            produits.extend(noter_collection(args.campaign_dir, lock, collection_id))
+        if args.finalization_lock is not None:
+            if args.campaign_dir is not None or args.lock is not None or args.collection_id is not None:
+                raise ContratV2Invalide(
+                    "la finalisation composée est incompatible avec les arguments de campagne"
+                )
+            produits = noter_serie(args.finalization_lock)
+        else:
+            if args.campaign_dir is None:
+                raise ContratV2Invalide("dossier de campagne absent")
+            lock_path = args.lock or args.campaign_dir / "campaign.lock.json"
+            lock = valider_lock(charger_json(lock_path), RACINE)
+            ids = (
+                [args.collection_id]
+                if args.collection_id
+                else [c["collection_id"] for c in lock["collections"]]
+            )
+            produits = []
+            for collection_id in ids:
+                produits.extend(noter_collection(args.campaign_dir, lock, collection_id))
     except ContratV2Invalide as exc:
         print(f"HOLD: {exc}", file=sys.stderr)
         return 2

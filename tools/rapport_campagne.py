@@ -39,6 +39,11 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 from empreintes import empreinte  # noqa: E402
+from finalisation_serie import (  # noqa: E402
+    SCHEMA_RESULTATS,
+    charger_finalisation,
+    chemin_score,
+)
 from protocole_v2 import (  # noqa: E402
     PROTOCOLE_VERSION as PROTOCOLE_V2,
     ContratV2Invalide,
@@ -360,6 +365,62 @@ def _score_v2(
     }
 
 
+def _score_serie(finalisation, card: dict, alias: str, run: int) -> dict:
+    collection_id = f"{alias}__r{run}"
+    acquisition = finalisation.acquisitions_by_id[collection_id]
+    source_card = next(
+        axe for axe in acquisition.source_lock["axes"] if axe["id"] == card["id"]
+    )
+    collection = acquisition.collection_receipt
+    routes_programmees = acquisition.cellule["execution_manifest"].get(
+        "provider_routes"
+    ) or [{
+        "provider_pinned": acquisition.cellule["execution_manifest"]["provider_pinned"]
+    }]
+    routage = {
+        "served": copy.deepcopy(collection["served"]),
+        "provider_route_order": [
+            route["provider_pinned"] for route in routes_programmees
+        ],
+    }
+    score_path = chemin_score(finalisation, acquisition, card)
+    if not score_path.is_file():
+        return {
+            "alias": alias,
+            "run": run,
+            "etat": "MISSING",
+            "cause_code": "SCORE_RECEIPT_MISSING",
+            "collection_receipt_hash": acquisition.collection_receipt_hash,
+            **routage,
+        }
+    if score_path.is_symlink():
+        raise ContratV2Invalide(f"reçu de score composé lié: {collection_id}/{card['id']}")
+    score = charger_json(score_path)
+    valider_recu_score(
+        score,
+        acquisition.source_lock,
+        acquisition.source_lock_hash,
+        source_card,
+        acquisition.cellule,
+        collection,
+        acquisition.collection_receipt_hash,
+    )
+    return {
+        "alias": alias,
+        "run": run,
+        "etat": score.get("etat"),
+        "cause_code": score.get("cause_code"),
+        "verdict": score.get("verdict"),
+        "niveau": score.get("niveau"),
+        "frontiere": score.get("frontiere"),
+        "predicats": score.get("predicats") or {},
+        "mesures": score.get("mesures") or {},
+        "measurement_context_hash": score.get("measurement_context_hash"),
+        "collection_receipt_hash": acquisition.collection_receipt_hash,
+        **routage,
+    }
+
+
 def _rangs_competition(candidats: list[dict], kind: str) -> None:
     def valeur(candidat: dict) -> int | None:
         if candidat.get("panel_state") == "RETIRE":
@@ -374,6 +435,91 @@ def _rangs_competition(candidats: list[dict], kind: str) -> None:
     for candidat in candidats:
         v = valeur(candidat)
         candidat["rang_provisoire"] = None if v is None else 1 + sum(x > v for x in valeurs)
+
+
+def _assembler_axes(
+    panel: list[str],
+    axes: list[dict],
+    score_loader,
+    lock_hash: str,
+    instrument_qualifie: bool,
+    motifs_r016: list[str],
+    audits_dir: Path,
+    retraites: set[str] | None = None,
+) -> list[dict]:
+    retraites = retraites or set()
+    cartes = []
+    for card in axes:
+        candidats = []
+        blocages = []
+        contextes = set()
+        for alias in panel:
+            scores = [score_loader(card, alias, run) for run in range(1, 7)]
+            contextes.update(
+                score["measurement_context_hash"]
+                for score in scores if score.get("measurement_context_hash")
+            )
+            agregat = agreger_scores(card["kind"], scores)
+            if not agregat.get("classement_valide"):
+                blocages.append({"alias": alias, "runs": agregat.get("blocages")})
+            candidats.append({
+                "alias": alias,
+                "panel_state": "RETIRE" if alias in retraites else None,
+                "providers_served": sorted({
+                    score["served"]["provider"] for score in scores
+                    if isinstance(score.get("served"), dict)
+                    and score["served"].get("provider")
+                }),
+                "provider_route_order": next((
+                    score["provider_route_order"] for score in scores
+                    if score.get("provider_route_order")
+                ), []),
+                "scores": scores,
+                "agregat": agregat,
+            })
+        _rangs_competition(candidats, card["kind"])
+        contexte_unique = len(contextes) == 1
+        if not contexte_unique:
+            blocages.append({"measurement_context_hashes": sorted(contextes)})
+        audit_receipt = None
+        audit_accepte = False
+        audit_path = audits_dir / card["id"] / f"{card['verify_hash']}.json"
+        if contexte_unique and contextes and audit_path.is_file():
+            hashes_collecte = {
+                score["collection_receipt_hash"]
+                for candidat in candidats for score in candidat["scores"]
+                if score.get("etat") == "SCORED"
+                and score.get("collection_receipt_hash")
+            }
+            try:
+                audit_receipt = valider_recu_audit(
+                    charger_json(audit_path), lock_hash, card,
+                    next(iter(contextes)), hashes_collecte,
+                )
+            except ContratV2Invalide as exc:
+                blocages.append({"audit": f"reçu invalide: {exc}"})
+            else:
+                audit_accepte = audit_receipt["decision"] == "ACCEPTED"
+                if not audit_accepte:
+                    blocages.append({"audit": "désaccord humain avec la note du code"})
+        elif contexte_unique and contextes:
+            blocages.append({"audit": "reçu d'audit fondé sur le risque absent"})
+        else:
+            blocages.append({"audit": "contexte de mesure non auditable"})
+        classement_valide = not blocages and instrument_qualifie and audit_accepte
+        cartes.append({
+            "id": card["id"],
+            "kind": card["kind"],
+            "verify_version": card["verify_version"],
+            "verify_hash": card["verify_hash"],
+            "measurement_context_hash": next(iter(contextes)) if contexte_unique else None,
+            "statut": "valide" if classement_valide else "provisoire",
+            "classement_valide": classement_valide,
+            "blocages": blocages + ([] if instrument_qualifie else [{"R-016": motifs_r016}]),
+            "audit_receipt": audit_receipt,
+            "candidats": candidats,
+        })
+    return cartes
 
 
 def rapport_v2(campaign_dir: Path, conf: dict) -> int:
@@ -406,81 +552,18 @@ def rapport_v2(campaign_dir: Path, conf: dict) -> int:
             panel_events = None
             retraites = set()
 
-        cartes = []
-        for card in lock["axes"]:
-            candidats = []
-            blocages = []
-            contextes = set()
-            for alias in lock["panel"]:
-                scores = [
-                    _score_v2(campaign_dir, lock, lock_hash, card, alias, run)
-                    for run in range(1, 7)
-                ]
-                contextes.update(s["measurement_context_hash"] for s in scores
-                                  if s.get("measurement_context_hash"))
-                agregat = agreger_scores(card["kind"], scores)
-                if not agregat.get("classement_valide"):
-                    blocages.append({"alias": alias, "runs": agregat.get("blocages")})
-                candidats.append({
-                    "alias": alias,
-                    "panel_state": "RETIRE" if alias in retraites else None,
-                    "providers_served": sorted({
-                        score["served"]["provider"] for score in scores
-                        if isinstance(score.get("served"), dict)
-                        and score["served"].get("provider")
-                    }),
-                    "provider_route_order": next((
-                        score["provider_route_order"] for score in scores
-                        if score.get("provider_route_order")
-                    ), []),
-                    "scores": scores,
-                    "agregat": agregat,
-                })
-            _rangs_competition(candidats, card["kind"])
-            contexte_unique = len(contextes) == 1
-            if not contexte_unique:
-                blocages.append({"measurement_context_hashes": sorted(contextes)})
-            audit_receipt = None
-            audit_accepte = False
-            audit_path = (
-                campaign_dir / conf.get("audits_dir", "audits") / card["id"]
-                / f"{card['verify_hash']}.json"
-            )
-            if contexte_unique and contextes and audit_path.is_file():
-                hashes_collecte = {
-                    score["collection_receipt_hash"]
-                    for candidat in candidats for score in candidat["scores"]
-                    if score.get("etat") == "SCORED"
-                    and score.get("collection_receipt_hash")
-                }
-                try:
-                    audit_receipt = valider_recu_audit(
-                        charger_json(audit_path), lock_hash, card,
-                        next(iter(contextes)), hashes_collecte,
-                    )
-                except ContratV2Invalide as exc:
-                    blocages.append({"audit": f"reçu invalide: {exc}"})
-                else:
-                    audit_accepte = audit_receipt["decision"] == "ACCEPTED"
-                    if not audit_accepte:
-                        blocages.append({"audit": "désaccord humain avec la note du code"})
-            elif contexte_unique and contextes:
-                blocages.append({"audit": "reçu d'audit fondé sur le risque absent"})
-            else:
-                blocages.append({"audit": "contexte de mesure non auditable"})
-            classement_valide = not blocages and instrument_qualifie_v2 and audit_accepte
-            cartes.append({
-                "id": card["id"],
-                "kind": card["kind"],
-                "verify_version": card["verify_version"],
-                "verify_hash": card["verify_hash"],
-                "measurement_context_hash": next(iter(contextes)) if contexte_unique else None,
-                "statut": "valide" if classement_valide else "provisoire",
-                "classement_valide": classement_valide,
-                "blocages": blocages + ([] if instrument_qualifie_v2 else [{"R-016": motifs_r016}]),
-                "audit_receipt": audit_receipt,
-                "candidats": candidats,
-            })
+        cartes = _assembler_axes(
+            lock["panel"],
+            lock["axes"],
+            lambda card, alias, run: _score_v2(
+                campaign_dir, lock, lock_hash, card, alias, run
+            ),
+            lock_hash,
+            instrument_qualifie_v2,
+            motifs_r016,
+            campaign_dir / conf.get("audits_dir", "audits"),
+            retraites,
+        )
         operator_hold_path = campaign_dir / "operator-hold.json"
         if operator_hold_path.is_file():
             operator_hold = valider_hold_operateur(
@@ -523,7 +606,65 @@ def rapport_v2(campaign_dir: Path, conf: dict) -> int:
     return 0
 
 
+def rapport_serie(finalization_lock: Path) -> int:
+    try:
+        finalisation = charger_finalisation(
+            finalization_lock, Path(__file__).parent.parent
+        )
+        composition = finalisation.composition.objet
+        axes = composition["instrument_context"]["axes"]
+        cartes = _assembler_axes(
+            composition["panel"],
+            axes,
+            lambda card, alias, run: _score_serie(
+                finalisation, card, alias, run
+            ),
+            finalisation.lock_hash,
+            True,
+            [],
+            finalisation.audits_dir,
+        )
+        resultat = {
+            "schema_version": SCHEMA_RESULTATS,
+            "protocol_version": PROTOCOLE_V2,
+            "campaign_id": composition["series_id"],
+            "campaign_lock_hash": finalisation.lock_hash,
+            "task_version": composition["instrument_context"]["task"]["task_version"],
+            "prompt_sha256": composition["instrument_context"]["task"]["prompt_sha256"],
+            "notation_source": (
+                "reçus de score immuables liés à leurs verrous sources, "
+                "résolus par acquisition-composition/v1 sans rejeu Chromium"
+            ),
+            "conformite": {
+                "instrument_qualifie": True,
+                "page_validee": all(carte["classement_valide"] for carte in cartes),
+                "blocages": {},
+            },
+            "coverage_receipt": finalisation.coverage_receipt,
+            "panel_events": None,
+            "campaign_status": (
+                "incomplete"
+                if any(
+                    score["etat"] == "MISSING"
+                    for axe in cartes for candidat in axe["candidats"]
+                    for score in candidat["scores"]
+                )
+                else "complete"
+            ),
+            "operator_status": None,
+            "operator_hold": None,
+            "axes": cartes,
+        }
+    except ContratV2Invalide as exc:
+        print(f"HOLD: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(resultat, ensure_ascii=False, indent=1))
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "--finalization-lock":
+        return rapport_serie(Path(sys.argv[2]))
     if len(sys.argv) < 3:
         print(__doc__, file=sys.stderr)
         return 2
