@@ -273,7 +273,8 @@ def preparer(args: argparse.Namespace) -> dict[str, Any]:
     _exiger(not out_dir.exists(), "le dossier de campagne existe déjà")
     out_dir.mkdir(parents=False)
 
-    reference = _charger_json((RACINE / args.reference_lock).resolve())
+    reference_path = (RACINE / args.reference_lock).resolve()
+    reference = _charger_json(reference_path)
     _exiger(
         reference.get("campaign_id") == "2026-08-09-pentagone-v6"
         and reference.get("task", {}).get("task_version") == "task-v4",
@@ -346,6 +347,12 @@ def preparer(args: argparse.Namespace) -> dict[str, Any]:
         "created_at": args.created_at,
         "paid_authorization_required": True,
         "repository_source": {"commit": source_commit},
+        "instrument_source": {
+            "commit": reference["repository_source"]["commit"],
+            "reference_lock_path": reference_path.relative_to(RACINE).as_posix(),
+            "reference_lock_sha256": sha256_fichier(reference_path),
+            "reference_campaign_lock_hash": empreinte_lock(reference),
+        },
         "environments": copy.deepcopy(reference["environments"]),
         "panel": ["hy3"],
         "runs": 6,

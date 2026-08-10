@@ -600,7 +600,6 @@ def _chemins_source_lock(lock: dict[str, Any]) -> list[str]:
         if lock.get("schema_version") in {
             SCHEMA_LOCK_V3, SCHEMA_LOCK,
             SCHEMA_LOCK_CONTINUATION_V5, SCHEMA_LOCK_CONTINUATION,
-            SCHEMA_LOCK_ROUTE_PROGRAM,
         }
         else lock.get("score_cards")
     )) or []
@@ -639,6 +638,70 @@ def _verifier_source_depot(lock: dict[str, Any], racine_depot: Path) -> None:
         )
         _exiger(path.read_bytes() == octets_commit,
                 f"source courante différente du commit: {relatif}")
+
+
+def _valider_instrument_route_program(
+    lock: dict[str, Any], racine_depot: Path | None
+) -> None:
+    instrument = lock.get("instrument_source")
+    champs = {
+        "commit", "reference_lock_path", "reference_lock_sha256",
+        "reference_campaign_lock_hash",
+    }
+    _exiger(isinstance(instrument, dict) and set(instrument) == champs,
+            "source d'instrument du programme de routes invalide")
+    commit = _git_oid(instrument.get("commit"), "instrument_source.commit")
+    reference_path = chemin_relatif_sur(
+        instrument.get("reference_lock_path"),
+        "instrument_source.reference_lock_path",
+    )
+    _sha(instrument.get("reference_lock_sha256"),
+         "instrument_source.reference_lock_sha256")
+    _sha(instrument.get("reference_campaign_lock_hash"),
+         "instrument_source.reference_campaign_lock_hash")
+    if racine_depot is None:
+        return
+
+    confirme = _git_lire(
+        racine_depot, ["rev-parse", "--verify", f"{commit}^{{commit}}"],
+        "commit instrument du programme de routes",
+    ).decode("ascii", errors="strict").strip()
+    _exiger(confirme == commit, "commit instrument inexact")
+    path = resoudre_sous(racine_depot, reference_path)
+    _exiger(path.is_file() and not path.is_symlink(),
+            "lock d'instrument absent ou lié")
+    data = path.read_bytes()
+    _exiger(sha256_octets(data) == instrument["reference_lock_sha256"],
+            "lock d'instrument modifié")
+    try:
+        reference = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ContratV2Invalide("lock d'instrument illisible") from exc
+    valider_lock(reference)
+    _exiger(
+        empreinte(reference) == instrument["reference_campaign_lock_hash"]
+        and reference.get("repository_source", {}).get("commit") == commit,
+        "preuve du lock d'instrument invalide",
+    )
+    _exiger(lock["task"] == reference["task"] and lock["axes"] == reference["axes"],
+            "instrument différent du lock de référence")
+    for entree in lock["task"]["task_tree"]:
+        relatif = (Path(lock["task"]["task_dir"]) / entree["path"]).as_posix()
+        blob = _git_lire(
+            racine_depot, ["cat-file", "blob", f"{commit}:{relatif}"], relatif
+        )
+        _exiger(len(blob) == entree["bytes"]
+                and sha256_octets(blob) == entree["sha256"],
+                f"actif de tâche différent du commit instrument: {relatif}")
+    for axe in lock["axes"]:
+        for asset in axe["verify_manifest"]["assets"]:
+            relatif = asset["path"]
+            blob = _git_lire(
+                racine_depot, ["cat-file", "blob", f"{commit}:{relatif}"], relatif
+            )
+            _exiger(len(blob) == asset["bytes"]
+                    and sha256_octets(blob) == asset["sha256"],
+                    f"actif juge différent du commit instrument: {relatif}")
 
 
 def _valider_sources_continuation(
@@ -1631,6 +1694,8 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     }
     if cible_continuation:
         champs_lock |= {"instrument_source", "series_source"}
+    if cible_route_program:
+        champs_lock.add("instrument_source")
     if cible_v6:
         champs_lock.add("failure_scope_policy")
     _exiger(isinstance(lock, dict) and set(lock) == champs_lock,
@@ -1803,7 +1868,7 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
     for index, axe in enumerate(axes):
         _valider_axe_v3(
             axe, index, runs, len(panel) * runs,
-            None if cible_continuation else racine_depot,
+            None if cible_continuation or cible_route_program else racine_depot,
         )
     _exiger(tuple(axe["id"] for axe in axes) == AXES_PENTAGONE,
             "ordre des axes différent du contrat")
@@ -2104,6 +2169,8 @@ def valider_lock(lock: dict[str, Any], racine_depot: Path | None = None) -> dict
             "concurrence supérieure aux quotas backend")
     if cible_continuation:
         _valider_sources_continuation(lock, racine_depot)
+    if cible_route_program:
+        _valider_instrument_route_program(lock, racine_depot)
     if racine_depot is not None:
         _verifier_source_depot(lock, racine_depot)
     return lock
