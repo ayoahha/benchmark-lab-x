@@ -4,7 +4,7 @@ style_gate: pass
 
 # PRD : Benchmark Lab-X
 
-Version documentaire 3.0, 8 août 2026
+Version documentaire 3.1, 11 août 2026
 
 ## 1. Résumé exécutif
 
@@ -29,10 +29,11 @@ Sous cette formulation publique, l’unité de mesure est la carte d’usage et 
 | PRD.md, ce document | problème, valeur, utilisateurs, exigences produit, périmètre et jalons |
 | [RULES.md](RULES.md) | invariants universels d’éligibilité, notation, agrégation et publication |
 | [ARD.md](ARD.md) | objets, identités, flux, états, sécurité et preuves techniques |
+| [Contrat task-v5 / verify-v7](VERIFY-V7.md) | contrat prospectif de mesure, qualification, vue rétroactive et canari |
 | [README](../README.md) | compréhension publique et prise en main |
 | [Modèle de carte](../tasks/TEMPLATE.md) | contrat réutilisable d’une carte d’usage |
 
-Les décisions produit restent dans ce PRD. Les décisions techniques restent dans l’ARD. Aucun document de décision ou d’exploitation séparé n’est requis.
+Les décisions produit restent dans ce PRD. Les décisions techniques générales restent dans l’ARD. Le contrat versionné task-v5 / verify-v7 porte seul les règles prospectives propres à cette tranche.
 
 ### 1.2 État actuel
 
@@ -137,7 +138,9 @@ Une campagne de référence complète, dont les axes utilisés sont valides, est
 - **Qualité observée** : réussite et niveau atteints sur un axe, dans le contexte documenté.
 - **Répétabilité observée** : distribution de résultats obtenue en répétant le même stimulus. Un seul run ne permet aucune revendication de répétabilité, sauf déterminisme justifié de bout en bout.
 - **Robustesse sur instances** : résultats sur des stimuli distincts d’une même famille. Elle ne doit pas être appelée répétabilité.
-- **Fiabilité opérationnelle** : capacité du harnais et des fournisseurs à terminer les collectes planifiées sans erreur d’infrastructure.
+- **Réussite bout-en-bout de la configuration** : capacité de la configuration, route comprise, à fournir une acquisition mesurable ; la formule candidate task-v5 / verify-v7 est définie dans le [contrat dédié](VERIFY-V7.md#7-métriques-et-publication).
+- **Couverture du harnais** : part des unités requises que le harnais a effectivement pu mesurer ; un défaut du harnais reste séparé de la configuration.
+- **Santé d’infrastructure** : diagnostic des incidents de route et de harnais, sans score.
 - **Fiabilité du benchmark** : confiance bornée par le calibrage, l’audit, la reproductibilité et les limites du proxy.
 - **Durabilité d’une recommandation** : maintien ou changement observé lors de campagnes longitudinales compatibles.
 
@@ -200,6 +203,8 @@ Le produit distingue :
 - une comparaison longitudinale entre campagnes compatibles
 
 Une divergence d’empreinte n’est jamais masquée par un libellé commun.
+
+La vue rétroactive et toute renotation expérimentale de task-v5 / verify-v7 suivent le [contrat append-only dédié](VERIFY-V7.md#8-vue-rétroactive-versionnée), sans modifier les preuves sources.
 
 ### G6. Valider la couverture directe en V2 `[P2]`
 

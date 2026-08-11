@@ -4,7 +4,7 @@ style_gate: pass
 
 # ARD : Benchmark Lab-X
 
-Version documentaire 3.2, 10 août 2026
+Version documentaire 3.3, 11 août 2026
 
 ## 1. Rôle et autorité
 
@@ -17,10 +17,11 @@ Benchmark Lab-X détermine quelle configuration réussit un travail réel, avec 
 | [PRD](PRD.md) | problème, valeur, utilisateurs, exigences produit, périmètre et jalons |
 | [RULES](RULES.md) | invariants universels d’éligibilité, notation, agrégation et publication |
 | ARD, ce document | objets, identités, flux, états, sécurité et preuves techniques |
+| [Contrat task-v5 / verify-v7](VERIFY-V7.md) | machine de mesure prospective, stades, preuves et portes de qualification de cette tranche |
 | [README](../README.md) | compréhension publique et prise en main |
 | [Modèle de carte](../tasks/TEMPLATE.md) | contrat réutilisable d’une carte d’usage |
 
-Les décisions d’architecture restent ici, près des exigences concernées. Aucun format de décision séparé n’est requis.
+Les décisions d’architecture générales restent ici, près des exigences concernées. Le contrat task-v5 / verify-v7 est la seule spécification séparée de cette révision ; l’ARD le référence sans recopier ses règles.
 
 ## 2. Objets, identités et empreintes
 
@@ -236,6 +237,8 @@ Il n’invente aucun statut scientifique global.
 ## 5. Machine d’état et transitions
 
 ### 5.1 États
+
+Le tableau suivant reste l’autorité de lecture des reçus historiques jusqu’à task-v4 / verify-v6. Il ne doit pas être projeté sur task-v5 / verify-v7. Le [contrat prospectif](VERIFY-V7.md#3-modèle-de-mesure) sépare état de mesure, classe causale et verdict d’axe, puis conserve `SCORED` uniquement comme état de mesure.
 
 | Niveau | États ou décisions |
 |---|---|
