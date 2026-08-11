@@ -24,6 +24,7 @@ il incrémente `verify-vM` et impose une renotation commune avant toute
 comparaison avec les campagnes antérieures.
 """
 
+import os
 from typing import Any
 
 # Relevé le 2026-08-06 : playwright 1.62.0 embarque ce Chromium
@@ -42,7 +43,12 @@ def lancer_chromium(p: Any, strict: bool = True) -> Any:
     `strict=False` sert au diagnostic hors campagne ; il ne doit jamais servir
     à produire un résultat destiné à une page
     """
-    nav = p.chromium.launch()
+    options = (
+        {"args": ["--single-process"]}
+        if os.environ.get("CODEX_SANDBOX") == "seatbelt"
+        else {}
+    )
+    nav = p.chromium.launch(**options)
     if strict and nav.version != CHROMIUM_EPINGLE:
         version = nav.version
         nav.close()
