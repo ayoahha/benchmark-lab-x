@@ -1348,7 +1348,7 @@ class ProtocolV2Tests(unittest.TestCase):
             ["HOLD_B0_09_SNAPSHOT_APPROVAL_REQUIRED"],
         )
         proposition = {"proposal_source": None, "b0_09_approval": None}
-        with tempfile.TemporaryDirectory(dir=RACINE / "runs") as tmp:
+        with tempfile.TemporaryDirectory(dir=RACINE) as tmp:
             source_path = Path(tmp) / "routes.v3.proposed.json"
             source_path.write_text(
                 json.dumps(proposition, sort_keys=True) + "\n", encoding="utf-8"
@@ -1960,7 +1960,7 @@ class ProtocolV2Tests(unittest.TestCase):
                 "scope": "fixture",
             },
         }
-        with tempfile.TemporaryDirectory(dir=RACINE / "runs") as tmp:
+        with tempfile.TemporaryDirectory(dir=RACINE) as tmp:
             snapshot_path = Path(tmp) / "routes-preflight.json"
             snapshot_path.write_text(
                 json.dumps(snapshot, ensure_ascii=False, sort_keys=True) + "\n",

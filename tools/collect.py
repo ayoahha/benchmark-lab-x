@@ -103,7 +103,7 @@ EXIT_INFRA = 12
 
 
 def die(code: int, msg: str) -> NoReturn:
-    print(f"error: {msg}", file=sys.stderr)
+    print(f"erreur : {msg}", file=sys.stderr)
     raise SystemExit(code)
 
 
@@ -125,12 +125,15 @@ def preflight_key() -> str:
     shell environment. Never print its value"""
     key = load_dotenv_key()
     if key:
-        print("key source: .env (repo-local, gitignored)", file=sys.stderr)
+        print("source de la clé : .env local au dépôt et ignoré par Git", file=sys.stderr)
         return key
     key = os.environ.get("OPENROUTER_API_KEY")
     if key is None or not str(key).strip():
-        die(EXIT_NO_KEY, "OPENROUTER_API_KEY not set (env var or repo .env; never displayed)")
-    print("key source: environment variable", file=sys.stderr)
+        die(
+            EXIT_NO_KEY,
+            "OPENROUTER_API_KEY absente de l’environnement et du fichier .env local",
+        )
+    print("source de la clé : variable d’environnement", file=sys.stderr)
     return str(key).strip()
 
 
@@ -154,7 +157,7 @@ def assemble_prompt(task_dir: Path) -> tuple[str, dict[str, str], list[str]]:
         # Canonical override: raw bytes decoded, no newline translation
         instructions = override.read_bytes().decode("utf-8").strip()
         if not instructions:
-            die(EXIT_PROMPT, "prompt.txt is empty")
+            die(EXIT_PROMPT, "prompt.txt est vide")
     else:
         card = (task_dir / "task.md").read_bytes().decode("utf-8")
         # Les cartes sont en français ; le titre suit le contrat tasks/TEMPLATE.md
@@ -164,7 +167,7 @@ def assemble_prompt(task_dir: Path) -> tuple[str, dict[str, str], list[str]]:
             re.DOTALL | re.MULTILINE,
         )
         if not m:
-            die(EXIT_PROMPT, "no 'Consignes visibles par le modèle' section in task.md")
+            die(EXIT_PROMPT, "section « Consignes visibles par le modèle » absente de task.md")
 
         def dequote(line: str) -> str:
             # Remove exactly one "> " (or bare ">") quote prefix, nothing else
@@ -173,14 +176,14 @@ def assemble_prompt(task_dir: Path) -> tuple[str, dict[str, str], list[str]]:
         quoted = [line for line in m.group(1).splitlines() if line.startswith(">")]
         instructions = "\n".join(dequote(line) for line in quoted).strip()
         if not instructions:
-            die(EXIT_PROMPT, "empty instructions block in task.md")
+            die(EXIT_PROMPT, "bloc de consignes vide dans task.md")
 
     inputs: dict[str, str] = {}
     for f in sorted(task_dir.glob("*.md")):
         if is_excluded(f.name):
             continue
         if f.is_symlink():
-            warnings.append(f"symlink refused, not sent to model: {f.name}")
+            warnings.append(f"lien symbolique refusé, non envoyé au modèle : {f.name}")
             continue
         # Byte-faithful read: raw bytes decoded, no newline translation, no rewrite
         inputs[f.name] = f.read_bytes().decode("utf-8")
@@ -195,7 +198,9 @@ def assemble_prompt(task_dir: Path) -> tuple[str, dict[str, str], list[str]]:
             continue
         if name.startswith("."):
             continue
-        warnings.append(f"file not sent to model (not in input manifest): {name}")
+        warnings.append(
+            f"fichier non envoyé au modèle, absent du manifeste d’entrée : {name}"
+        )
 
     parts = [instructions]
     for name, content in inputs.items():
@@ -322,23 +327,26 @@ def extract_provider_served(data: dict[str, Any]) -> str | None:
 def validate_response(data: Any) -> tuple[str, dict[str, Any], str]:
     """Adapter une réponse OpenRouter en octets candidats matérialisables"""
     if not isinstance(data, dict):
-        die(EXIT_VALIDATION, "response is not a JSON object")
+        die(EXIT_VALIDATION, "la réponse n’est pas un objet JSON")
     if "error" in data and data["error"]:
         # Caller should have branched earlier; treat as validation miss
-        die(EXIT_API_ERROR, "response contains error object")
+        die(EXIT_API_ERROR, "la réponse contient un objet error")
     choices = data.get("choices")
     if not isinstance(choices, list) or len(choices) == 0:
-        die(EXIT_VALIDATION, "choices missing or empty")
+        die(EXIT_VALIDATION, "choices est absent ou vide")
     first = choices[0]
     if not isinstance(first, dict):
-        die(EXIT_VALIDATION, "choices[0] is not an object")
+        die(EXIT_VALIDATION, "choices[0] n’est pas un objet")
     message = first.get("message")
     if not isinstance(message, dict):
-        die(EXIT_VALIDATION, "choices[0].message missing or not an object")
+        die(EXIT_VALIDATION, "choices[0].message est absent ou n’est pas un objet")
     if first.get("error"):
-        die(EXIT_API_ERROR, "choices[0] carries an error object (HTTP 200 masking a failure)")
+        die(
+            EXIT_API_ERROR,
+            "choices[0] contient un objet error, échec masqué par un HTTP 200",
+        )
     if first.get("finish_reason") == "error":
-        die(EXIT_API_ERROR, "finish_reason=error (HTTP 200 masking a failure)")
+        die(EXIT_API_ERROR, "finish_reason=error, échec masqué par un HTTP 200")
     content = message.get("content")
     refusal = message.get("refusal")
     if isinstance(content, str) and content:
@@ -482,7 +490,7 @@ def mark_failed(out: Path, reason: str, detail: str | None = None) -> None:
                 json.dumps(recu, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             )
     except OSError as exc:
-        print(f"warning: could not write FAILED receipt: {exc}", file=sys.stderr)
+        print(f"avertissement : reçu FAILED impossible à écrire : {exc}", file=sys.stderr)
 
 
 def cleanup_or_fail(out: Path, reason: str, detail: str | None = None) -> None:
@@ -507,7 +515,7 @@ def marquer_etat(out: Path, etat: str, motif: str, detail: dict[str, Any]) -> No
             json.dumps(corps, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
     except OSError as exc:
-        print(f"warning: could not write {etat} receipt: {exc}", file=sys.stderr)
+        print(f"avertissement : reçu {etat} impossible à écrire : {exc}", file=sys.stderr)
 
 
 def regime_de_la_carte(task_md: Path) -> str | None:
@@ -664,23 +672,28 @@ def resoudre_budget(
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="benchmark-lab-x call collector")
+    ap = argparse.ArgumentParser(description="collecteur d’appels benchmark-lab-x")
     ap.add_argument("task_dir", type=Path)
-    ap.add_argument("--model", help="OpenRouter model id (or use --alias)")
-    ap.add_argument("--provider", help="pinned provider (provider.only) (or use --alias)")
+    ap.add_argument("--model", help="identifiant du modèle OpenRouter, ou utiliser --alias")
+    ap.add_argument("--provider", help="provider épinglé dans provider.only, ou utiliser --alias")
     ap.add_argument(
         "--alias",
         default=None,
-        help="model alias resolved from models.toml (fields: model, provider, expect_provider)",
+        help="alias résolu depuis models.toml : model, provider et expect_provider",
     )
     ap.add_argument(
         "--models-file",
         type=Path,
         default=Path("models.toml"),
-        help="registry used by --alias (default: ./models.toml)",
+        help="registre utilisé par --alias, par défaut ./models.toml",
     )
     ap.add_argument("--run", type=int, default=1, help="numéro de run, de 1 à 4")
-    ap.add_argument("--attempt", type=int, default=1, help="attempt number after a FAILED run (evidence is never deleted)")
+    ap.add_argument(
+        "--attempt",
+        type=int,
+        default=1,
+        help="numéro de tentative après un run FAILED, sans effacer la preuve",
+    )
     ap.add_argument("--temperature", type=float, default=0.0)
     # Le budget de sortie n'est pas une constante. `auto` le résout avant
     # l'appel depuis ce que la route déclare :
@@ -707,12 +720,12 @@ def main() -> None:
         "--timeout",
         type=int,
         default=600,
-        help="HTTP timeout in seconds (default: 600)",
+        help="délai HTTP en secondes, par défaut 600",
     )
     ap.add_argument(
         "--expect-provider",
         default=None,
-        help="expected provider display name when it differs from the pin slug (e.g. pin google-vertex, served Google)",
+        help="nom affiché attendu du provider lorsqu’il diffère du pin, par exemple google-vertex servi par Google",
     )
     ap.add_argument("--out-root", type=Path, default=Path("runs") / date.today().isoformat())
     ap.add_argument("--campaign-lock", type=Path,
@@ -813,30 +826,33 @@ def main() -> None:
         runner_version = execution_v3["request_adapter_version"]
     elif args.alias:
         if args.model or args.provider:
-            die(EXIT_USAGE, "--alias replaces --model/--provider; do not mix them")
+            die(EXIT_USAGE, "--alias remplace --model/--provider ; ne pas les combiner")
         if not args.models_file.is_file():
-            die(EXIT_USAGE, f"{args.models_file} not found (needed by --alias)")
+            die(EXIT_USAGE, f"{args.models_file} introuvable, requis par --alias")
         import tomllib
 
         try:
             registry = tomllib.loads(args.models_file.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as exc:
-            die(EXIT_USAGE, f"invalid {args.models_file}: {exc}")
+            die(EXIT_USAGE, f"{args.models_file} invalide : {exc}")
         entry = registry.get(args.alias)
         if not isinstance(entry, dict) or "model" not in entry or "provider" not in entry:
             known = ", ".join(sorted(k for k, v in registry.items() if isinstance(v, dict)))
-            die(EXIT_USAGE, f"alias {args.alias!r} not in {args.models_file} (known: {known})")
+            die(
+                EXIT_USAGE,
+                f"alias {args.alias!r} absent de {args.models_file}, alias connus : {known}",
+            )
         args.model = entry["model"]
         args.provider = entry["provider"]
         if not args.expect_provider and entry.get("expect_provider"):
             args.expect_provider = entry["expect_provider"]
         omit_params = entry.get("omit_params", [])
         if omit_params and not isinstance(omit_params, list):
-            die(EXIT_USAGE, "omit_params must be a list of parameter names")
+            die(EXIT_USAGE, "omit_params doit être une liste de noms de paramètres")
         raw_rmt = entry.get("reasoning_max_tokens")
         if raw_rmt is not None:
             if not isinstance(raw_rmt, int) or isinstance(raw_rmt, bool) or raw_rmt < 1:
-                die(EXIT_USAGE, "reasoning_max_tokens must be a positive integer")
+                die(EXIT_USAGE, "reasoning_max_tokens doit être un entier positif")
             reasoning_max_tokens = raw_rmt
         raw_eff = entry.get("reasoning_effort")
         if raw_eff is not None:
@@ -849,22 +865,22 @@ def main() -> None:
             # puis ignorée en silence, et seule la comparaison de consommation
             # de jetons de raisonnement entre deux efforts le montre (R-003)
             if not isinstance(raw_eff, str) or not raw_eff.strip():
-                die(EXIT_USAGE, "reasoning_effort must be a non-empty string")
+                die(EXIT_USAGE, "reasoning_effort doit être une chaîne non vide")
             reasoning_effort = raw_eff.strip()
     else:
         omit_params = []
     if not args.model or not args.provider:
-        die(EXIT_USAGE, "--model and --provider are required (or --alias)")
+        die(EXIT_USAGE, "--model et --provider sont requis, ou utiliser --alias")
 
     # Quatre runs par candidat depuis le 2026-08-05 : le niveau retenu est le
     # troisième meilleur des quatre (R-019), ce qui tolère un mauvais tirage
     runs_valides = (1, 2, 3, 4, 5, 6) if lock_v2 else (1, 2, 3, 4)
     if args.run not in runs_valides:
-        die(EXIT_USAGE, f"--run must be in {runs_valides}")
+        die(EXIT_USAGE, f"--run doit appartenir à {runs_valides}")
     if args.attempt < 1:
-        die(EXIT_USAGE, "--attempt must be >= 1")
+        die(EXIT_USAGE, "--attempt doit être supérieur ou égal à 1")
     if args.timeout < 1:
-        die(EXIT_USAGE, "--timeout must be >= 1")
+        die(EXIT_USAGE, "--timeout doit être supérieur ou égal à 1")
     declare = regime_de_la_carte(Path(args.task_dir) / task_file)
     if declare == "retenu" and args.regime == "expose":
         die(EXIT_USAGE, "la carte déclare le régime retenu : --regime expose est refusé (R-005a)")
@@ -878,9 +894,9 @@ def main() -> None:
         try:
             int(args.max_tokens)
         except ValueError:
-            die(EXIT_USAGE, "--max-tokens must be 'auto' or an integer")
+            die(EXIT_USAGE, "--max-tokens doit valoir 'auto' ou un entier")
     if args.budget_tentatives < 1:
-        die(EXIT_USAGE, "--budget-tentatives must be >= 1")
+        die(EXIT_USAGE, "--budget-tentatives doit être supérieur ou égal à 1")
     if args.temperature != 0.0 or args.seed != 42:
         print(
             "avertissement : les paramètres d'échantillonnage divergent du contrat "
@@ -889,9 +905,12 @@ def main() -> None:
         )
 
     if not args.task_dir.is_dir():
-        die(EXIT_BAD_TASK, f"{args.task_dir} is not a directory")
+        die(EXIT_BAD_TASK, f"{args.task_dir} n’est pas un répertoire")
     if not (args.task_dir / task_file).exists():
-        die(EXIT_BAD_TASK, f"{args.task_dir} is not a task folder (missing {task_file})")
+        die(
+            EXIT_BAD_TASK,
+            f"{args.task_dir} n’est pas un dossier de carte, {task_file} est absent",
+        )
 
     try:
         if lock_v2:
@@ -904,10 +923,10 @@ def main() -> None:
     except SystemExit:
         raise
     except OSError as exc:
-        die(EXIT_PROMPT, f"failed to read task files: {exc}")
+        die(EXIT_PROMPT, f"lecture des fichiers de la carte impossible : {exc}")
 
     for w in warnings:
-        print(f"warning: {w}", file=sys.stderr)
+        print(f"avertissement : {w}", file=sys.stderr)
 
     key = preflight_key()
 
@@ -924,18 +943,18 @@ def main() -> None:
         out = args.out_root / f"{slug}__{model_slug}__r{args.run}{suffix}"
     if out.exists():
         hint = (
-            "previous attempt is FAILED evidence, keep it and pass --attempt "
+            "la tentative précédente est une preuve FAILED, la conserver et passer --attempt "
             f"{args.attempt + 1}"
             if (out / "FAILED").exists()
-            else "runs are never overwritten or deleted"
+            else "les runs ne sont jamais écrasés ni supprimés"
         )
-        die(EXIT_EXISTS, f"{out} already exists ({hint})")
+        die(EXIT_EXISTS, f"{out} existe déjà ({hint})")
 
     # P0: reserve the run directory before the network call
     try:
         out.mkdir(parents=True)
     except OSError as exc:
-        die(EXIT_IO, f"could not reserve {out}: {exc}")
+        die(EXIT_IO, f"réservation de {out} impossible : {exc}")
 
     global V2_ATTEMPT_CONTEXT
     if lock_v2:
@@ -1032,9 +1051,15 @@ def main() -> None:
     allowed_omissions = {"seed", "top_p", "temperature"}
     for name in omit_params:
         if name not in allowed_omissions:
-            die(EXIT_USAGE, f"omit_params entry {name!r} not allowed (only {sorted(allowed_omissions)})")
+            die(
+                EXIT_USAGE,
+                f"entrée omit_params {name!r} interdite, valeurs admises : {sorted(allowed_omissions)}",
+            )
         body.pop(name, None)
-        print(f"warning: parameter {name!r} omitted for this endpoint (declared in registry)", file=sys.stderr)
+        print(
+            f"avertissement : paramètre {name!r} omis pour cet endpoint, selon le registre",
+            file=sys.stderr,
+        )
     # Les octets v3 viennent du manifeste verrouillé. La reconstruction locale
     # est comparée avant tout appel, elle ne peut pas corriger le lock
     payload_calcule = json.dumps(
@@ -1090,14 +1115,17 @@ def main() -> None:
         )
     except requests.RequestException as exc:
         cleanup_or_fail(out, "http_transport", redact_http_body(str(exc)))
-        die(EXIT_HTTP, f"HTTP transport failed: {redact_http_body(str(exc))}")
+        die(EXIT_HTTP, f"échec du transport HTTP : {redact_http_body(str(exc))}")
 
     if lock_v2:
         V2_ATTEMPT_CONTEXT["http_response_received"] = True
 
     if resp.is_redirect or resp.is_permanent_redirect:
         cleanup_or_fail(out, f"http_redirect_{resp.status_code}")
-        die(EXIT_HTTP, f"unexpected redirect HTTP {resp.status_code} (single-request contract)")
+        die(
+            EXIT_HTTP,
+            f"redirection HTTP {resp.status_code} inattendue, contrat à requête unique",
+        )
 
     duration_ns = time.monotonic_ns() - t0_ns
     duration = duration_ns / 1_000_000_000
@@ -1111,18 +1139,21 @@ def main() -> None:
             f"http_{resp.status_code}",
             redact_http_body(resp.text),
         )
-        die(EXIT_HTTP, f"HTTP {resp.status_code} (redacted receipt in {out / 'FAILED'})")
+        die(EXIT_HTTP, f"HTTP {resp.status_code}, reçu expurgé dans {out / 'FAILED'}")
 
     # Empty/whitespace HTTP body is infrastructure-invalid (never judged)
     if not resp.text or not resp.text.strip():
         cleanup_or_fail(out, "empty_body", "(empty or whitespace HTTP body)")
-        die(EXIT_VALIDATION, "response body is empty or whitespace (infrastructure invalid)")
+        die(
+            EXIT_VALIDATION,
+            "le corps de réponse est vide ou ne contient que des espaces, infrastructure invalide",
+        )
 
     try:
         data = resp.json()
     except ValueError:
         cleanup_or_fail(out, "invalid_json", redact_http_body(resp.text))
-        die(EXIT_VALIDATION, "response body is not valid JSON")
+        die(EXIT_VALIDATION, "le corps de réponse n’est pas un JSON valide")
 
     if isinstance(data, dict) and data.get("error"):
         err = data["error"]
@@ -1138,7 +1169,7 @@ def main() -> None:
         # Never dump secrets; serialize error object only
         detail = redact_http_body(json.dumps(err, ensure_ascii=False, indent=2))
         cleanup_or_fail(out, raison, detail)
-        die(EXIT_API_ERROR, "API returned error object (see FAILED receipt)")
+        die(EXIT_API_ERROR, "l’API a renvoyé un objet error, voir le reçu FAILED")
 
     model_served = data.get("model") if isinstance(data.get("model"), str) else None
     provider_served = extract_provider_served(data)
@@ -1176,9 +1207,9 @@ def main() -> None:
         die(
             EXIT_ROUTE_MISMATCH,
             (
-                f"route mismatch: model_served={model_served!r} "
-                f"(wanted {args.model!r}), provider_served={provider_served!r} "
-                f"(wanted {args.provider!r}); run invalid: "
+                f"route divergente : model_served={model_served!r} "
+                f"au lieu de {args.model!r}, provider_served={provider_served!r} "
+                f"au lieu de {args.provider!r} ; run invalide : "
                 f"folder marked FAILED under {out}"
             ),
         )
@@ -1202,7 +1233,7 @@ def main() -> None:
     finish_reason = first_choice.get("finish_reason")
     if finish_reason == "length":
         print(
-            "warning: finish_reason=length; R-013 tranche à la notation en "
+            "avertissement : finish_reason=length ; R-013 tranche à la notation en "
             "comparant completion_tokens au budget RÉSOLU : "
             "au-dessus ou égal, le budget est prouvé épuisé et le run vaut FAIL ; "
             "en dessous, le fournisseur a coupé tôt et le run vaut UNKNOWN",
@@ -1405,8 +1436,12 @@ def main() -> None:
         )
     meta_text = json.dumps(meta, indent=2, ensure_ascii=False)
     if key in meta_text or key in raw_text or key in content:
-        cleanup_or_fail(out, "key_leak_guard", "API key appeared in payload to write")
-        die(EXIT_IO, "refusing to write: API key would appear in run artifacts")
+        cleanup_or_fail(
+            out,
+            "key_leak_guard",
+            "la clé API apparaissait dans les données à écrire",
+        )
+        die(EXIT_IO, "écriture refusée : la clé API apparaîtrait dans les artefacts du run")
 
     try:
         atomic_write_text(out / "response.md", content)
@@ -1426,7 +1461,7 @@ def main() -> None:
         atomic_write_text(out / "COMPLETE", started.isoformat() + "\n")
     except OSError as exc:
         cleanup_or_fail(out, "write_failed", str(exc))
-        die(EXIT_IO, f"failed to write run artifacts: {exc}")
+        die(EXIT_IO, f"écriture des artefacts du run impossible : {exc}")
 
     print(
         f"{out}  provider_served={provider_served}  "
@@ -1440,5 +1475,5 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001, voie ultime pour les dossiers réservés
-        print(f"error: unexpected: {exc}", file=sys.stderr)
+        print(f"erreur inattendue : {exc}", file=sys.stderr)
         raise SystemExit(EXIT_IO) from exc

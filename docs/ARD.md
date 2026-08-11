@@ -252,7 +252,7 @@ Il n’invente aucun statut scientifique global.
 
 ### 5.2 Transitions fermées
 
-- seuls `HTTP_429`, `HTTP_503` et absence confirmée de réponse HTTP donnent `FAILED_RETRYABLE`
+- seuls `HTTP_429`, `HTTP_502`, `HTTP_503`, l’absence confirmée de réponse HTTP et un corps HTTP vide donnent `FAILED_RETRYABLE` lorsqu’aucun artefact candidat n’a été accepté
 - le protocole v2 autorise trois tentatives au maximum
 - aucune reprise n’a lieu après acceptation d’un artefact
 - une erreur de vérificateur ne provoque jamais de nouvelle collecte
