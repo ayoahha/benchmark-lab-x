@@ -4,7 +4,7 @@ style_gate: pass
 
 # Règles de mesure
 
-Version documentaire 3.3, 10 août 2026
+Version documentaire 3.4, 11 août 2026
 
 Ce fichier contient uniquement les invariants d’éligibilité, de notation, d’agrégation et de publication. Le [PRD](PRD.md) gouverne le produit et ses jalons. L’[ARD](ARD.md) gouverne l’architecture et les preuves techniques.
 
@@ -48,6 +48,8 @@ Une règle devient opposable dès qu’un résultat revendique une propriété q
 
 - **R-013. Machine d’état totale.** Chaque objet termine dans un état ou une décision de son niveau :
 
+  Cette table gouverne la lecture des reçus historiques jusqu’à task-v4 / verify-v6. Task-v5 / verify-v7 applique le [modèle prospectif à trois dimensions](VERIFY-V7.md#3-modèle-de-mesure). Cette nouvelle lecture ne réécrit aucun état ni aucune cause historique.
+
   | Niveau | États ou décisions |
   |---|---|
   | Tentative | `COMPLETE`, `FAILED_RETRYABLE`, `FAILED_NON_RETRYABLE` |
@@ -79,6 +81,8 @@ Une règle devient opposable dès qu’un résultat revendique une propriété q
 - **R-019. Agrégation du protocole v2.** Pour un axe soumis au plan de répétition du même stimulus, le protocole v2 planifie six runs et retient le quatrième meilleur. Une checklist binaire retient `PASS` si au moins quatre runs sont `PASS`, sinon `FAIL`. Une carte à paliers retient le niveau franchi dans au moins quatre runs sur six. Les six valeurs et les ex æquo sont publiés. Une carte justifiée par un déterminisme de bout en bout peut n’utiliser qu’un run, sans revendiquer de répétabilité. Une série d’instances distinctes préenregistre sa propre agrégation et parle de robustesse sur instances.
 
 - **R-020. Classement par axe.** Un classement est valide uniquement si toutes les unités requises de l’axe sont `SCORED` et si son audit est accepté. Les configurations `INELIGIBLE` apparaissent hors classement. Un `UNKNOWN`, `INFRA_ERROR` ou `MISSING` maintient seulement l’axe concerné au statut provisoire. Une page peut réunir des axes valides et provisoires sans revendiquer un statut global trompeur.
+
+  Pour task-v5 / verify-v7, les dénominateurs, la réussite bout-en-bout et la couverture manquante suivent le [contrat de métriques versionné](VERIFY-V7.md#7-métriques-et-publication).
 
 - **R-021. Diagnostics séparés du score.** Coût, durée, dispersion, usage et jetons ne modifient jamais la note. Ils peuvent départager un profil uniquement si la contrainte et sa charge d’usage ont été préenregistrées.
 

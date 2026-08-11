@@ -25,8 +25,32 @@ L’emplacement unique d’une acquisition dans une série, identifié par un al
 _À éviter_ : tentative, réponse
 
 **Acquisition** :
-Un artefact candidat accepté avec sa chaîne de reçus, son coût et sa route observée.
-_À éviter_ : tentative, score
+L’unité bout-en-bout qui relie une configuration et un run à son artefact éventuel, sa route observée et ses preuves.
+_À éviter_ : tentative, unité d’axe
+
+**Unité d’axe** :
+L’évaluation d’un axe pour une acquisition donnée.
+_À éviter_ : acquisition, incident
+
+**État de mesure** :
+Le fait qu’une unité d’axe possède ou non une mesure exploitable.
+_À éviter_ : classe causale, verdict d’axe
+
+**Classe causale** :
+La catégorie qui attribue la réussite ou l’interruption d’une mesure à son origine prouvée.
+_À éviter_ : état de mesure, verdict d’axe
+
+**Verdict d’axe** :
+Le résultat fonctionnel porté par une unité d’axe effectivement mesurée.
+_À éviter_ : état de mesure, classe causale
+
+**Incident de mesure** :
+Un événement causal unique auquel une acquisition ou plusieurs unités d’axe peuvent se référer.
+_À éviter_ : unité d’axe, panne par axe
+
+**Vue rétroactive** :
+Une dérivation versionnée qui interprète des preuves historiques sans modifier leurs sources.
+_À éviter_ : correction historique, renotation officielle
 
 **Lot d’acquisition** :
 Un ensemble technique de slots soumis sous un même lock et un même registre budgétaire.

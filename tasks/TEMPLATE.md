@@ -1,3 +1,7 @@
+---
+style_gate: pass
+---
+
 # Carte d’usage : <nom lisible>
 
 Ce gabarit décrit une carte compatible avec `benchmark-lab-x/protocol/v2`. Supprimer les exemples et compléter chaque champ obligatoire avant qualification.
@@ -12,6 +16,7 @@ Ce gabarit décrit une carte compatible avec `benchmark-lab-x/protocol/v2`. Supp
 | Patron technique | `F1` / `F2` / `F3` / `F4` / `autre` |
 | Version de tâche | `task-v<N>` |
 | Version de vérification | `verify-v<M>` |
+| Contrat de vérification | `<chemin versionné>` |
 | Protocole | `benchmark-lab-x/protocol/v2` |
 | Régime | `exposé` / `retenu` |
 
@@ -92,6 +97,8 @@ Sous le plan de répétition du protocole v2, utiliser six runs et le quatrième
 ## 5. Ressources et environnement
 
 Toutes les limites qui influencent la mesure sont versionnées.
+
+Lorsqu’un artefact candidat est exécuté, le contrat de vérification fixe la frontière observable de préparation du harnais, le budget propre à l’artefact et l’enveloppe distincte de watchdog et teardown. Pour task-v5 / verify-v7, utiliser le [contrat dédié](../docs/VERIFY-V7.md) et conserver la carte au statut `brouillon` tant que sa limite numérique n’est pas qualifiée et approuvée.
 
 | Ressource | Limite | Effet attendu en cas de dépassement |
 |---|---:|---|
