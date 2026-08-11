@@ -1200,7 +1200,7 @@ def main() -> None:
             (
                 f"model_requested={args.model!r} model_served={model_served!r}\n"
                 f"provider_pinned={args.provider!r} provider_served={provider_served!r}\n"
-                "full raw response:\n"
+                "réponse brute complète :\n"
                 + redact_http_body(json.dumps(data, ensure_ascii=False, indent=2))
             ),
         )
@@ -1210,7 +1210,7 @@ def main() -> None:
                 f"route divergente : model_served={model_served!r} "
                 f"au lieu de {args.model!r}, provider_served={provider_served!r} "
                 f"au lieu de {args.provider!r} ; run invalide : "
-                f"folder marked FAILED under {out}"
+                f"dossier marqué FAILED sous {out}"
             ),
         )
 

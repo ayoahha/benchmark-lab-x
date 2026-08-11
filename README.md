@@ -85,7 +85,7 @@ Le dépôt contient un prototype technique actif et une première chaîne vertic
 git clone https://github.com/ayoahha/benchmark-lab-x.git
 cd benchmark-lab-x
 cp .env.example .env
-uv run --with playwright playwright install chromium
+uv run --with playwright==1.62.0 playwright install chromium
 ```
 
 Placer la clé dans `.env` sous `OPENROUTER_API_KEY`. Ne jamais la transmettre dans un argument, un chat, un ticket public ou une sortie publiée.
