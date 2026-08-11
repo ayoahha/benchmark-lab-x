@@ -77,7 +77,7 @@ Le dépôt contient un prototype technique actif et une première chaîne vertic
 ### Prérequis
 
 - [`uv`](https://docs.astral.sh/uv/)
-- Python 3.11 ou plus récent, requis pour `tomllib` et résolu par `uv`
+- Python 3.12 ou plus récent, conformément aux métadonnées des scripts et résolu par `uv`
 - un compte OpenRouter et une clé dédiée avec plafond de dépense
 - Chromium pour les cartes rendues
 
