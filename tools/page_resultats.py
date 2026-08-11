@@ -407,7 +407,7 @@ def page_v3(data: dict, reg: dict, source: Path) -> str:
 <body>
 <main>
   <h1>Résultats Benchmark Lab-X</h1>
-  <p class="mission">Benchmark Lab-X détermine quel modèle, quelle configuration ou quel agent réussit un travail réel, avec quelle fiabilité, à quel coût et en combien de temps, puis vérifie si cette recommandation reste valable lorsque les systèmes évoluent.</p>
+  <p class="mission">Le banc d’essai des systèmes d’IA. Des preuves, pas des promesses : chaque résultat publié ici a été vérifié par un programme qui ne savait pas quel système il notait, et reste borné à ce qui a été mesuré, dans ce contexte, à cette date.</p>
   <div class="bandeau">
     Campagne <strong>{html.escape(str(statut_campagne))}</strong>.
     {'Contrôle opérateur : HOLD. Aucun nouvel appel ne doit partir sous ce lock.' if hold else 'Chaque axe porte son propre statut.'}

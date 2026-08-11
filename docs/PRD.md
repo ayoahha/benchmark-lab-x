@@ -8,13 +8,19 @@ Version documentaire 3.0, 8 août 2026
 
 ## 1. Résumé exécutif
 
-Benchmark Lab-X détermine quel modèle, quelle configuration ou quel agent réussit un travail réel, avec quelle fiabilité, à quel coût et en combien de temps, puis vérifie si cette recommandation reste valable lorsque les systèmes évoluent.
+**Le banc d’essai des systèmes d’IA. Des preuves, pas des promesses.**
 
-Le projet répond à une question située :
+Chaque semaine, un modèle promet de tout changer, et des équipes engagent des budgets sur la foi de démos et de classements qui ne mesurent jamais leur travail. La vraie question n’est pas de savoir qui gagne le classement du mois. C’est de savoir si l’offre la plus chère du marché sert à ce que vous faites : beaucoup d’équipes paient tous les mois une puissance qu’elles n’utilisent jamais, pendant que d’autres économisent et livrent du faux.
 
-> Pour ce travail, avec ce niveau attendu et ces contraintes, quelle configuration choisir ?
+Le piège est plus profond qu’un mauvais choix de marque : vous ne déployez pas un modèle, vous déployez une configuration. Un modèle, une infrastructure, un fournisseur, un niveau d’effort, des réglages. Deux équipes qui achètent le même nom n’obtiennent ni la même fiabilité, ni le même prix.
 
-Il part de cartes d’usage représentatives, mesure des effets vérifiables par du code et publie les conditions de la mesure. Chaque axe qualifié produit un classement. Il n’existe aucun vainqueur universel entre domaines ni aucun score global mélangeant appels directs et agents.
+> Pour ce travail, à ce niveau attendu, sous ces contraintes de coût, de délai et de données, quelle configuration choisir ?
+
+Benchmark Lab-X construit l’instrument qui tranche cette question. Il fait exécuter des travaux inspirés de projets réels, puis fait vérifier chaque résultat par un programme, jamais par une impression ni par un autre modèle. Le programme qui corrige ne sait pas quel système a produit la réponse qu’il note. Ce qui a réussi, ce que ça a coûté, le temps que ça a pris et dans quelles conditions : tout est publié, avec ses limites et sa date.
+
+La discipline est le produit. Aucun vainqueur universel, aucune note globale, aucun résultat retouché à la main. Un classement par type de travail, valable pour ce qui a été mesuré, dans ce contexte, à cette date. Et quand la preuve manque, le banc s’abstient au lieu de conclure.
+
+Sous cette formulation publique, l’unité de mesure est la carte d’usage et l’unité de classement est l’axe de score. Chaque axe qualifié produit son classement, borné au panel, au contexte et à la date mesurés. Aucun score global ne mélange des domaines différents, ni des appels directs et des agents outillés.
 
 ### 1.1 Autorité documentaire
 

@@ -1,116 +1,128 @@
-# benchmark-lab-x
+# Benchmark Lab-X
 
-Private benchmark of everyday tasks for comparing AI models under reproducible conditions.
+**Le banc d’essai des systèmes d’IA. Des preuves, pas des promesses.**
 
-Markdown task cards, one small call collector, human judgment. Everyday work an average person would do — writing, summarizing, organizing, searching provided documents — not coding. The output is a directional signal per task family, never a general-purpose ranking.
+Chaque semaine, un modèle promet de tout changer, et des équipes engagent des budgets sur la foi de démos et de classements qui ne mesurent jamais leur travail. La vraie question n’est pas de savoir qui gagne le classement du mois. C’est de savoir si l’offre la plus chère du marché sert à ce que vous faites : beaucoup d’équipes paient tous les mois une puissance qu’elles n’utilisent jamais, pendant que d’autres économisent et livrent du faux.
 
-Full design rationale and normative rules live in [`docs/SPEC.md`](docs/SPEC.md).
+Le piège est plus profond qu’un mauvais choix de marque : vous ne déployez pas un modèle, vous déployez une configuration. Un modèle, une infrastructure, un fournisseur, un niveau d’effort, des réglages. Deux équipes qui achètent le même nom n’obtiennent ni la même fiabilité, ni le même prix.
 
-The benchmarking procedure is in [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
+> Pour ce travail, à ce niveau attendu, sous ces contraintes de coût, de délai et de données, quelle configuration choisir ?
 
-This README covers what you need to run it.
+Benchmark Lab-X construit l’instrument qui tranche cette question. Il fait exécuter des travaux inspirés de projets réels, puis fait vérifier chaque résultat par un programme, jamais par une impression ni par un autre modèle. Le programme qui corrige ne sait pas quel système a produit la réponse qu’il note. Ce qui a réussi, ce que ça a coûté, le temps que ça a pris et dans quelles conditions : tout est publié, avec ses limites et sa date.
 
-## Getting started
+La discipline est le produit. Aucun vainqueur universel, aucune note globale, aucun résultat retouché à la main. Un classement par type de travail, valable pour ce qui a été mesuré, dans ce contexte, à cette date. Et quand la preuve manque, le banc s’abstient au lieu de conclure.
 
-### Prerequisites
+Le projet naît au sein du collectif français Lab-X. Il a vocation à devenir public et réutilisable hors du collectif.
 
-- [`uv`](https://docs.astral.sh/uv/) (the collector declares its own Python ≥ 3.12 and dependency)
-- An [OpenRouter](https://openrouter.ai) account and API key
+## Pourquoi Benchmark Lab-X ?
 
-### Install
+Les benchmarks généralistes donnent une référence commune. [SWE-bench](https://github.com/SWE-bench/SWE-bench) évalue la résolution de problèmes issus de dépôts logiciels. [Terminal-Bench](https://github.com/laude-institute/terminal-bench) mesure des agents dans un terminal. Ces travaux sont utiles, mais ils ne tranchent pas la décision locale posée plus haut.
+
+Benchmark Lab-X part donc de cas d’usage concrets, en français, et mesure des effets observables : un artefact fonctionne, une contrainte est respectée, un calcul est juste, une provenance est fournie ou un objectif mesurable est atteint. Le score vient de code déterministe. Le projet publie les distributions, les limites du proxy et les conditions de la mesure, pas seulement un rang.
+
+Chaque axe qualifié produit son propre classement. Il n’existe aucun vainqueur universel entre des domaines différents. Plusieurs axes ne sont réunis que dans un profil d’usage préenregistré, avec des minima, des contraintes et une règle d’abstention explicites.
+
+## Ce qui est réellement comparé
+
+Une identité de base directe comprend :
+
+1. le **modèle demandé**, par exemple `anthropic/claude-sonnet-4.5`
+2. le **backend et le provider épinglés**, par exemple `OpenRouter → Anthropic`
+3. l’**effort déclaré**, par exemple `default`, `high` ou `xhigh`
+
+Une configuration mesurée ajoute les paramètres exacts de l’appel, le budget de sortie, la politique de données demandée, la version de l’adaptateur et l’environnement qui influence l’exécution. Son `execution_manifest_hash` identifie cet ensemble. Deux configurations peuvent donc partager un libellé lisible sans être fusionnées.
+
+La piste des agents outillés reste séparée. L’identité de base ajoute alors le nom et la version de l’agent ; la configuration précise aussi ses instructions, outils, permissions, mémoire, limites et environnement. Un résultat d’agent n’est jamais fusionné avec un classement d’appels directs.
+
+## Carte d’usage et axes
+
+Une **carte d’usage** représente un travail réel, son stimulus, la décision qu’il doit éclairer et son contrat de mesure. Elle peut produire plusieurs **axes de score** déterministes à partir d’un même artefact.
+
+`pentagone-rotatif`, par exemple, reste une seule carte d’usage même si le même programme est évalué sur cinq axes : interface, déterminisme, confinement court, précision à 24 secondes et horizons longs. Un seul appel produit l’artefact ; les cinq notations ne multiplient ni les appels ni le coût de collecte.
+
+Les cartes vivent sous `tasks/`. Ce nom correspond à l’objet manipulé par l’outillage ; le gabarit précise le contrat complet attendu.
+
+## Fonctionnement cible
+
+1. définir la décision, les cartes, les configurations et les contraintes
+2. figer les routes, paramètres, tarifs, quotas et collectes dans un lock
+3. collecter sans fallback silencieux
+4. conserver un reçu de collecte distinct de la notation
+5. noter chaque axe avec un vérificateur déterministe et aveugle à l’identité du candidat
+6. contrôler les identités, empreintes, états et preuves
+7. produire `results.html` avec le statut propre à chaque axe
+8. auditer l’instrument selon un plan fondé sur le risque
+9. valider uniquement les axes dont toutes les preuves requises sont acceptées
+
+`results.html` est le seul rapport de campagne destiné à l’utilisateur. Les réponses, reçus et données intermédiaires restent sous `runs/`, hors Git.
+
+## Trajectoire
+
+- **V0, POC** : trois cartes d’usage exposées et qualifiées, couvrant au moins deux domaines, avec une démonstration rejouable
+- **V1, prototype public** : dix cartes d’usage, reprise de campagne, reproduction externe et premiers retours de décisions réelles
+- **V2, couverture directe** : matrice complète des domaines et scénarios prioritaires, dont un pilote cyber défensif synthétique
+- **V3, agents outillés** : piste distincte avec outils et environnements isolés ; toute extension offensive exige une validation de sécurité séparée
+- **V4, benchmark vivant** : suivi longitudinal pilote sur des cartes retenues et renouvellement des cartes exposées
+- **V5, consultation** : recommandations depuis des candidats de profil compatibles, assez frais et dont les axes obligatoires sont valides, avec abstention si la preuve manque
+- **V6, studio de tâche** : transformation contrôlée d’un besoin utilisateur en brouillon de carte, puis instrumentation et validation humaine avant toute mesure
+
+V0 doit démontrer l’idée rapidement. V1 doit prouver qu’elle devient un produit reproductible. Les jalons suivants élargissent la couverture sans confondre ambition et preuve acquise.
+
+## État actuel
+
+Le dépôt contient un prototype technique actif et une première chaîne verticale. Les contrats et l’implémentation évoluent encore ; des défauts subsistent et aucun classement courant n’est garanti publiable. Les documents de référence décrivent séparément l’objectif, les invariants de mesure et l’architecture cible.
+
+## Démarrage
+
+### Prérequis
+
+- [`uv`](https://docs.astral.sh/uv/)
+- Python 3.11 ou plus récent, requis pour `tomllib` et résolu par `uv`
+- un compte OpenRouter et une clé dédiée avec plafond de dépense
+- Chromium pour les cartes rendues
 
 ```sh
-git clone git@github.com:ayoahha/benchmark-lab-x.git
+git clone https://github.com/ayoahha/benchmark-lab-x.git
 cd benchmark-lab-x
+cp .env.example .env
+uv run --with playwright playwright install chromium
 ```
 
-Nothing to build: the only program is `tools/collect.py`, run through `uv`.
+Placer la clé dans `.env` sous `OPENROUTER_API_KEY`. Ne jamais la transmettre dans un argument, un chat, un ticket public ou une sortie publiée.
 
-### Configure the API key
+Le dépôt n’a pas encore de licence. Le clonage permet l’évaluation locale ; les droits de réutilisation et de redistribution seront précisés avant la première publication officielle.
 
-Create a **dedicated** OpenRouter key with a spend cap (never your personal key), then either:
+Les configurations sont déclarées dans [`models.toml`](models.toml). OpenRouter est le backend primaire actuel. Groq ne peut servir qu’après qualification comme backend distinct, dans une nouvelle campagne et sous un nouveau lock. Il ne remplace jamais silencieusement une route indisponible.
+
+### Exercer la chaîne actuelle
 
 ```sh
-cp .env.example .env      # put the key in .env (gitignored, takes precedence)
-# or
-export OPENROUTER_API_KEY=...   # shell env var
+uv run tools/collect.py tasks/dev/pentagone-rotatif \
+  --alias deepseek-v4-flash --run 1
+
+uv run tools/verifier_pentagone.py \
+  runs/<date>/pentagone-rotatif__deepseek-v4-flash__r1/response.md
 ```
 
-Never pass the key as an argument, commit it, or paste it into a chat or issue. Run artifacts (`meta.json`, `raw.json`) never contain it. Revoke the key after any shared or one-off use.
+Le collecteur écrit un dossier sous `runs/`. L’invocation directe d’un vérificateur reste diagnostique : elle ne suffit pas à produire un classement publiable.
 
-Account-side: keep every "train on request data" endpoint class disabled in OpenRouter's privacy settings, that is the benchmark's anti-contamination line (refer to SPEC §2.2).
-
-### Configure the models
-
-Models live in [`models.toml`](models.toml): one entry per model with its OpenRouter id and pinned provider. Before adding one, check its hosts and pick one that does not train on request data:
-
-```sh
-curl -s https://openrouter.ai/api/v1/models/<author/slug>/endpoints
-```
-
-If no compliant host exists, the model is not benchmarkable : record it commented-out in `models.toml` with the reason.
-
-### First run
-
-```sh
-uv run tools/collect.py tasks/dev/vendor-incident-email --alias deepseek-v4-flash --run 1
-```
-
-This makes exactly one API call and writes `runs/<date>/<task>__<model>__r1/` containing `response.md`, `raw.json`, `meta.json`, and a `COMPLETE` marker. Check the printed line: `provider_served` must match the pin, otherwise the run is marked `FAILED` and must not be judged.
-
-## Usage
-
-### Collect a campaign
-
-One command per task × model × run (runs: 2 for generative cards, 1 for closed ones):
-
-```sh
-uv run tools/collect.py tasks/dev/<slug> --alias <name> --run 1
-uv run tools/collect.py tasks/dev/<slug> --alias <name> --run 2
-```
-
-No loop, no retry, no scoring ; The collector stops after recording. A failed call leaves a `FAILED` receipt; keep it as evidence and relaunch with `--attempt 2`. Full procedure, including anonymized judging and the results grid: [`docs/RUNBOOK.md`](docs/RUNBOOK.md).
-
-### Judge
-
-Judgment is human and mechanical: automatic checks first, then the task's `verify.md` checklist item by item against the anchors, on anonymized outputs. Verdict derivation and model comparison rules: SPEC §2.5.
-
-### Collector reference
-
-```
-uv run tools/collect.py <task_dir> (--alias NAME | --model ID --provider PIN)
-    [--run 1|2] [--attempt N] [--expect-provider NAME]
-    [--temperature F] [--seed N] [--max-tokens N] [--out-root DIR]
-```
-
-Campaign invariants: temperature 0, seed 42 (omitted per-endpoint via `omit_params` in `models.toml` when unsupported), max_tokens 16384. Deviations print a warning and are recorded in `meta.json`. Stable exit codes are listed in the script header.
-
-## Repository layout
+## Organisation du dépôt
 
 ```text
-tasks/<set>/<slug>/   task.md, input files, verify.md, anchor-pass.md, anchor-fail.md
-runs/<date>/          one frozen campaign per folder (campaign.md, run folders, grid.md)
-tools/collect.py      the call collector — the only program in the repo
-models.toml           model registry used by --alias
-docs/SPEC.md          normative specification (boundary, scoring, milestones)
-docs/RUNBOOK.md       step-by-step campaign procedure
-TEMPLATE.md           task card contract
+docs/                  PRD, ARD et règles de mesure
+tasks/TEMPLATE.md      contrat réutilisable d’une carte d’usage
+tasks/dev/             cartes en développement ou hors catalogue
+tasks/archives/        cartes retirées, conservées comme preuves
+tools/                 collecte, adaptateurs, oracles et vérificateurs
+models.toml            registre des configurations lisibles
+runs/                  campagnes et résultats locaux, hors Git
 ```
 
-Sets: `dev` (tuning, burnable), `calibration` (a known model must reach the expected result), `private` (never exposed outside runs, never pasted into any online chat).
+## Documents de référence
 
-## Design in brief
+- [`docs/PRD.md`](docs/PRD.md) : problème, valeur, utilisateurs, exigences produit, périmètre et jalons
+- [`docs/ARD.md`](docs/ARD.md) : objets, identités, flux, états, sécurité et preuves techniques
+- [`docs/RULES.md`](docs/RULES.md) : invariants d’éligibilité, de notation, d’agrégation et de publication
+- [`tasks/TEMPLATE.md`](tasks/TEMPLATE.md) : gabarit d’une carte d’usage
 
-- **Families (V0, 10 tasks)**: constrained writing (3), document synthesis (3), organization and trade-offs (2), research on a fixed corpus (2).
-- **Boundary**: no evaluation engine. The collector loads one task, makes one pinned API call, records response + metadata, stops. Judgment lives in `verify.md` and stays human; no LLM judges its own output.
-- **Scoring**: checklist items tagged `[C]`/`[S]`; failed `[C]` → FAIL, all passed → PASS, only `[S]` failed → PARTIAL, external causes → UNKNOWN. Models compared per family by paired comparison (`BEATS` / `TIE` / `INCONCLUSIVE`); diagnostics (item score, cost, rework, `UNSTABLE`) never break a tie; no cross-family aggregate, ever.
-- **Reproducibility**: pinned provider routes, fixed sampling, frozen campaign folders, versioned cards, exposure counter (max 2, then a twin variant replaces the card).
-
-## Known limits
-
-- 10 tasks: directional signal. Families with 2-3 tasks yield an index, never a head-to-head verdict (paired comparison needs ≥ 4 judgeable pairs).
-- Tasks are consumable: burned after 2 exposures or any publication.
-- Compares model+route pairs; a provider change behind OpenRouter invalidates longitudinal comparison.
-- The single human judge remains a stable bias, bounded by anchoring and cold re-judgment, not eliminated.
-- `UNSTABLE` measures provider non-determinism under controlled inputs, not real-world usage variability.
-- Tested bare via API: does not predict the product experience of vendor apps.
+Les décisions de produit et d’architecture restent dans le PRD ou l’ARD. Le dépôt ne multiplie pas les documents de décision ou d’exploitation.
