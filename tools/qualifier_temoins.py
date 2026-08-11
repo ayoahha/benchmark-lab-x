@@ -52,7 +52,6 @@ Usage :
 import argparse
 import json
 import os
-import re
 import shutil
 import signal
 import subprocess
@@ -70,6 +69,7 @@ from protocole_v2 import (  # noqa: E402
     SCHEMA_COVERAGE,
     ContratV2Invalide,
     charger_json,
+    construire_process_diagnostic,
     ecrire_json_immuable,
     empreinte_lock,
     chemin_relatif_sur,
@@ -141,25 +141,6 @@ def noter_aveugle(temoin: Path, verificateur: Path, delai: int = 180) -> dict | 
         return None
 
 
-def _expurger_diagnostic_processus(texte: str) -> str:
-    substitutions = (
-        (
-            r"(?im)([\"']?authorization[\"']?[ \t]*[:=][ \t]*[\"']?)[^\r\n\"']*",
-            r"\1[EXPURGÉ]",
-        ),
-        (
-            r"(?i)([\"']?(?:[A-Z0-9_-]*api[_-]?key|access_token|refresh_token|"
-            r"id_token|token)[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;}\]]+",
-            r"\1[EXPURGÉ]",
-        ),
-        (r"\bsk-[A-Za-z0-9_-]+\b", "[EXPURGÉ]"),
-    )
-    resultat = texte
-    for motif, remplacement in substitutions:
-        resultat = re.sub(motif, remplacement, resultat)
-    return resultat
-
-
 def _resultat_processus_inobservable(
     cause_code: str,
     failure_stage: str,
@@ -170,11 +151,9 @@ def _resultat_processus_inobservable(
         "etat": "UNKNOWN",
         "cause_code": cause_code,
         "predicates": {},
-        "process_diagnostic": {
-            "failure_stage": failure_stage,
-            "verifier_exit_code": verifier_exit_code,
-            "stderr_redacted": _expurger_diagnostic_processus(stderr),
-        },
+        "process_diagnostic": construire_process_diagnostic(
+            failure_stage, verifier_exit_code, stderr
+        ),
     }
 
 
