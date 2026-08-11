@@ -46,10 +46,13 @@ from finalisation_serie import (  # noqa: E402
 )
 from protocole_v2 import (  # noqa: E402
     PROTOCOLE_VERSION as PROTOCOLE_V2,
+    SCHEMA_STATUS_HANDOFF,
     ContratV2Invalide,
     agreger_scores,
     charger_json,
+    chemin_recu_score_enfant,
     empreinte_lock,
+    resoudre_sous,
     valider_chaine_collecte,
     valider_etat_collecte,
     valider_evenements_panel,
@@ -58,6 +61,7 @@ from protocole_v2 import (  # noqa: E402
     valider_recu_audit,
     valider_recu_couverture,
     valider_recu_score,
+    valider_recu_score_enfant,
 )
 
 CHAMPS_RUN = ("task", "task_version", "run", "date", "backend", "model_requested",
@@ -384,6 +388,7 @@ def _score_serie(finalisation, card: dict, alias: str, run: int) -> dict:
         ],
     }
     score_path = chemin_score(finalisation, acquisition, card)
+    _exiger_sous_score_sans_lien(finalisation.score_dir, score_path)
     if not score_path.is_file():
         return {
             "alias": alias,
@@ -606,55 +611,152 @@ def rapport_v2(campaign_dir: Path, conf: dict) -> int:
     return 0
 
 
+def _exiger_sous_score_sans_lien(score_dir: Path, cible: Path) -> None:
+    """Refuser tout composant symlinké entre score_dir inclus et cible, sans suivre."""
+    if score_dir.is_symlink():
+        raise ContratV2Invalide("racine de scores liée symboliquement")
+    try:
+        relatif = cible.relative_to(score_dir)
+    except ValueError as exc:
+        raise ContratV2Invalide(
+            f"chemin hors racine de scores: {cible}"
+        ) from exc
+    if not relatif.parts:
+        return
+    resoudre_sous(score_dir, relatif.as_posix())
+
+
+def _garantir_ancetres_score_sans_lien(finalisation) -> None:
+    """Fail-closed sur les chemins parent/enfant attendus avant toute lecture."""
+    score_dir = finalisation.score_dir
+    if score_dir.is_symlink():
+        raise ContratV2Invalide("racine de scores liée symboliquement")
+    for acquisition in finalisation.composition.acquisitions:
+        for card in acquisition.source_lock["axes"]:
+            parent_path = chemin_score(finalisation, acquisition, card)
+            enfant_dir = Path(f"{parent_path.with_suffix('')}.d")
+            _exiger_sous_score_sans_lien(score_dir, parent_path)
+            _exiger_sous_score_sans_lien(score_dir, enfant_dir)
+
+
+def _compter_diagnostics_enfants(finalisation) -> int:
+    _garantir_ancetres_score_sans_lien(finalisation)
+    compteur = 0
+    autorises: set[Path] = set()
+    score_dir = finalisation.score_dir
+    for acquisition in finalisation.composition.acquisitions:
+        for card in acquisition.source_lock["axes"]:
+            parent_path = chemin_score(finalisation, acquisition, card)
+            enfant_dir = Path(f"{parent_path.with_suffix('')}.d")
+            autorises.add(enfant_dir)
+            if enfant_dir.is_symlink():
+                raise ContratV2Invalide(
+                    f"répertoire enfant lié: {acquisition.slot_id}/{card['id']}"
+                )
+            if not enfant_dir.exists():
+                continue
+            if not enfant_dir.is_dir():
+                raise ContratV2Invalide(
+                    f"répertoire enfant invalide: {acquisition.slot_id}/{card['id']}"
+                )
+            if parent_path.is_symlink() or not parent_path.is_file():
+                raise ContratV2Invalide(
+                    f"enfant orphelin ou parent lié: {acquisition.slot_id}/{card['id']}"
+                )
+            parent = charger_json(parent_path)
+            parent_hash = empreinte(parent)
+            attendu = chemin_recu_score_enfant(parent_path, parent_hash)
+            _exiger_sous_score_sans_lien(score_dir, attendu)
+            entrees = sorted(enfant_dir.iterdir(), key=lambda p: p.name)
+            if not entrees:
+                continue
+            if len(entrees) != 1:
+                raise ContratV2Invalide(
+                    f"contenu du répertoire enfant hors contrat: "
+                    f"{acquisition.slot_id}/{card['id']}"
+                )
+            enfant_path = entrees[0]
+            if enfant_path.is_symlink():
+                raise ContratV2Invalide(
+                    f"reçu enfant lié symboliquement: {enfant_path}"
+                )
+            if not enfant_path.is_file() or enfant_path != attendu:
+                raise ContratV2Invalide(
+                    f"chemin enfant divergent: {enfant_path}"
+                )
+            enfant = charger_json(enfant_path)
+            valider_recu_score_enfant(enfant, parent)
+            compteur += 1
+    if score_dir.is_dir():
+        for courant, noms_dirs, _noms_fichiers in os.walk(
+            score_dir, followlinks=False
+        ):
+            base = Path(courant)
+            for nom in noms_dirs:
+                if not nom.endswith(".d"):
+                    continue
+                candidat = base / nom
+                if candidat.is_symlink() or candidat not in autorises:
+                    raise ContratV2Invalide(
+                        f"répertoire enfant orphelin ou lié: {candidat}"
+                    )
+    return compteur
+
+
+def _resultat_serie(finalization_lock: Path) -> tuple[object, dict]:
+    finalisation = charger_finalisation(
+        finalization_lock, Path(__file__).parent.parent
+    )
+    composition = finalisation.composition.objet
+    axes = composition["instrument_context"]["axes"]
+    cartes = _assembler_axes(
+        composition["panel"],
+        axes,
+        lambda card, alias, run: _score_serie(
+            finalisation, card, alias, run
+        ),
+        finalisation.lock_hash,
+        True,
+        [],
+        finalisation.audits_dir,
+    )
+    resultat = {
+        "schema_version": SCHEMA_RESULTATS,
+        "protocol_version": PROTOCOLE_V2,
+        "campaign_id": composition["series_id"],
+        "campaign_lock_hash": finalisation.lock_hash,
+        "task_version": composition["instrument_context"]["task"]["task_version"],
+        "prompt_sha256": composition["instrument_context"]["task"]["prompt_sha256"],
+        "notation_source": (
+            "reçus de score immuables liés à leurs verrous sources, "
+            "résolus par acquisition-composition/v1 sans rejeu Chromium"
+        ),
+        "conformite": {
+            "instrument_qualifie": True,
+            "page_validee": all(carte["classement_valide"] for carte in cartes),
+            "blocages": {},
+        },
+        "coverage_receipt": finalisation.coverage_receipt,
+        "panel_events": None,
+        "campaign_status": (
+            "incomplete"
+            if any(
+                score["etat"] == "MISSING"
+                for axe in cartes for candidat in axe["candidats"]
+                for score in candidat["scores"]
+            )
+            else "complete"
+        ),
+        "operator_status": None,
+        "operator_hold": None,
+        "axes": cartes,
+    }
+    return finalisation, resultat
+
+
 def rapport_serie(finalization_lock: Path) -> int:
     try:
-        finalisation = charger_finalisation(
-            finalization_lock, Path(__file__).parent.parent
-        )
-        composition = finalisation.composition.objet
-        axes = composition["instrument_context"]["axes"]
-        cartes = _assembler_axes(
-            composition["panel"],
-            axes,
-            lambda card, alias, run: _score_serie(
-                finalisation, card, alias, run
-            ),
-            finalisation.lock_hash,
-            True,
-            [],
-            finalisation.audits_dir,
-        )
-        resultat = {
-            "schema_version": SCHEMA_RESULTATS,
-            "protocol_version": PROTOCOLE_V2,
-            "campaign_id": composition["series_id"],
-            "campaign_lock_hash": finalisation.lock_hash,
-            "task_version": composition["instrument_context"]["task"]["task_version"],
-            "prompt_sha256": composition["instrument_context"]["task"]["prompt_sha256"],
-            "notation_source": (
-                "reçus de score immuables liés à leurs verrous sources, "
-                "résolus par acquisition-composition/v1 sans rejeu Chromium"
-            ),
-            "conformite": {
-                "instrument_qualifie": True,
-                "page_validee": all(carte["classement_valide"] for carte in cartes),
-                "blocages": {},
-            },
-            "coverage_receipt": finalisation.coverage_receipt,
-            "panel_events": None,
-            "campaign_status": (
-                "incomplete"
-                if any(
-                    score["etat"] == "MISSING"
-                    for axe in cartes for candidat in axe["candidats"]
-                    for score in candidat["scores"]
-                )
-                else "complete"
-            ),
-            "operator_status": None,
-            "operator_hold": None,
-            "axes": cartes,
-        }
+        _, resultat = _resultat_serie(finalization_lock)
     except ContratV2Invalide as exc:
         print(f"HOLD: {exc}", file=sys.stderr)
         return 2
@@ -662,7 +764,65 @@ def rapport_serie(finalization_lock: Path) -> int:
     return 0
 
 
+def handoff_serie(finalization_lock: Path) -> int:
+    try:
+        finalisation, resultat = _resultat_serie(finalization_lock)
+        score_counts = {
+            "SCORED": 0,
+            "UNKNOWN": 0,
+            "MISSING": 0,
+            "INELIGIBLE": 0,
+            "INFRA_ERROR": 0,
+        }
+        unknown_causes: dict[str, int] = {}
+        for axe in resultat["axes"]:
+            for candidat in axe["candidats"]:
+                for score in candidat["scores"]:
+                    etat = score.get("etat")
+                    if etat not in score_counts:
+                        raise ContratV2Invalide(f"état de score hors contrat: {etat}")
+                    score_counts[etat] += 1
+                    if etat == "UNKNOWN":
+                        cause = score.get("cause_code")
+                        if not isinstance(cause, str) or not cause:
+                            raise ContratV2Invalide("cause_code UNKNOWN absent")
+                        unknown_causes[cause] = unknown_causes.get(cause, 0) + 1
+        child_diagnostics_count = _compter_diagnostics_enfants(finalisation)
+        handoff = {
+            "schema_version": SCHEMA_STATUS_HANDOFF,
+            "campaign_id": resultat["campaign_id"],
+            "campaign_lock_hash": resultat["campaign_lock_hash"],
+            "campaign_status": resultat["campaign_status"],
+            "operator_status": resultat["operator_status"],
+            "conformite": {
+                "instrument_qualifie": resultat["conformite"]["instrument_qualifie"],
+                "page_validee": resultat["conformite"]["page_validee"],
+            },
+            "score_counts": score_counts,
+            "unknown_causes": dict(sorted(unknown_causes.items())),
+            "child_diagnostics_count": child_diagnostics_count,
+        }
+    except ContratV2Invalide as exc:
+        print(f"HOLD: {exc}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            handoff,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
 def main() -> int:
+    if (
+        len(sys.argv) == 4
+        and sys.argv[1] == "--finalization-lock"
+        and sys.argv[3] == "--handoff"
+    ):
+        return handoff_serie(Path(sys.argv[2]))
     if len(sys.argv) == 3 and sys.argv[1] == "--finalization-lock":
         return rapport_serie(Path(sys.argv[2]))
     if len(sys.argv) < 3:

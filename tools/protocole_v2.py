@@ -35,6 +35,8 @@ SCHEMA_EXECUTION_ROUTE_PROGRAM = "benchmark-lab-x/execution-manifest/v5"
 SCHEMA_ATTEMPT = "benchmark-lab-x/attempt-receipt/v3"
 SCHEMA_COLLECTION = "benchmark-lab-x/collection-receipt/v3"
 SCHEMA_SCORE = "benchmark-lab-x/score-receipt/v3"
+SCHEMA_SCORE_CHILD = "benchmark-lab-x/score-child-receipt/v1"
+SCHEMA_STATUS_HANDOFF = "benchmark-lab-x/status-handoff/v1"
 SCHEMA_COLLECTION_STATE = "benchmark-lab-x/collection-state/v1"
 SCHEMA_AUDIT = "benchmark-lab-x/axis-audit-receipt/v1"
 SCHEMA_PANEL_EVENTS = "benchmark-lab-x/panel-events/v1"
@@ -126,6 +128,14 @@ CAUSE_CODES = {
 CAUSES_UNKNOWN_SCORE = {
     "VERIFY_TIMEOUT", "VERIFY_PROCESS_ERROR", "ENVIRONMENT_MISMATCH",
     "UPSTREAM_CARD_UNOBSERVABLE", "FINISH_LENGTH_AMBIGUOUS",
+}
+CAUSES_ENFANT_DIAGNOSTIC = {
+    "VERIFY_TIMEOUT", "VERIFY_PROCESS_ERROR", "ENVIRONMENT_MISMATCH",
+}
+CHAMPS_RECU_SCORE_ENFANT = {
+    "schema_version", "protocol_version", "parent_score_receipt_hash",
+    "campaign_lock_hash", "collection_id", "collection_receipt_hash",
+    "axis_id", "verify_hash", "etat", "cause_code", "process_diagnostic",
 }
 CAUSES_ECHEC_PAR_CARTE = {
     "pentagone-api": {"OUTPUT_NO_PAGE", "API_MISSING_OR_INVALID"},
@@ -2386,6 +2396,119 @@ def valider_resultat_carte(
                 f"cause d'échec incohérente pour {card['id']}")
 
 
+def expurger_diagnostic_processus(texte: str) -> str:
+    """Remplacer tout stderr non vide par une empreinte déterministe fail-closed"""
+    if texte == "":
+        return ""
+    digest = hashlib.sha256(texte.encode("utf-8")).hexdigest()
+    return f"[EXPURGÉ stderr_sha256={digest}]"
+
+
+def construire_process_diagnostic(
+    failure_stage: str,
+    verifier_exit_code: int | None,
+    stderr: str,
+) -> dict[str, Any]:
+    return {
+        "failure_stage": failure_stage,
+        "verifier_exit_code": verifier_exit_code,
+        "stderr_redacted": expurger_diagnostic_processus(stderr),
+    }
+
+
+def chemin_recu_score_enfant(parent_path: Path, parent_hash: str) -> Path:
+    return Path(f"{parent_path.with_suffix('')}.d") / f"{parent_hash}.json"
+
+
+def assurer_repertoire_enfant_avant_ecriture(
+    enfant_path: Path, *, parent_hash: str
+) -> None:
+    """Refuser symlink / non-répertoire / contenu hors contrat avant écriture."""
+    enfant_dir = enfant_path.parent
+    attendu = enfant_dir / f"{parent_hash}.json"
+    _exiger(
+        enfant_path == attendu,
+        f"chemin enfant divergent: {enfant_path}",
+    )
+    if enfant_dir.is_symlink():
+        raise ContratV2Invalide(
+            f"répertoire enfant lié symboliquement: {enfant_dir}"
+        )
+    if enfant_dir.exists() and not enfant_dir.is_dir():
+        raise ContratV2Invalide(
+            f"répertoire enfant invalide: {enfant_dir}"
+        )
+    if not enfant_dir.exists():
+        return
+    entrees = sorted(enfant_dir.iterdir(), key=lambda p: p.name)
+    if not entrees:
+        return
+    if len(entrees) != 1:
+        raise ContratV2Invalide(
+            f"contenu du répertoire enfant hors contrat: {enfant_dir}"
+        )
+    unique = entrees[0]
+    if unique.is_symlink():
+        raise ContratV2Invalide(
+            f"reçu enfant lié symboliquement: {unique}"
+        )
+    if not unique.is_file() or unique != attendu:
+        raise ContratV2Invalide(
+            f"chemin enfant divergent: {unique}"
+        )
+
+
+def _valider_structure_process_diagnostic(
+    diagnostic: dict[str, Any], cause_code: str, *, etiquette: str
+) -> None:
+    _exiger(
+        isinstance(diagnostic, dict)
+        and set(diagnostic) == {
+            "failure_stage", "verifier_exit_code", "stderr_redacted",
+        },
+        f"diagnostic de processus {etiquette} invalide",
+    )
+    stage = diagnostic.get("failure_stage")
+    _exiger(stage in {"spawn", "timeout", "exit", "output"},
+            f"phase de diagnostic {etiquette} invalide")
+    code = diagnostic.get("verifier_exit_code")
+    _exiger(code is None or (isinstance(code, int) and not isinstance(code, bool)),
+            f"code de sortie du vérificateur {etiquette} invalide")
+    _exiger(isinstance(diagnostic.get("stderr_redacted"), str),
+            f"stderr expurgé {etiquette} invalide")
+    if stage == "spawn":
+        _exiger(code is None, f"code de sortie incohérent avec la phase {etiquette}")
+    elif stage == "output":
+        _exiger(code == 0, f"code de sortie incohérent avec la phase {etiquette}")
+    elif stage == "exit":
+        _exiger(code is not None and code != 0,
+                f"code de sortie incohérent avec la phase {etiquette}")
+    else:
+        # timeout : entier réel non nul, jamais inventé
+        _exiger(
+            isinstance(code, int) and not isinstance(code, bool) and code != 0,
+            f"code de sortie incohérent avec la phase {etiquette}",
+        )
+    _exiger(
+        (cause_code == "VERIFY_TIMEOUT") == (stage == "timeout"),
+        f"cause de vérification incohérente avec la phase {etiquette}",
+    )
+    if cause_code == "ENVIRONMENT_MISMATCH":
+        _exiger(stage == "exit",
+                f"ENVIRONMENT_MISMATCH exige la phase exit ({etiquette})")
+
+
+_STDERR_EXPURGE_NATIF = re.compile(r"^\[EXPURGÉ stderr_sha256=[0-9a-f]{64}\]$")
+
+
+def _exiger_stderr_redacted_enfant(valeur: str) -> None:
+    """Fail-closed : vide ou empreinte native uniquement (pas de stderr brut)."""
+    _exiger(
+        valeur == "" or _STDERR_EXPURGE_NATIF.fullmatch(valeur) is not None,
+        "stderr_redacted enfant hors format natif expurgé",
+    )
+
+
 def valider_diagnostic_processus_r016(observation: dict[str, Any]) -> None:
     """Valider un diagnostic de vérificateur sans interpréter son stderr"""
     diagnostic = observation.get("process_diagnostic")
@@ -2396,35 +2519,48 @@ def valider_diagnostic_processus_r016(observation: dict[str, Any]) -> None:
         and observation.get("cause_code") in {"VERIFY_TIMEOUT", "VERIFY_PROCESS_ERROR"},
         "diagnostic de processus R-016 interdit hors erreur de vérification",
     )
-    _exiger(
-        isinstance(diagnostic, dict)
-        and set(diagnostic) == {
-            "failure_stage", "verifier_exit_code", "stderr_redacted",
-        },
-        "diagnostic de processus R-016 invalide",
+    _valider_structure_process_diagnostic(
+        diagnostic, observation["cause_code"], etiquette="R-016"
     )
-    stage = diagnostic.get("failure_stage")
-    _exiger(stage in {"spawn", "timeout", "exit", "output"},
-            "phase de diagnostic R-016 invalide")
-    code = diagnostic.get("verifier_exit_code")
-    _exiger(code is None or (isinstance(code, int) and not isinstance(code, bool)),
-            "code de sortie du vérificateur R-016 invalide")
-    _exiger(isinstance(diagnostic.get("stderr_redacted"), str),
-            "stderr expurgé R-016 invalide")
-    if stage == "spawn":
-        _exiger(code is None, "code de sortie incohérent avec la phase R-016")
-    elif stage == "output":
-        _exiger(code == 0, "code de sortie incohérent avec la phase R-016")
-    elif stage == "exit":
-        _exiger(code is not None and code != 0,
-                "code de sortie incohérent avec la phase R-016")
-    else:
-        _exiger(code is not None,
-                "code de sortie incohérent avec la phase R-016")
+
+
+def valider_recu_score_enfant(
+    enfant: dict[str, Any], parent: dict[str, Any]
+) -> dict[str, Any]:
+    """Valider un reçu enfant expurgé lié à un parent UNKNOWN processuel"""
     _exiger(
-        (observation.get("cause_code") == "VERIFY_TIMEOUT") == (stage == "timeout"),
-        "cause de vérification incohérente avec la phase R-016",
+        isinstance(enfant, dict) and set(enfant) == CHAMPS_RECU_SCORE_ENFANT,
+        "champs du reçu enfant score différents du contrat fermé",
     )
+    _exiger(enfant.get("schema_version") == SCHEMA_SCORE_CHILD,
+            "score-child-receipt/v1 absent")
+    _exiger(enfant.get("protocol_version") == PROTOCOLE_VERSION,
+            "protocole v2 absent du reçu enfant")
+    _exiger(isinstance(parent, dict) and set(parent) == CHAMPS_RECU_SCORE,
+            "parent du reçu enfant invalide")
+    _exiger(parent.get("schema_version") == SCHEMA_SCORE, "parent hors score-receipt/v3")
+    _exiger(parent.get("etat") == "UNKNOWN", "enfant autorisé seulement pour parent UNKNOWN")
+    parent_hash = _empreinte_contractuelle(parent, "reçu de score parent")
+    _sha(enfant.get("parent_score_receipt_hash"), "parent_score_receipt_hash")
+    _exiger(enfant["parent_score_receipt_hash"] == parent_hash,
+            "empreinte parent du reçu enfant divergente")
+    _exiger(enfant.get("etat") == "UNKNOWN", "état enfant hors UNKNOWN")
+    cause = enfant.get("cause_code")
+    _exiger(cause in CAUSES_ENFANT_DIAGNOSTIC, "cause_code enfant hors contrat")
+    _exiger(cause == parent.get("cause_code"), "cause_code enfant différent du parent")
+    for champ in (
+        "campaign_lock_hash", "collection_id", "collection_receipt_hash",
+        "axis_id", "verify_hash",
+    ):
+        _exiger(enfant.get(champ) == parent.get(champ),
+                f"{champ} enfant différent du parent")
+    _valider_structure_process_diagnostic(
+        enfant.get("process_diagnostic") or {}, cause, etiquette="enfant"
+    )
+    _exiger_stderr_redacted_enfant(
+        enfant["process_diagnostic"]["stderr_redacted"]
+    )
+    return enfant
 
 
 def valider_recu_collecte(

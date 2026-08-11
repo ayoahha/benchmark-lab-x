@@ -54,6 +54,7 @@ from protocole_v2 import (  # noqa: E402
     decision_reprise,
     ecrire_json_immuable,
     empreinte_lock,
+    expurger_diagnostic_processus,
     resultat_acquis_v2,
     valider_autorisation_payante,
     valider_chaine_collecte,
@@ -2504,12 +2505,15 @@ class ProtocolV2Tests(unittest.TestCase):
         diagnostic = resultat["process_diagnostic"]
         self.assertEqual(diagnostic["failure_stage"], "exit")
         self.assertEqual(diagnostic["verifier_exit_code"], 23)
-        self.assertEqual(len(diagnostic["stderr_redacted"].splitlines()),
-                         len(erreur.splitlines()))
-        self.assertIn("trace utile", diagnostic["stderr_redacted"])
+        self.assertEqual(
+            diagnostic["stderr_redacted"],
+            expurger_diagnostic_processus(erreur),
+        )
+        self.assertNotIn("trace utile", diagnostic["stderr_redacted"])
         for secret in (
             "bearer-secret", "basic-secret", "token-scheme-secret", "env-secret",
             "json-secret", "plain-secret", "sk-route-secret", "query-secret",
+            "début", "fin",
         ):
             self.assertNotIn(secret, diagnostic["stderr_redacted"])
 
@@ -2541,11 +2545,14 @@ class ProtocolV2Tests(unittest.TestCase):
             "cause_code": "VERIFY_TIMEOUT",
             "process_diagnostic": {
                 "failure_stage": "timeout",
-                "verifier_exit_code": 0,
+                "verifier_exit_code": -9,
                 "stderr_redacted": "",
             },
         })
         valider_diagnostic_processus_r016(observation)
+        observation["process_diagnostic"]["verifier_exit_code"] = 0
+        with self.assertRaises(ContratV2Invalide):
+            valider_diagnostic_processus_r016(observation)
         observation["process_diagnostic"]["verifier_exit_code"] = None
         with self.assertRaises(ContratV2Invalide):
             valider_diagnostic_processus_r016(observation)

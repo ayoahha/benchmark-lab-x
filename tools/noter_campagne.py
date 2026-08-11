@@ -36,14 +36,18 @@ from finalisation_serie import (  # noqa: E402
 )
 from moteur_rendu import descripteur  # noqa: E402
 from protocole_v2 import (  # noqa: E402
-    CAUSE_CODES,
+    CAUSES_ENFANT_DIAGNOSTIC,
     PROTOCOLE_VERSION,
     SCHEMA_COLLECTION,
     SCHEMA_CONTEXT,
     SCHEMA_SCORE,
+    SCHEMA_SCORE_CHILD,
     ContratV2Invalide,
+    assurer_repertoire_enfant_avant_ecriture,
     cellule_du_lock,
     charger_json,
+    chemin_recu_score_enfant,
+    construire_process_diagnostic,
     ecrire_json_immuable,
     empreinte_lock,
     resoudre_sous,
@@ -53,6 +57,8 @@ from protocole_v2 import (  # noqa: E402
     valider_lock,
     valider_recu_collecte,
     valider_recu_score,
+    valider_recu_score_enfant,
+    valider_resultat_carte,
 )
 
 
@@ -68,8 +74,29 @@ def _executer_borne(
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             proc.kill()
-        proc.communicate()
-        raise
+        try:
+            _, erreur = proc.communicate()
+        except UnicodeDecodeError:
+            erreur = ""
+        code = proc.returncode
+        if not isinstance(code, int) or isinstance(code, bool):
+            raise ContratV2Invalide(
+                "code de sortie du vérificateur absent après timeout"
+            )
+        depassement = subprocess.TimeoutExpired(
+            cmd, delai, output=None, stderr=erreur or ""
+        )
+        depassement.returncode = code
+        raise depassement
+    except UnicodeDecodeError:
+        code = proc.returncode
+        if not isinstance(code, int) or isinstance(code, bool):
+            raise ContratV2Invalide(
+                "code de sortie du vérificateur absent après sortie non UTF-8"
+            )
+        termine = subprocess.CompletedProcess(cmd, code, "", "")
+        termine.sortie_non_utf8 = True  # type: ignore[attr-defined]
+        return termine
     return subprocess.CompletedProcess(cmd, proc.returncode, sortie, erreur)
 
 
@@ -126,10 +153,25 @@ def _valider_collecte(
     return response
 
 
-def _sortie_unknown(card: dict[str, Any], cause: str, detail: str) -> dict[str, Any]:
-    return {"etat": "UNKNOWN", "cause_code": cause, "predicates": {}, "measurements": {},
-            "detail": detail, "card_id": card["id"],
-            "verify_version": card["verify_version"]}
+def _sortie_unknown(
+    card: dict[str, Any],
+    cause: str,
+    detail: str,
+    *,
+    process_diagnostic: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    resultat = {
+        "etat": "UNKNOWN",
+        "cause_code": cause,
+        "predicates": {},
+        "measurements": {},
+        "detail": detail,
+        "card_id": card["id"],
+        "verify_version": card["verify_version"],
+    }
+    if process_diagnostic is not None:
+        resultat["process_diagnostic"] = process_diagnostic
+    return resultat
 
 
 def _noter_une_carte(
@@ -155,51 +197,137 @@ def _noter_une_carte(
         if offline:
             environnement = dict(os.environ)
             environnement["UV_OFFLINE"] = "1"
+        commande = ["uv", "run", str(verifier), "--card", card["id"], str(neutre)]
         try:
-            out = _executer_borne(
-                ["uv", "run", str(verifier), "--card", card["id"], str(neutre)],
-                int(card["watchdog_s"]),
-                env=environnement,
+            out = _executer_borne(commande, int(card["watchdog_s"]), env=environnement)
+        except OSError as exc:
+            return _sortie_unknown(
+                card,
+                "VERIFY_PROCESS_ERROR",
+                "échec au lancement du vérificateur",
+                process_diagnostic=construire_process_diagnostic("spawn", None, str(exc)),
             )
-        except subprocess.TimeoutExpired:
-            return _sortie_unknown(card, "VERIFY_TIMEOUT", "garde-fou de 180 s dépassé")
+        except subprocess.TimeoutExpired as exc:
+            erreur = exc.stderr if isinstance(exc.stderr, str) else ""
+            code = getattr(exc, "returncode", None)
+            if not isinstance(code, int) or isinstance(code, bool) or code == 0:
+                raise ContratV2Invalide(
+                    "code de sortie du vérificateur absent ou nul après timeout"
+                )
+            return _sortie_unknown(
+                card,
+                "VERIFY_TIMEOUT",
+                "garde-fou de vérification dépassé",
+                process_diagnostic=construire_process_diagnostic(
+                    "timeout", code, erreur
+                ),
+            )
+    if getattr(out, "sortie_non_utf8", False):
+        code = out.returncode
+        if not isinstance(code, int) or isinstance(code, bool):
+            raise ContratV2Invalide(
+                "code de sortie du vérificateur absent après sortie non UTF-8"
+            )
+        if code != 0:
+            return _sortie_unknown(
+                card,
+                "VERIFY_PROCESS_ERROR",
+                f"processus du vérificateur sorti avec le code {code}",
+                process_diagnostic=construire_process_diagnostic("exit", code, ""),
+            )
+        return _sortie_unknown(
+            card,
+            "VERIFY_PROCESS_ERROR",
+            "sortie du vérificateur non UTF-8",
+            process_diagnostic=construire_process_diagnostic("output", code, ""),
+        )
     if out.returncode != 0:
-        marqueurs_environnement = ("MoteurNonConforme", "BrowserType.launch", "TargetClosedError")
-        cause = ("ENVIRONMENT_MISMATCH" if any(m in out.stderr for m in marqueurs_environnement)
-                 else "VERIFY_PROCESS_ERROR")
-        return _sortie_unknown(card, cause,
-                               f"processus du vérificateur sorti avec le code {out.returncode}")
+        marqueurs_environnement = (
+            "MoteurNonConforme", "BrowserType.launch", "TargetClosedError",
+        )
+        cause = (
+            "ENVIRONMENT_MISMATCH"
+            if any(m in out.stderr for m in marqueurs_environnement)
+            else "VERIFY_PROCESS_ERROR"
+        )
+        return _sortie_unknown(
+            card,
+            cause,
+            f"processus du vérificateur sorti avec le code {out.returncode}",
+            process_diagnostic=construire_process_diagnostic(
+                "exit", out.returncode, out.stderr
+            ),
+        )
     try:
         result = json.loads(out.stdout)
     except json.JSONDecodeError as exc:
-        return _sortie_unknown(card, "VERIFY_PROCESS_ERROR", f"JSON invalide: {exc}")
+        return _sortie_unknown(
+            card,
+            "VERIFY_PROCESS_ERROR",
+            f"JSON invalide: {exc}",
+            process_diagnostic=construire_process_diagnostic(
+                "output", out.returncode, out.stderr
+            ),
+        )
     if not isinstance(result, dict) or result.get("card_id") != card["id"]:
-        return _sortie_unknown(card, "VERIFY_PROCESS_ERROR", "sortie liée à une autre carte")
+        return _sortie_unknown(
+            card,
+            "VERIFY_PROCESS_ERROR",
+            "sortie liée à une autre carte",
+            process_diagnostic=construire_process_diagnostic(
+                "output", out.returncode, out.stderr
+            ),
+        )
+    try:
+        _valider_sortie(result, card)
+    except ContratV2Invalide as exc:
+        return _sortie_unknown(
+            card,
+            "VERIFY_PROCESS_ERROR",
+            f"sortie structurellement invalide: {exc}",
+            process_diagnostic=construire_process_diagnostic(
+                "output", out.returncode, out.stderr
+            ),
+        )
     return result
 
 
 def _valider_sortie(result: dict[str, Any], card: dict[str, Any]) -> None:
-    etat = result.get("etat")
-    if etat not in {"SCORED", "UNKNOWN"}:
-        raise ContratV2Invalide(f"état de score invalide pour {card['id']}")
-    cause = result.get("cause_code")
-    if cause is not None and cause not in CAUSE_CODES:
-        raise ContratV2Invalide(f"cause_code inconnu pour {card['id']}: {cause}")
-    if etat == "SCORED":
-        if result.get("verdict") not in {"PASS", "FAIL"}:
-            raise ContratV2Invalide(f"verdict invalide pour {card['id']}")
-        if card["kind"] == "levels":
-            niveau = result.get("niveau")
-            if not isinstance(niveau, int) or isinstance(niveau, bool) or not 0 <= niveau <= len(card["predicates"]):
-                raise ContratV2Invalide(f"niveau invalide pour {card['id']}")
-    if etat == "UNKNOWN" or result.get("verdict") == "FAIL":
-        if cause not in CAUSE_CODES:
-            raise ContratV2Invalide(f"cause_code requis pour {card['id']}")
-    predicats = result.get("predicates")
-    if not isinstance(predicats, dict):
-        raise ContratV2Invalide(f"prédicats absents pour {card['id']}")
-    if etat == "SCORED" and set(predicats) != set(card["predicates"]):
-        raise ContratV2Invalide(f"ensemble des prédicats différent pour {card['id']}")
+    valider_resultat_carte(
+        result, card, champ_predicats="predicates", champ_mesures="measurements"
+    )
+
+
+def _ecrire_enfant_diagnostic(
+    parent_path: Path,
+    parent: dict[str, Any],
+    process_diagnostic: dict[str, Any],
+) -> Path | None:
+    if parent.get("etat") != "UNKNOWN":
+        return None
+    cause = parent.get("cause_code")
+    # CAUSES_ENFANT_DIAGNOSTIC exclut déjà UPSTREAM et FINISH_LENGTH
+    if cause not in CAUSES_ENFANT_DIAGNOSTIC:
+        return None
+    parent_hash = empreinte(parent)
+    enfant = {
+        "schema_version": SCHEMA_SCORE_CHILD,
+        "protocol_version": PROTOCOLE_VERSION,
+        "parent_score_receipt_hash": parent_hash,
+        "campaign_lock_hash": parent["campaign_lock_hash"],
+        "collection_id": parent["collection_id"],
+        "collection_receipt_hash": parent["collection_receipt_hash"],
+        "axis_id": parent["axis_id"],
+        "verify_hash": parent["verify_hash"],
+        "etat": "UNKNOWN",
+        "cause_code": cause,
+        "process_diagnostic": process_diagnostic,
+    }
+    valider_recu_score_enfant(enfant, parent)
+    enfant_path = chemin_recu_score_enfant(parent_path, parent_hash)
+    assurer_repertoire_enfant_avant_ecriture(enfant_path, parent_hash=parent_hash)
+    ecrire_json_immuable(enfant_path, enfant)
+    return enfant_path
 
 
 def noter_collection(
@@ -216,15 +344,40 @@ def noter_collection(
     receipt_path, collection = _recu_collecte(campaign_dir, collection_id)
     response = _valider_collecte(receipt_path, collection, lock_hash, cellule)
     collection_hash = empreinte(collection)
-    environment = descripteur()
-    valider_environnement_observe(lock, "measurement", environment)
-    environment_hash = empreinte(environment)
-    produits = []
+    racine_scores = campaign_dir / "scores" if score_dir is None else score_dir / lock_hash
+    environment: dict[str, Any] | None = None
+    environment_hash: str | None = None
+    produits: list[Path] = []
+
+    def obtenir_environnement() -> tuple[dict[str, Any], str]:
+        nonlocal environment, environment_hash
+        if environment is None or environment_hash is None:
+            environment = descripteur()
+            valider_environnement_observe(lock, "measurement", environment)
+            environment_hash = empreinte(environment)
+        return environment, environment_hash
+
     for card in lock["axes"]:
+        path = (
+            racine_scores / collection_hash / card["id"] / f"{card['verify_hash']}.json"
+        )
+        # Lien symbolique (y compris cassé) avant exists()
+        if path.is_symlink():
+            raise ContratV2Invalide(
+                f"reçu de score lié symboliquement: {collection_id}/{card['id']}"
+            )
+        if path.exists():
+            score = charger_json(path)
+            valider_recu_score(
+                score, lock, lock_hash, card, cellule, collection, collection_hash
+            )
+            produits.append(path)
+            continue
+
+        env_mesure, env_hash = obtenir_environnement()
         result = _noter_une_carte(
             card, response, instrument_root=instrument_root, offline=offline
         )
-        _valider_sortie(result, card)
         context = {
             "schema_version": SCHEMA_CONTEXT,
             "protocol_version": PROTOCOLE_VERSION,
@@ -237,7 +390,7 @@ def noter_collection(
             "axis_id": card["id"],
             "verify_version": card["verify_version"],
             "verify_hash": card["verify_hash"],
-            "measurement_environment_hash": environment_hash,
+            "measurement_environment_hash": env_hash,
             "confidentiality_regime": lock["task"]["confidentiality_regime"],
         }
         score = {
@@ -254,7 +407,7 @@ def noter_collection(
             "verify_hash": card["verify_hash"],
             "measurement_context": context,
             "measurement_context_hash": empreinte(context),
-            "measurement_environment": environment,
+            "measurement_environment": env_mesure,
             "etat": result["etat"],
             "cause_code": result.get("cause_code"),
             "verdict": result.get("verdict"),
@@ -266,11 +419,11 @@ def noter_collection(
         valider_recu_score(
             score, lock, lock_hash, card, cellule, collection, collection_hash
         )
-        racine_scores = campaign_dir / "scores" if score_dir is None else score_dir / lock_hash
-        path = (racine_scores / collection_hash / card["id"]
-                / f"{card['verify_hash']}.json")
         ecrire_json_immuable(path, score)
         produits.append(path)
+        diagnostic = result.get("process_diagnostic")
+        if isinstance(diagnostic, dict):
+            _ecrire_enfant_diagnostic(path, score, diagnostic)
     return produits
 
 
