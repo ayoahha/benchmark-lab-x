@@ -75,7 +75,7 @@ def extraire_html(texte: str) -> str | None:
 
 # Budget de temps déclaré par la carte. Ce délai borne ce que Playwright sait
 # borner : chargement, navigation, attentes. Il ne borne PAS du JavaScript
-# synchrone qui monopolise le thread de la page — mesuré le 2026-08-05, une
+# synchrone qui monopolise le thread de la page. Mesuré le 2026-08-05, une
 # page qui recalcule toute la trajectoire à chaque appel a tourné dix minutes
 # malgré ce réglage. Le seul verrou fiable est le délai de processus posé par
 # l'appelant, dans `tools/rapport_campagne.py`

@@ -28,7 +28,7 @@ CONNUS = ("minimal", "low", "medium", "high", "xhigh", "max")
 # La question doit être assez dure pour que le budget de réflexion serve
 # réellement, sinon les niveaux ne se départagent pas. Mesuré le 2026-08-05 :
 # sur « combien de premiers sous 100 », `low` consommait 86 jetons et `medium`
-# 43, ordre non monotone — la question ne forçait aucun effort
+# 43, ordre non monotone ; la question ne forçait aucun effort
 QUESTION = (
     "Combien d'entiers de 1 à 10000 inclus ont une somme de chiffres qui est "
     "un carré parfait ? Détaille ton raisonnement puis donne le nombre final."
@@ -98,7 +98,7 @@ def main() -> int:
             med = sorted(tirages)[len(tirages) // 2]
             detail = f"{sorted(tirages)}  médiane {med}"
         else:
-            med, detail = None, "—"
+            med, detail = None, "-"
         print(f"  {nom:10} {etat[:28]:28} {detail:>34}", file=sys.stderr)
         resultats.append({"effort": v, "etat": etat, "tirages": tirages,
                           "raisonnement": med})
@@ -125,7 +125,7 @@ def main() -> int:
         confondus = [(r["effort"] or "(aucun)") for r in tries if r not in distincts]
         print(f"  Niveaux séparables (plages disjointes) : {', '.join(noms)}", file=sys.stderr)
         if confondus:
-            print(f"  Indistinguables des précédents : {', '.join(confondus)} — "
+            print(f"  Indistinguables des précédents : {', '.join(confondus)} - "
                   f"leurs plages se recouvrent, un seul alias suffit", file=sys.stderr)
         print(f"  → un alias par niveau distinct, jamais d'effort implicite (R-003)",
               file=sys.stderr)
