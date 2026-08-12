@@ -61,15 +61,21 @@ La position à 75 secondes reste un diagnostic. Elle ne produit aucun prédicat 
 
 Une unité binaire `SCORED` porte `PASS` ou `FAIL`. Une unité à niveaux `SCORED` porte le niveau atteint. L’agrégation retient `PASS` si au moins quatre des six runs portent `PASS`, ou le quatrième meilleur niveau pour un axe à niveaux. Les six valeurs et le dénominateur `SCORED` sont publiés. Aucun profil global n’est calculé.
 
-Les états de mesure, classes causales, verdicts et métriques suivent exclusivement les [§3 et §7 du contrat verify-v7](../../../docs/VERIFY-V7.md#3-modèle-de-mesure). Une panne fournisseur ne devient aucun verdict d’axe. Un `HARNESS_ERROR` reste une couverture manquante et maintient le classement concerné au statut provisoire.
+Les états de mesure, classes causales, verdicts et métriques suivent exclusivement les [§3 et §8 du contrat verify-v7](../../../docs/VERIFY-V7.md#3-modèle-de-mesure). Une panne fournisseur ne devient aucun verdict d’axe. Un `HARNESS_ERROR` reste une couverture manquante et maintient le classement concerné au statut provisoire.
 
 ## Adaptateur de modalité HTML
 
-Le contrat d’admission accepte uniquement les octets d’un document HTML autonome conforme à l’enveloppe candidat-visible. L’admission vérifie l’encodage, l’unicité du document et l’absence d’octets hors de l’enveloppe. Son échec donne `ARTIFACT_INVALID` une seule fois pour l’acquisition.
+Le contrat d’admission accepte uniquement les octets d’un document HTML autonome conforme à l’enveloppe candidat-visible. L’admission s’exécute une seule fois par acquisition, après le READY du premier axe et son marqueur de début. Elle exige un UTF-8 strict et exactement `<html>…</html>` : aucun BOM, doctype, attribut, espace de racine, variante de casse, `<html\n>`, octet extérieur, racine imbriquée ou seconde racine. Les textes ressemblant à une racine dans `script`, `style` ou un commentaire sont ignorés pour la cardinalité. Son échec donne `ARTIFACT_INVALID` une seule fois pour l’acquisition.
+
+L’autonomie statique autorise seulement les fragments internes non vides commençant par `#` après normalisation. Elle contrôle `action`, `archive`, `background`, `cite`, `classid`, `codebase`, `data` sur `object`, `formaction`, `href`, `icon`, `longdesc`, `manifest`, `ping`, `poster`, `profile`, `src`, `srcset`, `usemap` et `xlink:href`. Les références relatives, scheme-relative, absolues, `data:`, `blob:`, `javascript:` ou autrement non-fragment sont interdites, comme `base`, `srcdoc` et le rafraîchissement `meta`. En CSS, après retrait des commentaires, décodage des échappements et normalisation de casse, seul `url(#fragment)` est admis ; `@import`, les autres `url()` et `image-set()` sont interdits. Un cas mal formé ou indécidable est `ARTIFACT_INVALID`. Cette admission ne prétend pas prouver le confinement dynamique du JavaScript inline.
 
 Après admission, l’absence ou l’invalidité de `simulate(t)`, une valeur non finie, une trajectoire fausse ou un dessin incorrect reste un résultat fonctionnel de l’axe concerné. Ces défauts produisent un verdict `FAIL` sous `SCORED` lorsque l’évaluation se termine.
 
-Chaque unité d’axe exécute les mêmes octets candidats dans une instance propre, après son propre reçu `HARNESS_READY`. Le chargement du document, son initialisation et l’évaluation de cette unité entrent dans son budget artefact. Un incident de route ou d’admission reste lié une seule fois à l’acquisition ; un incident apparu dans une instance d’axe reste lié à cette unité. Le watchdog et le teardown du harnais suivent l’enveloppe distincte définie par verify-v7.
+Le noyau possède les octets. L’adaptateur et `open_axis` ne les reçoivent pas ; `execute_axis` n’existe plus. Chaque unité ouvre une session propre, prépare bootstrap et auto-test sans candidat, puis reçoit les mêmes octets uniquement via son `CandidatePermit`, après son propre `HarnessReadyAttestation` et son marqueur de début. Le chargement, l’initialisation et l’évaluation entrent dans son budget ; la fin est capturée après évaluation et avant teardown. Le teardown est tenté sur tous les chemins.
+
+Les décisions D1–D6 du contrat verify-v7 sont normatives : JSON canonique et reçus liés ; manifeste d’environnement complet et expurgé ; compteur monotone strict avec coût `fin - début` ; enveloppe HTML exacte ; autonomie statique fail-closed ; confinement dynamique observé séparément. Une tentative réseau dynamique contenue et saine après évaluation terminée met seulement `pentagone-api` à `SCORED/MEASUREMENT_COMPLETED/FAIL`. Un confinement malsain ou ambigu produit `HARNESS_ERROR`. Une tentative saine mais incomplète suit la limite prouvée ou `EVIDENCE_MISSING` selon l’observation.
+
+`AcquisitionResult` embarque le contexte et les attestations structurées permettant de recalculer tous les bindings internes, sans octets candidats. L’authenticité externe exige toujours le lock et les artefacts originaux. Un incident de route ou d’admission reste lié une seule fois à l’acquisition ; un incident apparu dans une instance d’axe reste lié à cette unité.
 
 ## Mécanisme discriminant
 
@@ -79,7 +85,7 @@ Chaque unité d’axe exécute les mêmes octets candidats dans une instance pro
 
 ## Qualification
 
-La carte reste `brouillon` et non officielle. La valeur numérique de `ARTIFACT_EXECUTION_LIMIT` ne figure pas encore dans ce document : elle sera dérivée du besoin d’usage, de témoins indépendants et de la variabilité mesurée dans un environnement épinglé, puis approuvée et divulguée selon le [§6 de verify-v7](../../../docs/VERIFY-V7.md#6-qualification-de-la-limite-numérique).
+La carte reste `brouillon` et non officielle. La valeur numérique de `ARTIFACT_EXECUTION_LIMIT` ne figure pas encore dans ce document : elle sera dérivée du besoin d’usage, de témoins indépendants et de la variabilité mesurée dans un environnement épinglé, puis approuvée et divulguée selon le [§7 de verify-v7](../../../docs/VERIFY-V7.md#7-qualification-de-la-limite-numérique).
 
 Les anciens artefacts de modèles ne peuvent intervenir qu’après le gel de cette valeur, comme stress tests. Ils ne servent ni à la choisir ni à la renoter dans cette tranche.
 
@@ -87,7 +93,7 @@ La qualification exige encore le noyau et l’adaptateur implémentés, leurs re
 
 ## Historique et renotation expérimentale
 
-Task-v4, ses locks, reçus et résultats restent inchangés. Une future vue rétroactive ou renotation expérimentale suit le [§8 de verify-v7](../../../docs/VERIFY-V7.md#8-vue-rétroactive-versionnée), produit de nouveaux reçus identifiés et conserve les sources intactes.
+Task-v4, ses locks, reçus et résultats restent inchangés. Une future vue rétroactive ou renotation expérimentale suit le [§9 de verify-v7](../../../docs/VERIFY-V7.md#9-vue-rétroactive-versionnée), produit de nouveaux reçus identifiés et conserve les sources intactes.
 
 Une acquisition historique non produite sous le contenu candidat-visible et le hash exacts de task-v5 ne devient jamais une preuve officielle task-v5.
 
