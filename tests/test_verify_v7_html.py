@@ -1121,5 +1121,107 @@ class HtmlAdapterPublicBehavior(unittest.TestCase):
         self.assertEqual(port.requests, [])
 
 
+class VerifyV7CorrectiveV2HtmlPublicBehavior(unittest.TestCase):
+    def test_c1_admission_rejects_mixed_srcset_and_crlf_escaped_import(self):
+        candidates = (
+            b'<html><img srcset="#safe,https://evil.test/x"></html>',
+            b"<html><style>@\\69\r\nmport 'https://evil.test/x'</style></html>",
+        )
+        for candidate_bytes in candidates:
+            with self.subTest(candidate_bytes=candidate_bytes):
+                events: list[str] = []
+                port = FakeHtmlRuntimePort(events)
+                readings = iter((10, 13, 20, 23))
+                artifact = Artifact(
+                    content=candidate_bytes,
+                    digest=_digest(candidate_bytes),
+                    proof_ref="proof:artifact-bound",
+                )
+                result = verify_acquisition(
+                    acquisition_id="acq-c1",
+                    axis_ids=("pentagone-api", "pentagone-determinisme"),
+                    provider_evidence=_provider_ok(),
+                    artifact=artifact,
+                    qualified_budget=_budget(),
+                    harness_expectations=EXPECTATIONS,
+                    counter=MonotonicCounter(
+                        source_id="fixture-counter",
+                        unit="fixture-ticks",
+                        rule="monotonic-end-minus-start/v1",
+                        read=lambda: next(readings),
+                    ),
+                    adapter=HtmlModalityAdapter(identity=IDENTITY, runtime_port=port),
+                )
+
+                self.assertEqual(len(result.incidents), 1)
+                self.assertEqual(result.incidents[0].scope, "ACQUISITION")
+                self.assertEqual(result.incidents[0].causal_class, "ARTIFACT_INVALID")
+                self.assertEqual(result.static_admission_count, 1)
+                self.assertEqual(result.adapter_call_count, 1)
+                self.assertEqual(len(port.requests), 1)
+                self.assertEqual(events.count("CANDIDATE_BYTES"), 0)
+                self.assertTrue(
+                    all(
+                        unit.measurement_state == "NOT_SCORED"
+                        and unit.causal_class == "ARTIFACT_INVALID"
+                        and unit.incident_id == result.incidents[0].incident_id
+                        for unit in result.units
+                    )
+                )
+                validate_acquisition_result(result)
+
+    def test_c7_teardown_error_survives_invalid_admission(self):
+        candidate_bytes = b"<html><img src='https://evil.test/x'></html>"
+        events: list[str] = []
+        port = FakeHtmlRuntimePort(events)
+        port.raise_during_teardown.add("pentagone-api")
+        readings = iter((10, 20))
+        artifact = Artifact(
+            content=candidate_bytes,
+            digest=_digest(candidate_bytes),
+            proof_ref="proof:artifact-bound",
+        )
+        result = verify_acquisition(
+            acquisition_id="acq-c7",
+            axis_ids=("pentagone-api", "pentagone-determinisme"),
+            provider_evidence=_provider_ok(),
+            artifact=artifact,
+            qualified_budget=_budget(),
+            harness_expectations=EXPECTATIONS,
+            counter=MonotonicCounter(
+                source_id="fixture-counter",
+                unit="fixture-ticks",
+                rule="monotonic-end-minus-start/v1",
+                read=lambda: next(readings),
+            ),
+            adapter=HtmlModalityAdapter(identity=IDENTITY, runtime_port=port),
+        )
+
+        self.assertEqual(len(result.units), 2)
+        self.assertEqual(len(result.incidents), 1)
+        self.assertEqual(result.incidents[0].scope, "ACQUISITION")
+        self.assertEqual(result.incidents[0].stage, "teardown")
+        self.assertEqual(result.incidents[0].causal_class, "HARNESS_ERROR")
+        self.assertEqual(
+            result.incidents[0].affected_unit_ids,
+            ("pentagone-api", "pentagone-determinisme"),
+        )
+        self.assertTrue(
+            all(
+                unit.measurement_state == "NOT_SCORED"
+                and unit.causal_class == "HARNESS_ERROR"
+                and unit.verdict is None
+                and unit.incident_id == result.incidents[0].incident_id
+                for unit in result.units
+            )
+        )
+        self.assertNotIn("ARTIFACT_INVALID", repr(result))
+        self.assertEqual(result.adapter_call_count, 1)
+        self.assertEqual(result.static_admission_count, 1)
+        self.assertEqual(len(port.requests), 1)
+        self.assertEqual(events.count("CANDIDATE_BYTES"), 0)
+        validate_acquisition_result(result)
+
+
 if __name__ == "__main__":
     unittest.main()

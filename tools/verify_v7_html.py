@@ -112,7 +112,9 @@ def _decode_css_escapes(value: str) -> str | None:
                 return None
             output.append(chr(codepoint))
             cursor += len(token)
-            if cursor < len(value) and value[cursor].isspace():
+            if value.startswith("\r\n", cursor):
+                cursor += 2
+            elif cursor < len(value) and value[cursor].isspace():
                 cursor += 1
             continue
         if value[cursor] in "\r\n\f":
@@ -183,7 +185,11 @@ class _StaticHtmlAdmission(HTMLParser):
             if key == "style" and (value is None or not _safe_css(value)):
                 self.valid = False
             if key in _URL_ATTRIBUTES or (key == "data" and name == "object"):
-                if not _safe_reference(value):
+                if key == "srcset":
+                    references = () if value is None else tuple(value.split(","))
+                    if not references or not all(_safe_reference(item) for item in references):
+                        self.valid = False
+                elif not _safe_reference(value):
                     self.valid = False
         if name == "style":
             self._style_depth += 1
