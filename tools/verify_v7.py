@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from typing import Callable, Protocol, Sequence, runtime_checkable
 
@@ -85,6 +85,9 @@ HARNESS_DIAGNOSTIC_CODES = frozenset({
     "EVIDENCE_MISSING",
 })
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+DIAGNOSTIC_PROOF_RE = re.compile(
+    r"proof:[a-z0-9][a-z0-9._-]*(?::[a-z0-9][a-z0-9._-]*)*\Z"
+)
 COUNTER_RULE = "monotonic-end-minus-start/v1"
 CANONICAL_JSON_VERSION = "verify-v7-canonical-json/v1"
 ENVIRONMENT_SCHEMA_VERSION = "verify-v7-environment/v1"
@@ -1312,6 +1315,16 @@ def _decide_trace(trace: object, *, axis_id: str) -> _TraceDecision:
             code="STATE_CONTRADICTION",
             stage="artifact-budget",
         )
+    if trace.observed_cost > trace.qualified_budget.value:
+        return _TraceDecision(
+            "NOT_SCORED",
+            "ARTIFACT_EXECUTION_LIMIT",
+            None,
+            refs,
+            (),
+            "",
+            "artifact-budget",
+        )
     if obs.network_attempted and not trace.evaluation_completed:
         return _harness_decision(
             proof_refs=refs,
@@ -1621,7 +1634,7 @@ def verify_acquisition(
     traces: dict[str, AxisTrace | None] = {}
     admission_state = _AdmissionState()
     call_count = 0
-    seen_session_objects: set[int] = set()
+    seen_session_objects: list[AxisSession] = []
     seen_session_ids: set[str] = set()
     seen_preparation_proofs: set[str] = set()
     seen_trace_proofs: set[str] = set()
@@ -1650,13 +1663,16 @@ def verify_acquisition(
         try:
             session = adapter.open_axis(request)
             call_count += 1
-            if id(session) in seen_session_objects:
+            if any(
+                previous_session is session
+                for previous_session in seen_session_objects
+            ):
                 raise _HarnessFailure(
                     "ATTESTATION_BINDING_MISMATCH",
                     ("axis_session_unique",),
                     stage="adapter",
                 )
-            seen_session_objects.add(id(session))
+            seen_session_objects.append(session)
             raw_preparation = session.prepare()
             preparation = _validate_preparation(raw_preparation, request=request)
             if preparation.session_id in seen_session_ids:
@@ -1781,6 +1797,31 @@ def verify_acquisition(
                     stage="candidate",
                 )
         traces[axis_id] = trace
+        if (
+            failure is not None
+            and failure.stage == "teardown"
+            and observation is not None
+            and observation.admission_result is False
+            and admission_state.attestation is not None
+            and admission_state.attestation.accepted is False
+        ):
+            for remaining_axis in axes[len(units) + 1 :]:
+                traces.setdefault(remaining_axis, None)
+            result = _terminal_result(
+                context=context,
+                causal_class="HARNESS_ERROR",
+                stage="teardown",
+                proof_refs=(admission_state.attestation.proof_ref,),
+                adapter_call_count=call_count,
+                ready_attestations=tuple(ready_attestations),
+                admission_attestation=admission_state.attestation,
+                static_admission_count=admission_state.inspection_count,
+                traces=traces,
+                missing=failure.missing,
+                diagnostic_code=failure.code,
+            )
+            validate_acquisition_result(result)
+            return result
         if failure is not None:
             unit, incident = _axis_harness_result(
                 context=context,
@@ -1873,6 +1914,29 @@ def verify_acquisition(
             trace=None if relation_failure else trace,
         ))
 
+    if any(
+        unit.measurement_state == "SCORED"
+        and unit.trace is not None
+        and unit.trace.observation.network_attempted
+        for unit in units
+    ):
+        normalized_units: list[UnitResult] = []
+        for unit in units:
+            if (
+                unit.axis_id == "pentagone-api"
+                and unit.measurement_state == "SCORED"
+                and unit.trace is not None
+            ):
+                normalized_observation = replace(unit.trace.observation, verdict="FAIL")
+                normalized_trace = replace(
+                    unit.trace,
+                    observation=normalized_observation,
+                    verdict="FAIL",
+                )
+                unit = replace(unit, verdict="FAIL", trace=normalized_trace)
+            normalized_units.append(unit)
+        units = normalized_units
+
     result = AcquisitionResult(
         acquisition_id=acquisition_id,
         units=tuple(units),
@@ -1928,7 +1992,17 @@ def validate_incident(incident: Incident) -> None:
     )
     _require(len(incident.affected_unit_ids) == len(set(incident.affected_unit_ids)), "incident axes uniques")
     _require(type(incident.proof_refs) is tuple, "incident proof_refs")
-    _require(all(_proof_ref(ref) for ref in incident.proof_refs), "incident proof ref")
+    _require(
+        all(
+            _digest_string(ref)
+            or (
+                _strict_string(ref)
+                and DIAGNOSTIC_PROOF_RE.fullmatch(ref) is not None
+            )
+            for ref in incident.proof_refs
+        ),
+        "incident proof ref",
+    )
     _require(len(incident.proof_refs) == len(set(incident.proof_refs)), "incident proof refs uniques")
     _require(_digest_string(incident.context_digest), "incident context_digest")
     _require(type(incident.missing_evidence) is tuple, "incident missing_evidence")
@@ -2053,6 +2127,21 @@ def validate_acquisition_result(result: AcquisitionResult) -> None:
         _require(trace.ready_attestation.receipt_ref in ready_by_receipt, "trace ready receipt")
         _require(ready_by_receipt[trace.ready_attestation.receipt_ref] == trace.ready_attestation, "trace ready binding")
         _require(result.admission_attestation == trace.admission_attestation, "trace admission binding")
+        _require(
+            trace.start_marker.source_id == context.counter_source_id
+            and trace.start_marker.unit == context.counter_unit
+            and trace.start_marker.rule == context.counter_rule,
+            "trace counter context binding",
+        )
+        if trace.end_marker is not None:
+            _require(
+                trace.end_marker.source_id == context.counter_source_id
+                and trace.end_marker.unit == context.counter_unit
+                and trace.end_marker.rule == context.counter_rule
+                and trace.observed_cost
+                == trace.end_marker.value - trace.start_marker.value,
+                "trace counter result binding",
+            )
         refs = {ref for _, ref in trace.stage_proofs}
         _require(not (refs & seen_stage_refs), "stage proof reused")
         seen_stage_refs.update(refs)
@@ -2068,6 +2157,13 @@ def validate_acquisition_result(result: AcquisitionResult) -> None:
         _require(set(incident.affected_unit_ids) <= set(context.axis_ids), "incident axes binding")
         if incident.scope == "ACQUISITION":
             _require(incident.affected_unit_ids == context.axis_ids, "acquisition incident coverage")
+    unit_by_axis = {unit.axis_id: unit for unit in result.units}
+    for incident in result.incidents:
+        for axis_id in incident.affected_unit_ids:
+            unit = unit_by_axis[axis_id]
+            _require(unit.measurement_state == "NOT_SCORED", "incident scored unit")
+            _require(unit.incident_id == incident.incident_id, "incident unit backlink")
+            _require(unit.causal_class == incident.causal_class, "incident unit class")
     for unit in result.units:
         if unit.incident_id is None:
             continue
@@ -2075,5 +2171,19 @@ def validate_acquisition_result(result: AcquisitionResult) -> None:
         incident = incident_by_id[unit.incident_id]
         _require(unit.axis_id in incident.affected_unit_ids, "unit incident axis")
         _require(unit.causal_class == incident.causal_class, "unit incident class")
+    if any(
+        unit.measurement_state == "SCORED"
+        and unit.trace is not None
+        and unit.trace.observation.network_attempted
+        for unit in result.units
+    ):
+        for unit in result.units:
+            if unit.axis_id == "pentagone-api":
+                _require(
+                    unit.measurement_state == "SCORED"
+                    and unit.causal_class == "MEASUREMENT_COMPLETED"
+                    and unit.verdict == "FAIL",
+                    "network attempt api verdict",
+                )
     if any(unit.measurement_state == "SCORED" for unit in result.units):
         _require(result.adapter_call_count > 0, "scored adapter call")
