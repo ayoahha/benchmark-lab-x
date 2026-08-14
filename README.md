@@ -1,128 +1,98 @@
+---
+style_gate: pass
+---
+
 # Benchmark Lab-X
 
-**Le banc d’essai des systèmes d’IA. Des preuves, pas des promesses.**
+Benchmark Lab-X doit répondre à une question pratique :
 
-Chaque semaine, un modèle promet de tout changer, et des équipes engagent des budgets sur la foi de démos et de classements qui ne mesurent jamais leur travail. La vraie question n’est pas de savoir qui gagne le classement du mois. C’est de savoir si l’offre la plus chère du marché sert à ce que vous faites : beaucoup d’équipes paient tous les mois une puissance qu’elles n’utilisent jamais, pendant que d’autres économisent et livrent du faux.
+> Sur le workflow exact de mon besoin, combien me coûte en pratique une sortie acceptable, et quelle configuration choisir ?
 
-Le piège est plus profond qu’un mauvais choix de marque : vous ne déployez pas un modèle, vous déployez une configuration. Un modèle, une infrastructure, un fournisseur, un niveau d’effort, des réglages. Deux équipes qui achètent le même nom n’obtiennent ni la même fiabilité, ni le même prix.
+La V0 est un pilote décisionnel interne, utilisé par Ayo ou un consultant Lab-X. Elle porte sur un seul workflow : préparer un pré-cadrage avant un entretien client pour une activité de conseil IA et cybersécurité auprès de PME.
 
-> Pour ce travail, à ce niveau attendu, sous ces contraintes de coût, de délai et de données, quelle configuration choisir ?
+Le livrable attendu est un rapport interne de décision. Aucun site public, classement général ou vainqueur universel n’est requis en V0.
 
-Benchmark Lab-X construit l’instrument qui tranche cette question. Il fait exécuter des travaux inspirés de projets réels, puis fait vérifier chaque résultat par un programme, jamais par une impression ni par un autre modèle. Le programme qui corrige ne sait pas quel système a produit la réponse qu’il note. Ce qui a réussi, ce que ça a coûté, le temps que ça a pris et dans quelles conditions : tout est publié, avec ses limites et sa date.
+## Ce que signifie « acceptable »
 
-La discipline est le produit. Aucun vainqueur universel, aucune note globale, aucun résultat retouché à la main. Un classement par type de travail, valable pour ce qui a été mesuré, dans ce contexte, à cette date. Et quand la preuve manque, le banc s’abstient au lieu de conclure.
+Une sortie est **officiellement acceptable** lorsque deux conditions sont réunies :
 
-Le projet naît au sein du collectif français Lab-X. Il a vocation à devenir public et réutilisable hors du collectif.
+1. les contrôles automatiques rendent `PASS` sur les propriétés entièrement décidables par code
+2. une revue humaine aveugle rend `ACCEPTABLE` sur la fidélité sémantique et l’utilité métier
 
-## Pourquoi Benchmark Lab-X ?
+La formule officielle est donc : **`PASS` automatique + `ACCEPTABLE` humain**.
 
-Les benchmarks généralistes donnent une référence commune. [SWE-bench](https://github.com/SWE-bench/SWE-bench) évalue la résolution de problèmes issus de dépôts logiciels. [Terminal-Bench](https://github.com/laude-institute/terminal-bench) mesure des agents dans un terminal. Ces travaux sont utiles, mais ils ne tranchent pas la décision locale posée plus haut.
+Un juge LLM peut intervenir après le gel du verdict humain. Il reste fantôme, exploratoire et sans effet sur le résultat officiel.
 
-Benchmark Lab-X part donc de cas d’usage concrets, en français, et mesure des effets observables : un artefact fonctionne, une contrainte est respectée, un calcul est juste, une provenance est fournie ou un objectif mesurable est atteint. Le score vient de code déterministe. Le projet publie les distributions, les limites du proxy et les conditions de la mesure, pas seulement un rang.
+## Ce qui sera comparé
 
-Chaque axe qualifié produit son propre classement. Il n’existe aucun vainqueur universel entre des domaines différents. Plusieurs axes ne sont réunis que dans un profil d’usage préenregistré, avec des minima, des contraintes et une règle d’abstention explicites.
+Le pilote compare deux types de candidats sans les confondre :
 
-## Ce qui est réellement comparé
+- des configurations API fixes, identifiées par le modèle demandé, le backend, la route ou le provider, les paramètres et les versions qui influencent l’exécution
+- OpenRouter Auto Router, identifié comme une politique de routage versionnée, jamais comme un modèle fixe
 
-Une identité de base directe comprend :
+Auto Router doit être diagnostiqué avant toute configuration officielle. Un canari OpenRouter est obligatoire. Pour une configuration fixe, la route, le provider et les paramètres effectivement servis doivent être observables. Une preuve absente ou ambiguë bloque le statut officiel.
 
-1. le **modèle demandé**, par exemple `anthropic/claude-sonnet-4.5`
-2. le **backend et le provider épinglés**, par exemple `OpenRouter → Anthropic`
-3. l’**effort déclaré**, par exemple `default`, `high` ou `xhigh`
+## Décision produite
 
-Une configuration mesurée ajoute les paramètres exacts de l’appel, le budget de sortie, la politique de données demandée, la version de l’adaptateur et l’environnement qui influence l’exécution. Son `execution_manifest_hash` identifie cet ensemble. Deux configurations peuvent donc partager un libellé lisible sans être fusionnées.
+Le rapport V0 présente :
 
-La piste des agents outillés reste séparée. L’identité de base ajoute alors le nom et la version de l’agent ; la configuration précise aussi ses instructions, outils, permissions, mémoire, limites et environnement. Un résultat d’agent n’est jamais fusionné avec un classement d’appels directs.
+- le taux de sorties officiellement acceptables
+- le coût fournisseur par sortie officiellement acceptable
+- la latence
+- la couverture du harnais
+- la provenance de chaque résultat
 
-## Carte d’usage et axes
+La métrique monétaire officielle V0 est le coût fournisseur par sortie officiellement acceptable. L’effort humain et les opérations sont consignés séparément, sans conversion monétaire implicite.
 
-Une **carte d’usage** représente un travail réel, son stimulus, la décision qu’il doit éclairer et son contrat de mesure. Elle peut produire plusieurs **axes de score** déterministes à partir d’un même artefact.
+Le budget est facultatif. Lorsqu’il est absent, le rapport ne désigne pas arbitrairement un gagnant. Il montre toutes les configurations compatibles disposant de preuves comparables et assez fraîches, puis le front de Pareto observé sur exactement trois axes : le taux de sorties officiellement acceptables, maximisé ; le coût fournisseur par sortie officiellement acceptable, minimisé ; la latence selon la règle préenregistrée, minimisée. Les pannes fournisseur sont déjà comptées dans le taux. La couverture conditionne l’éligibilité des configurations et l’interprétation du front ; elle n’est pas un axe.
 
-`pentagone-rotatif`, par exemple, reste une seule carte d’usage même si le même programme est évalué sur cinq axes : interface, déterminisme, confinement court, précision à 24 secondes et horizons longs. Un seul appel produit l’artefact ; les cinq notations ne multiplient ni les appels ni le coût de collecte.
+Une recommandation unique exige une préférence explicite. Si les preuves sont insuffisantes, incompatibles ou périmées au regard de la politique déclarée, Lab-X s’abstient.
 
-Les cartes vivent sous `tasks/`. Ce nom correspond à l’objet manipulé par l’outillage ; le gabarit précise le contrat complet attendu.
+## État réel au 14 août 2026
 
-## Fonctionnement cible
+### Faits actuels
 
-1. définir la décision, les cartes, les configurations et les contraintes
-2. figer les routes, paramètres, tarifs, quotas et collectes dans un lock
-3. collecter sans fallback silencieux
-4. conserver un reçu de collecte distinct de la notation
-5. noter chaque axe avec un vérificateur déterministe et aveugle à l’identité du candidat
-6. contrôler les identités, empreintes, états et preuves
-7. produire `results.html` avec le statut propre à chaque axe
-8. auditer l’instrument selon un plan fondé sur le risque
-9. valider uniquement les axes dont toutes les preuves requises sont acceptées
+- Le paquet [`PRECADRAGE-ENTRETIEN-CLIENT-V0`](tasks/dev/pre-cadrage-entretien-client/registre-verite.md) décrit le stimulus synthétique, le contrat de sortie, les contrôles automatiques, la revue humaine aveugle et les témoins de qualification.
+- Ce paquet qualifie un contrat de sortie. Il ne constitue pas encore une mesure comparative et ne soutient aucun choix de configuration.
+- Le paquet sépare `qualification_status`, en attente d’approbation, et `execution_status`, non exécutée. Aucune approbation humaine n’est prouvée. L’approbation future est externe et liée au SHA-256 du [manifeste du paquet](tasks/dev/pre-cadrage-entretien-client/manifeste-paquet.json) ou de la PR qui le porte.
+- Le dépôt contient des prototypes techniques, du code de campagnes antérieures et des preuves historiques.
+- Les campagnes et reçus historiques restent immuables. Ils ne prouvent pas la nouvelle V0.
+- `pentagone-rotatif` est un prototype historique et spécialisé, hors pilote V0 actif.
 
-`results.html` est le seul rapport de campagne destiné à l’utilisateur. Les réponses, reçus et données intermédiaires restent sous `runs/`, hors Git.
+### Décisions prises
 
-## Trajectoire
+- Le pilote V0 reste étroit : un workflow réel, un rapport interne de décision et une évaluation hybride automatique plus humaine.
+- Les pannes fournisseur comptent dans la réussite bout en bout lorsque la route appartient à la configuration.
+- `HARNESS_ERROR` reste séparé, non pénalisant pour la configuration et visible comme défaut de couverture.
+- Les benchmarks publics servent de contexte daté et sourcé. Leurs scores ne sont ni fusionnés entre eux, ni mélangés avec la mesure locale.
 
-- **V0, POC** : trois cartes d’usage exposées et qualifiées, couvrant au moins deux domaines, avec une démonstration rejouable
-- **V1, prototype public** : dix cartes d’usage, reprise de campagne, reproduction externe et premiers retours de décisions réelles
-- **V2, couverture directe** : matrice complète des domaines et scénarios prioritaires, dont un pilote cyber défensif synthétique
-- **V3, agents outillés** : piste distincte avec outils et environnements isolés ; toute extension offensive exige une validation de sécurité séparée
-- **V4, benchmark vivant** : suivi longitudinal pilote sur des cartes retenues et renouvellement des cartes exposées
-- **V5, consultation** : recommandations depuis des candidats de profil compatibles, assez frais et dont les axes obligatoires sont valides, avec abstention si la preuve manque
-- **V6, studio de tâche** : transformation contrôlée d’un besoin utilisateur en brouillon de carte, puis instrumentation et validation humaine avant toute mesure
+### Travail encore prospectif
 
-V0 doit démontrer l’idée rapidement. V1 doit prouver qu’elle devient un produit reproductible. Les jalons suivants élargissent la couverture sans confondre ambition et preuve acquise.
+- comparer Promptfoo, Ori Eval et une méthode manuelle au besoin exact
+- arrêter la plateforme spécifique si une solution existante produit la même décision sans perte pertinente avec un effort complet inférieur
+- implémenter ou choisir le runner, les adaptateurs, les reçus, la validation, la revue aveugle et l’analyse décisionnelle
+- diagnostiquer Auto Router et exécuter les canaris autorisés avant toute campagne officielle
+- produire la première campagne comparative V0
 
-## État actuel
+Aucun appel de modèle, canari, collecte ou résultat comparatif n’est réalisé par cette refonte documentaire.
 
-Le dépôt contient un prototype technique actif et une première chaîne verticale. Les contrats et l’implémentation évoluent encore ; des défauts subsistent et aucun classement courant n’est garanti publiable. Les documents de référence décrivent séparément l’objectif, les invariants de mesure et l’architecture cible.
+## Démarrage documentaire
 
-## Démarrage
+1. Lire le [PRD](docs/PRD.md) pour le besoin, la décision V0, les métriques et les portes d’arrêt.
+2. Lire l’[ARD](docs/ARD.md) pour l’architecture logique, les identités, les preuves et les états.
+3. Lire les [règles canoniques V0](docs/RULES.md) pour les invariants universels.
+4. Utiliser le [gabarit de carte](tasks/TEMPLATE.md) pour une nouvelle carte compatible avec l’évaluation hybride.
+5. Examiner le [paquet pré-cadrage](tasks/dev/pre-cadrage-entretien-client/registre-verite.md) sans le modifier : son approbation reste en attente et sera liée au SHA-256 de son manifeste.
 
-### Prérequis
+L’ancien pipeline `pentagone-rotatif`, ses commandes et ses rapports ne constituent pas le démarrage du produit V0. Les anciens documents remplacés sont conservés dans l’[archive du socle antérieur](docs/archive/legacy-benchmark-v0-2026-08-14/README.md). L’ancien glossaire racine `CONTEXT.md` y est archivé byte-identiquement comme [`root-CONTEXT.md`](docs/archive/legacy-benchmark-v0-2026-08-14/root-CONTEXT.md) : il est historique, non normatif, et cède à PRD, ARD et RULES.
 
-- [`uv`](https://docs.astral.sh/uv/)
-- Python 3.12 ou plus récent, conformément aux métadonnées des scripts et résolu par `uv`
-- un compte OpenRouter et une clé dédiée avec plafond de dépense
-- Chromium pour les cartes rendues
+## Trajectoire conditionnelle
 
-```sh
-git clone https://github.com/ayoahha/benchmark-lab-x.git
-cd benchmark-lab-x
-cp .env.example .env
-uv run --with playwright==1.62.0 playwright install chromium
-```
+Les versions produit sont cumulatives : chaque version ajoute un profil de mesure sans retirer les précédents. Les profils API, abonnement et auto-hébergé sont parallèles et qualifiés indépendamment. Aucune comparaison inter-profils n’est permise sans contrat commun explicite.
 
-Placer la clé dans `.env` sous `OPENROUTER_API_KEY`. Ne jamais la transmettre dans un argument, un chat, un ticket public ou une sortie publiée.
+- **V0** : profil de mesure API sur le workflow de pré-cadrage, rapport interne et abstention explicite
+- **V1** : ajoute le profil de mesure abonnement, avec produit, plan, quotas, resets, interface, harnais et intervention humaine dans l’identité
+- **V2** : ajoute le profil de mesure auto-hébergé, avec checkpoint, quantification, matériel, stack, énergie, amortissement, administration, occupation GPU, confidentialité, souveraineté et distinction entre coût marginal et coût complet
+- **Site ou sélecteur** : conditionné à une décision utile du pilote ou à une abstention justifiée acceptée par le propriétaire, et à la porte outil existante ; il reçoit le besoin, les contraintes et un budget facultatif, puis recommande ou s’abstient avec provenance
 
-Le dépôt n’a pas encore de licence. Le clonage permet l’évaluation locale ; les droits de réutilisation et de redistribution seront précisés avant la première publication officielle.
-
-Les configurations sont déclarées dans [`models.toml`](models.toml). OpenRouter est le backend primaire actuel. Groq ne peut servir qu’après qualification comme backend distinct, dans une nouvelle campagne et sous un nouveau lock. Il ne remplace jamais silencieusement une route indisponible.
-
-### Exercer la chaîne actuelle
-
-```sh
-uv run tools/collect.py tasks/dev/pentagone-rotatif \
-  --alias deepseek-v4-flash --run 1
-
-uv run tools/verifier_pentagone.py \
-  runs/<date>/pentagone-rotatif__deepseek-v4-flash__r1/response.md
-```
-
-Le collecteur écrit un dossier sous `runs/`. L’invocation directe d’un vérificateur reste diagnostique : elle ne suffit pas à produire un classement publiable.
-
-## Organisation du dépôt
-
-```text
-docs/                  PRD, ARD et règles de mesure
-tasks/TEMPLATE.md      contrat réutilisable d’une carte d’usage
-tasks/dev/             cartes en développement ou hors catalogue
-tasks/archives/        cartes retirées, conservées comme preuves
-tools/                 collecte, adaptateurs, oracles et vérificateurs
-models.toml            registre des configurations lisibles
-runs/                  campagnes et résultats locaux, hors Git
-```
-
-## Documents de référence
-
-- [`docs/PRD.md`](docs/PRD.md) : problème, valeur, utilisateurs, exigences produit, périmètre et jalons
-- [`docs/ARD.md`](docs/ARD.md) : objets, identités, flux, états, sécurité et preuves techniques
-- [`docs/RULES.md`](docs/RULES.md) : invariants d’éligibilité, de notation, d’agrégation et de publication
-- [`tasks/TEMPLATE.md`](tasks/TEMPLATE.md) : gabarit d’une carte d’usage
-
-Les décisions de produit et d’architecture restent dans le PRD ou l’ARD. Le dépôt ne multiplie pas les documents de décision ou d’exploitation.
+Chaque extension exige son propre contrat versionné. Elle ne réécrit aucune campagne antérieure.
