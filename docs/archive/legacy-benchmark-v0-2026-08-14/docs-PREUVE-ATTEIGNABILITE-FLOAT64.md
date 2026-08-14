@@ -2,13 +2,9 @@
 title: "Atteignabilité du seuil float64 à 24 secondes"
 date: 2026-08-08
 status: "preuve numérique forte, certification formelle en HOLD"
-style_gate: pass
-document_status: historical_specialized
 ---
 
 # Atteignabilité du seuil float64 à 24 secondes
-
-> Document historique et spécialisé du prototype pentagone-rotatif. Cette preuve conserve sa portée numérique d’origine. Elle n’est ni une autorité de la V0 décisionnelle active, ni une preuve d’acceptabilité ou de comparaison pour le workflow pré-cadrage.
 
 ## Verdict
 

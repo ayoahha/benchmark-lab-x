@@ -7,7 +7,9 @@ style_gate: pass
 ## Identité et portée
 
 - Paquet : `PRECADRAGE-ENTRETIEN-CLIENT-V0`
-- Statut : prospectif
+- qualification_status : `en attente d'approbation` ; aucune approbation humaine n'est prouvée
+- execution_status : `non exécutée` ; aucune campagne ni mesure comparative
+- Manifeste : `manifeste-paquet.json` ; l'approbation future est externe et liée au SHA-256 de ce manifeste ou de la PR qui le porte
 - Scénario : entièrement synthétique
 - Usage : qualifier la capacité d'un candidat à transformer des notes brutes en pré-cadrage structuré
 - Hors usage : mesure de performance, classement, conseil envoyé au client, verdict de conformité ou décision autonome
@@ -150,28 +152,30 @@ Les ancres `N-*` sont uniques, stables dans le paquet approuvé et dépourvues d
 
 ## Inconnues à préserver
 
-- ID: U-001
+Les identifiants `PC-UNK-*` sont locaux à ce paquet. Ils remplacent, depuis le 14 août 2026, les huit anciennes inconnues numérotées `U-001` à `U-008`, renommées à l'identique de rang pour supprimer la collision avec les invariants universels `U-*` de `docs/RULES.md`.
+
+- ID: PC-UNK-001
   - Question ouverte : lequel des besoins évoqués est prioritaire pour l'entreprise
   - Provenance : `SRC-002`, `SRC-003`
-- ID: U-002
+- ID: PC-UNK-002
   - Question ouverte : quelles catégories de données se trouvent dans chaque source envisagée
   - Provenance : `SRC-004`, `SRC-005`
-- ID: U-003
+- ID: PC-UNK-003
   - Question ouverte : où résident les sources et qui peut en autoriser l'usage
   - Provenance : `SRC-004`, `SRC-005`
-- ID: U-004
+- ID: PC-UNK-004
   - Question ouverte : quels rôles humains relisent, corrigent et valident les propositions
   - Provenance : `SRC-003`, `SRC-005`
-- ID: U-005
+- ID: PC-UNK-005
   - Question ouverte : quels critères métier permettront à l'entreprise de décider de poursuivre
   - Provenance : `SRC-002`, `SRC-003`
-- ID: U-006
+- ID: PC-UNK-006
   - Question ouverte : quelles règles d'hébergement, de conservation et d'outillage sont approuvées
   - Provenance : `SRC-004`
-- ID: U-007
+- ID: PC-UNK-007
   - Question ouverte : quelles clauses contractuelles limitent la réutilisation des contenus reçus
   - Provenance : `SRC-005`
-- ID: U-008
+- ID: PC-UNK-008
   - Question ouverte : qui arbitre les deux contradictions du paquet
   - Provenance : `SRC-003`, `SRC-004`, `SRC-005`
 
@@ -183,14 +187,14 @@ Les ancres `N-*` sont uniques, stables dans le paquet approuvé et dépourvues d
   - Énoncé : un corpus synthétique pourrait permettre d'examiner le flux de préparation sans données réelles
   - Provenance : `F-006`, `C-001`
 - ID: HP-002
-  - Énoncé : commencer par un seul besoin pourrait réduire l'ambiguïté, sous réserve du choix humain demandé par `U-001`
-  - Provenance : `F-003`, `U-001`
+  - Énoncé : commencer par un seul besoin pourrait réduire l'ambiguïté, sous réserve du choix humain demandé par `PC-UNK-001`
+  - Provenance : `F-003`, `PC-UNK-001`
 
 ### Interdites
 
 - ID: HI-001
   - Énoncé interdit : l'entreprise est conforme à une réglementation ou à une norme
-  - Motif : `C-006`, `U-002`, `U-006`, `U-007`
+  - Motif : `C-006`, `PC-UNK-002`, `PC-UNK-006`, `PC-UNK-007`
 - ID: HI-002
   - Énoncé interdit : un budget ou un délai est acquis
   - Motif : `C-007`
@@ -199,10 +203,10 @@ Les ancres `N-*` sont uniques, stables dans le paquet approuvé et dépourvues d
   - Motif : `C-003`, `X-001`
 - ID: HI-004
   - Énoncé interdit : des contrôles de sécurité non cités sont en place
-  - Motif : `U-003`, `U-006`
+  - Motif : `PC-UNK-003`, `PC-UNK-006`
 - ID: HI-005
   - Énoncé interdit : la qualité, le gain métier ou l'absence de risque sont garantis
-  - Motif : `U-005`, `RISK-003`
+  - Motif : `PC-UNK-005`, `RISK-003`
 
 ## Contradictions intentionnelles
 
@@ -223,40 +227,40 @@ Les ancres `N-*` sont uniques, stables dans le paquet approuvé et dépourvues d
 
 - ID: RISK-001
   - Risque : exposition ou réutilisation non autorisée de contenus commerciaux, de support ou contractuels
-  - Provenance : `F-004`, `U-002`, `U-007`, `X-002`
+  - Provenance : `F-004`, `PC-UNK-002`, `PC-UNK-007`, `X-002`
 - ID: RISK-002
   - Risque : accès de production trop large ou accordé avant arbitrage
-  - Provenance : `C-003`, `U-003`, `X-001`
+  - Provenance : `C-003`, `PC-UNK-003`, `X-001`
 - ID: RISK-003
   - Risque : proposition erronée transmise ou appliquée sans validation humaine
-  - Provenance : `U-004`, `C-005`, `C-008`
+  - Provenance : `PC-UNK-004`, `C-005`, `C-008`
 - ID: RISK-004
   - Risque : cadrage inutilisable faute de besoin prioritaire et de critères métier explicites
-  - Provenance : `U-001`, `U-005`
+  - Provenance : `PC-UNK-001`, `PC-UNK-005`
 
 ## Questions prioritaires recevables
 
 - ID: Q-001
   - Question : quel besoin l'entreprise veut-elle traiter en premier, et pourquoi
-  - Provenance : `U-001`, `RISK-004`
+  - Provenance : `PC-UNK-001`, `RISK-004`
 - ID: Q-002
   - Question : quelles données chaque source contient-elle, où résident-elles et qui en autorise l'usage
-  - Provenance : `U-002`, `U-003`, `RISK-001`, `RISK-002`
+  - Provenance : `PC-UNK-002`, `PC-UNK-003`, `RISK-001`, `RISK-002`
 - ID: Q-003
   - Question : quelles clauses encadrent la réutilisation des contenus commerciaux, de support et contractuels
-  - Provenance : `U-007`, `X-002`, `RISK-001`
+  - Provenance : `PC-UNK-007`, `X-002`, `RISK-001`
 - ID: Q-004
   - Question : qui relit, corrige et valide une proposition avant tout usage
-  - Provenance : `U-004`, `RISK-003`
+  - Provenance : `PC-UNK-004`, `RISK-003`
 - ID: Q-005
   - Question : quels critères métier guideront la décision humaine de poursuivre, réduire ou arrêter
-  - Provenance : `U-005`, `F-008`, `RISK-004`
+  - Provenance : `PC-UNK-005`, `F-008`, `RISK-004`
 - ID: Q-006
   - Question : quelles règles d'hébergement, de conservation et d'outillage sont approuvées
-  - Provenance : `U-006`, `RISK-001`
+  - Provenance : `PC-UNK-006`, `RISK-001`
 - ID: Q-007
   - Question : qui arbitre les demandes contradictoires sur la production et la réutilisation des contenus
-  - Provenance : `U-008`, `X-001`, `X-002`
+  - Provenance : `PC-UNK-008`, `X-001`, `X-002`
 
 ## Actions recevables
 
@@ -265,7 +269,7 @@ Les ancres `N-*` sont uniques, stables dans le paquet approuvé et dépourvues d
   - Provenance : `F-007`, `C-005`
 - ID: ACT-002
   - Action : utiliser l'entretien pour résoudre les contradictions et les inconnues critiques
-  - Provenance : `U-008`, `X-001`, `X-002`
+  - Provenance : `PC-UNK-008`, `X-001`, `X-002`
 - ID: ACT-003
   - Action : soumettre à une décision humaine la poursuite, la réduction ou l'arrêt
   - Provenance : `F-008`, `C-008`
@@ -300,6 +304,8 @@ client_ready: false
 qualification: QUALIFIABLE | NON_QUALIFIABLE
 conformite: NON_EVALUEE
 ```
+
+Le champ `version` de cette enveloppe désigne le schéma de sortie (`artifact_schema`), pas la version produit.
 
 Puis, dans cet ordre :
 
