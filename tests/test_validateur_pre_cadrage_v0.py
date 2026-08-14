@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -15,39 +17,16 @@ from tools.validateur_pre_cadrage_v0 import (
 
 RACINE = Path(__file__).resolve().parents[1]
 SOURCES = RACINE / "tasks/dev/pre-cadrage-entretien-client"
-EMPREINTES = (
-    (
-        "registre-verite.md",
-        "548e8d5d626de6604514d90de53c28334a620e50dfdcea3daac82158a54b7f8e",
-    ),
-    (
-        "stimulus.md",
-        "20f0be450640704b0c467eee57ca2ea58a4d629e63eba3efccbc6f68440e07e4",
-    ),
-    (
-        "temoins-qualification.md",
-        "8a419c5950127c8187119545237f32b0ecb9b0062116afc3421e0c96a00bd011",
-    ),
-)
-CRITERES = ("G-001", "G-002", "G-003", "G-004", "G-005", "HR-001")
 
 
 def paquet_approuve() -> PaquetApprouveV0:
     return PaquetApprouveV0(
-        nom="PRECADRAGE-ENTRETIEN-CLIENT-V0",
-        version="V0",
-        registre_verite=SOURCES / "registre-verite.md",
-        stimulus=SOURCES / "stimulus.md",
-        temoins_qualification=SOURCES / "temoins-qualification.md",
-        empreintes_approuvees=EMPREINTES,
-        provenance_origine="brief propriétaire approuvé",
-        provenance_processus="compilation déclarative des trois artefacts V0",
+        manifeste=SOURCES / "manifeste-paquet.json",
+        empreinte_manifeste_approuvee=(
+            "8030128d159e4203483b19f0e37692a53f01baecc38fbccaa321541c23e71a10"
+        ),
         approbateur="Ayo",
         verdict_approbation="APPROUVE",
-        paquet_approuve_nom="PRECADRAGE-ENTRETIEN-CLIENT-V0",
-        paquet_approuve_version="V0",
-        empreintes_liees=EMPREINTES,
-        criteres_lies=CRITERES,
     )
 
 
@@ -62,7 +41,35 @@ def remplacer_unique(texte: str, ancien: str, nouveau: str) -> str:
     return texte.replace(ancien, nouveau, 1)
 
 
+def copier_paquet(dossier: Path) -> PaquetApprouveV0:
+    noms = (
+        "manifeste-paquet.json",
+        "brief-proprietaire.md",
+        "registre-verite.md",
+        "stimulus.md",
+        "temoins-qualification.md",
+    )
+    for nom in noms:
+        shutil.copy(SOURCES / nom, dossier / nom)
+    return replace(
+        paquet_approuve(),
+        manifeste=dossier / "manifeste-paquet.json",
+    )
+
+
 class ValidateurPreCadrageV0Tests(unittest.TestCase):
+    def test_g005_accepte_le_manifeste_canonique_approuve(self) -> None:
+        paquet = paquet_approuve()
+
+        with tempfile.TemporaryDirectory() as dossier:
+            candidate = Path(dossier) / "candidate.md"
+            candidate.write_text(sortie_acceptable(), encoding="utf-8")
+
+            resultat = valider_pre_cadrage_v0(paquet, candidate)
+
+        self.assertEqual("PASS", resultat.statut)
+        self.assertEqual(("G-005", True), resultat.gates[0])
+
     def test_temoins_hors_semantique_restent_pass_automatique(self) -> None:
         acceptable = sortie_acceptable()
         deltas = {
@@ -147,12 +154,10 @@ class ValidateurPreCadrageV0Tests(unittest.TestCase):
                     self.assertIsNone(resultat.origine)
 
     def test_wt_harness_est_harness_error(self) -> None:
-        paquet = paquet_approuve()
-        empreintes_invalides = (
-            (paquet.empreintes_approuvees[0][0], "empreinte-illisible"),
-            *paquet.empreintes_approuvees[1:],
+        paquet = replace(
+            paquet_approuve(),
+            empreinte_manifeste_approuvee="empreinte-illisible",
         )
-        paquet = replace(paquet, empreintes_approuvees=empreintes_invalides)
 
         with tempfile.TemporaryDirectory() as dossier:
             candidate = Path(dossier) / "candidate.md"
@@ -402,12 +407,10 @@ class ValidateurPreCadrageV0Tests(unittest.TestCase):
                     )
 
     def test_g005_a_precedence_sur_une_sortie_candidate_invalide(self) -> None:
-        paquet = paquet_approuve()
-        empreintes_invalides = (
-            (paquet.empreintes_approuvees[0][0], "empreinte-illisible"),
-            *paquet.empreintes_approuvees[1:],
+        paquet = replace(
+            paquet_approuve(),
+            empreinte_manifeste_approuvee="empreinte-illisible",
         )
-        paquet = replace(paquet, empreintes_approuvees=empreintes_invalides)
 
         with tempfile.TemporaryDirectory() as dossier:
             candidate_invalide = Path(dossier) / "absente.md"
@@ -416,6 +419,90 @@ class ValidateurPreCadrageV0Tests(unittest.TestCase):
 
         self.assertEqual("HARNESS_ERROR", resultat.statut)
         self.assertEqual("HARNESS_ERROR", resultat.origine)
+        self.assertEqual([("G-005", False)], resultat.gates)
+        self.assertIsNone(resultat.preuve["empreinte_candidate"])
+
+    def test_g005_rejette_la_mutation_de_chaque_fichier_du_paquet(self) -> None:
+        noms = (
+            "brief-proprietaire.md",
+            "registre-verite.md",
+            "stimulus.md",
+            "temoins-qualification.md",
+        )
+        for nom in noms:
+            with self.subTest(fichier=nom), tempfile.TemporaryDirectory() as dossier:
+                racine = Path(dossier)
+                paquet = copier_paquet(racine)
+                chemin = racine / nom
+                chemin.write_text(
+                    chemin.read_text(encoding="utf-8") + "\nmutation\n",
+                    encoding="utf-8",
+                )
+
+                resultat = valider_pre_cadrage_v0(
+                    paquet, racine / "candidate-absente.md"
+                )
+
+                self.assertEqual("HARNESS_ERROR", resultat.statut)
+                self.assertEqual([("G-005", False)], resultat.gates)
+                self.assertIsNone(resultat.preuve["empreinte_candidate"])
+
+    def test_g005_rejette_identite_ou_inventaire_manifestes_divergents(
+        self,
+    ) -> None:
+        variantes = ("paquet", "version", "inventaire")
+        for variante in variantes:
+            with (
+                self.subTest(variante=variante),
+                tempfile.TemporaryDirectory() as dossier,
+            ):
+                racine = Path(dossier)
+                paquet = copier_paquet(racine)
+                chemin = racine / "manifeste-paquet.json"
+                manifeste = json.loads(chemin.read_text(encoding="utf-8"))
+                if variante == "paquet":
+                    manifeste["paquet"] = "AUTRE-PAQUET"
+                elif variante == "version":
+                    manifeste["product_version"] = "V1"
+                else:
+                    manifeste["fichiers"] = list(reversed(manifeste["fichiers"]))
+                chemin.write_text(
+                    json.dumps(manifeste, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                paquet = replace(
+                    paquet,
+                    empreinte_manifeste_approuvee=hashlib.sha256(
+                        chemin.read_bytes()
+                    ).hexdigest(),
+                )
+
+                resultat = valider_pre_cadrage_v0(
+                    paquet, racine / "candidate-absente.md"
+                )
+
+                self.assertEqual("HARNESS_ERROR", resultat.statut)
+                self.assertEqual([("G-005", False)], resultat.gates)
+                self.assertIsNone(resultat.preuve["empreinte_candidate"])
+
+    def test_g005_rejette_un_manifeste_json_de_structure_invalide(self) -> None:
+        with tempfile.TemporaryDirectory() as dossier:
+            racine = Path(dossier)
+            paquet = copier_paquet(racine)
+            chemin = racine / "manifeste-paquet.json"
+            chemin.write_text("[]\n", encoding="utf-8")
+            paquet = replace(
+                paquet,
+                empreinte_manifeste_approuvee=hashlib.sha256(
+                    chemin.read_bytes()
+                ).hexdigest(),
+            )
+
+            resultat = valider_pre_cadrage_v0(
+                paquet, racine / "candidate-absente.md"
+            )
+
+        self.assertEqual("HARNESS_ERROR", resultat.statut)
         self.assertEqual([("G-005", False)], resultat.gates)
         self.assertIsNone(resultat.preuve["empreinte_candidate"])
 

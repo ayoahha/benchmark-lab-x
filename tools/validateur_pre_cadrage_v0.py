@@ -10,20 +10,10 @@ import stat
 
 @dataclass(frozen=True)
 class PaquetApprouveV0:
-    nom: str
-    version: str
-    registre_verite: Path
-    stimulus: Path
-    temoins_qualification: Path
-    empreintes_approuvees: tuple[tuple[str, str], ...]
-    provenance_origine: str
-    provenance_processus: str
+    manifeste: Path
+    empreinte_manifeste_approuvee: str
     approbateur: str
     verdict_approbation: str
-    paquet_approuve_nom: str
-    paquet_approuve_version: str
-    empreintes_liees: tuple[tuple[str, str], ...]
-    criteres_lies: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -36,7 +26,12 @@ class ResultatAutomatiqueV0:
 
 _NOM = "PRECADRAGE-ENTRETIEN-CLIENT-V0"
 _VERSION = "V0"
-_CRITERES = ("G-001", "G-002", "G-003", "G-004", "G-005", "HR-001")
+_FICHIERS_PAQUET = (
+    "brief-proprietaire.md",
+    "registre-verite.md",
+    "stimulus.md",
+    "temoins-qualification.md",
+)
 _CHAMPS = (
     "artifact_type",
     "version",
@@ -69,63 +64,80 @@ def _sha256(contenu: bytes) -> str:
 
 
 def _preuve_initiale(paquet: PaquetApprouveV0) -> dict[str, object]:
-    provenance = json.dumps(
+    approbation = json.dumps(
         {
-            "origine": paquet.provenance_origine,
-            "processus": paquet.provenance_processus,
+            "approbateur": paquet.approbateur,
+            "empreinte_manifeste": paquet.empreinte_manifeste_approuvee,
+            "verdict": paquet.verdict_approbation,
         },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
     return {
-        "identite_paquet": (paquet.nom, paquet.version),
-        "empreintes_approuvees": paquet.empreintes_approuvees,
+        "identite_paquet": None,
+        "empreinte_manifeste_approuvee": paquet.empreinte_manifeste_approuvee,
+        "empreinte_manifeste_observee": None,
+        "empreintes_approuvees": (),
         "empreintes_observees": (),
         "empreinte_candidate": None,
-        "empreinte_provenance": _sha256(provenance),
+        "empreinte_provenance": _sha256(approbation),
     }
 
 
 def _evaluer_g005(
     paquet: PaquetApprouveV0, preuve: dict[str, object]
 ) -> bool:
-    chemins = (
-        paquet.registre_verite,
-        paquet.stimulus,
-        paquet.temoins_qualification,
-    )
-    attendus = tuple(
-        (chemin.name, empreinte)
-        for chemin, (_, empreinte) in zip(
-            chemins, paquet.empreintes_approuvees, strict=False
+    if (
+        paquet.manifeste is None
+        or not paquet.empreinte_manifeste_approuvee
+        or not paquet.approbateur
+        or paquet.verdict_approbation != "APPROUVE"
+    ):
+        return False
+    try:
+        contenu_manifeste = paquet.manifeste.read_bytes()
+        empreinte_manifeste = _sha256(contenu_manifeste)
+        preuve["empreinte_manifeste_observee"] = empreinte_manifeste
+        if empreinte_manifeste != paquet.empreinte_manifeste_approuvee:
+            return False
+        manifeste = json.loads(contenu_manifeste)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+
+    if not isinstance(manifeste, dict):
+        return False
+    fichiers = manifeste.get("fichiers")
+    if (
+        manifeste.get("paquet") != _NOM
+        or manifeste.get("product_version") != _VERSION
+        or not isinstance(fichiers, list)
+        or tuple(
+            entree.get("chemin") if isinstance(entree, dict) else None
+            for entree in fichiers
         )
+        != _FICHIERS_PAQUET
+    ):
+        return False
+
+    chemins = tuple(paquet.manifeste.parent / nom for nom in _FICHIERS_PAQUET)
+    attendus = tuple(
+        (nom, entree.get("sha256"))
+        for nom, entree in zip(_FICHIERS_PAQUET, fichiers, strict=True)
     )
+    preuve["identite_paquet"] = (
+        manifeste["paquet"],
+        manifeste["product_version"],
+    )
+    preuve["empreintes_approuvees"] = attendus
     try:
         observes = tuple(
-            (chemin.name, _sha256(chemin.read_bytes()))
-            for chemin in chemins
-            if chemin.is_file()
+            (chemin.name, _sha256(chemin.read_bytes())) for chemin in chemins
         )
     except OSError:
         return False
     preuve["empreintes_observees"] = observes
-    return (
-        paquet.nom == _NOM
-        and paquet.version == _VERSION
-        and len(paquet.empreintes_approuvees) == 3
-        and len(observes) == 3
-        and tuple(paquet.empreintes_approuvees) == attendus
-        and observes == attendus
-        and bool(paquet.provenance_origine)
-        and bool(paquet.provenance_processus)
-        and bool(paquet.approbateur)
-        and paquet.verdict_approbation == "APPROUVE"
-        and paquet.paquet_approuve_nom == paquet.nom
-        and paquet.paquet_approuve_version == paquet.version
-        and paquet.empreintes_liees == paquet.empreintes_approuvees
-        and paquet.criteres_lies == _CRITERES
-    )
+    return observes == attendus
 
 
 def _lire_candidate(
@@ -248,7 +260,12 @@ def valider_pre_cadrage_v0(
         ("G-001", True),
         ("G-002", True),
     ]
-    if not _evaluer_g003(texte, paquet.stimulus, paquet.registre_verite):
+    racine_paquet = paquet.manifeste.parent
+    if not _evaluer_g003(
+        texte,
+        racine_paquet / "stimulus.md",
+        racine_paquet / "registre-verite.md",
+    ):
         return ResultatAutomatiqueV0(
             statut="FAIL",
             origine="CANDIDATE_ERROR",
