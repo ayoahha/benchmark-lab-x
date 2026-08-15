@@ -5,7 +5,7 @@ Le tracker de ce dépôt est GitHub.
 ## Autorités
 
 - GitHub Issues porte les tâches, dépendances, décisions et preuves
-- le champ `Status` du Project `Pilotage Benchmark Lab-X` porte l’unique état de travail
+- le champ `Status` du Project identifié ci-dessous porte l’unique état de travail
 - l’état ouvert ou fermé d’une Issue indique seulement si elle reste à résoudre
 - aucun label, titre, checklist ou document local ne duplique le statut Project
 - `Backlog.md` et tout substitut local ne sont pas utilisés
