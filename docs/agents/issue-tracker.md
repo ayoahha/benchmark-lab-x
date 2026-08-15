@@ -5,7 +5,7 @@ Le tracker de ce dépôt est GitHub.
 ## Autorités
 
 - GitHub Issues porte les tâches, dépendances, décisions et preuves
-- le champ `Status` du Project personnel global `Pilotage global ayoahha` porte uniquement le statut de travail
+- le champ `Status` du Project `Pilotage Benchmark Lab-X` porte l’unique état de travail
 - l’état ouvert ou fermé d’une Issue indique seulement si elle reste à résoudre
 - aucun label, titre, checklist ou document local ne duplique le statut Project
 - `Backlog.md` et tout substitut local ne sont pas utilisés
@@ -14,7 +14,7 @@ Le tracker de ce dépôt est GitHub.
 ## Project et statuts
 
 - propriétaire : `ayoahha`
-- Project : `Pilotage global ayoahha`
+- Project : `Pilotage Benchmark Lab-X`
 - URL : `https://github.com/users/ayoahha/projects/5`
 - statuts autorisés : `Backlog`, `Ready`, `In progress`, `In review`, `Ready to ship`, `Done`
 
@@ -35,6 +35,14 @@ Chaque Issue contient :
 
 Utiliser les dépendances natives GitHub. Ne jamais déduire une dépendance depuis l’ordre du Project.
 
+## Hiérarchie et fermeture
+
+- une Issue parente porte le résultat d’ensemble et regroupe ses tâches requises comme sous-Issues natives
+- une sous-Issue porte une tâche nécessaire et ses preuves propres
+- les dépendances natives ordonnent l’exécution ; la hiérarchie parent/sous-Issue ne les remplace pas
+- fermer une Issue parente seulement lorsque toutes ses sous-Issues requises sont résolues et que ses preuves de fermeture sont présentes
+- un verdict HOLD laisse l’Issue ouverte, conserve un `Status` existant différent de `Done` et maintient la suite bloquée par ses dépendances natives
+
 Après création :
 
 1. ajouter l’Issue au Project cible
@@ -47,6 +55,6 @@ Après création :
 - lire la tâche pertinente : lire l’Issue et ses commentaires
 - enregistrer une décision : commenter l’Issue concernée
 - enregistrer une preuve : commenter l’Issue avec la commande, le résultat utile et la référence de l’artefact
-- résoudre : vérifier la condition de fermeture, commenter la preuve, puis fermer l’Issue
+- résoudre : appliquer les règles de fermeture ci-dessus, commenter la preuve, fermer l’Issue, puis passer son `Status` à `Done`
 
 Les pull requests externes ne sont pas une surface de triage.
