@@ -18,7 +18,7 @@ Cette architecture est neutre vis-à-vis de l’outil. Un composant peut être m
 
 | Capacité | État | Portée prouvée |
 |---|---|---|
-| Paquet pré-cadrage | fait actuel | contrat de sortie compilé, en attente d’approbation externe, sans mesure comparative |
+| Paquet pré-cadrage | fait actuel | contrat de sortie compilé, version exacte approuvée par D1 et intégrité cryptographique vérifiée par M2.1, sans mesure comparative |
 | Campagnes, reçus et prototypes antérieurs | fait actuel historique | preuves immuables de leurs contrats propres, non transférables à la V0 |
 | Pilote décisionnel pré-cadrage | décision V0 | architecture et protocole documentaire choisis, campagne comparative non exécutée |
 | Rapport interne de décision | décision V0 | sortie recommandée, pas encore produite à partir d’une campagne V0 |
@@ -49,7 +49,17 @@ Une carte approuvée reste immuable. Toute modification qui change le stimulus, 
 
 Le paquet rassemble les fichiers nécessaires à l’exécution et à l’évaluation d’une carte. Le registre décrit leur rôle et leur version. Le manifeste machine-readable du paquet liste ses fichiers et leurs empreintes, sans hash autoréférentiel. Le paquet sépare `qualification_status` et `execution_status`.
 
-Le paquet pré-cadrage actuel qualifie un contrat de sortie. Il ne contient pas encore les preuves d’une comparaison de configurations. Son approbation humaine n’est pas prouvée : elle sera externe et liée au SHA-256 de son manifeste ou de la PR qui le porte. Seule cette approbation humaine liée aux empreintes fera autorité. Une consolidation par plusieurs humains ou LLM ne remplace pas cette approbation.
+Le paquet pré-cadrage actuel qualifie un contrat de sortie. Il ne contient pas encore les preuves d’une comparaison de configurations.
+
+Les champs `qualification_status` et `approbation` embarqués dans le manifeste sont un instantané immuable de sa création. Ils ne doivent pas être modifiés après la décision propriétaire, car toute modification changerait l’empreinte approuvée.
+
+Trois autorités restent distinctes :
+
+- l’intégrité cryptographique des fichiers présents est établie par la [preuve M2.1](https://github.com/ayoahha/benchmark-lab-x/issues/34#issuecomment-5302877516)
+- la [décision propriétaire D1](https://github.com/ayoahha/benchmark-lab-x/issues/15#issuecomment-5301590597) approuve exactement le paquet identifié par le SHA-256 `8030128d159e4203483b19f0e37692a53f01baecc38fbccaa321541c23e71a10` ; cette preuve GitHub externe liée à l’empreinte porte l’état courant de qualification
+- la règle documentaire explique comment interpréter l’instantané du manifeste et la preuve externe ; elle ne devient canonique qu’après fusion dans la branche principale
+
+Cette approbation ne prouve aucune comparaison de configurations et n’autorise aucune exécution.
 
 ### 3.3 Configuration fixe
 
