@@ -49,7 +49,8 @@ Aucun site public n’est requis en V0.
 ### 4.1 Faits actuels
 
 - Le paquet [`PRECADRAGE-ENTRETIEN-CLIENT-V0`](../tasks/dev/pre-cadrage-entretien-client/registre-verite.md) contient un stimulus synthétique, un registre de vérité, des contrôles automatiques, une rubrique humaine aveugle et des témoins.
-- Le paquet sépare `qualification_status`, en attente d’approbation, et `execution_status`, non exécutée. Aucune approbation humaine n’est prouvée à ce jour. L’approbation future est externe et sera liée au SHA-256 du manifeste machine-readable du paquet ou de la PR qui le porte.
+- Le manifeste immuable sépare `qualification_status`, instantané initial en attente d’approbation, et `execution_status`, non exécutée.
+- La [décision propriétaire D1](https://github.com/ayoahha/benchmark-lab-x/issues/15#issuecomment-5301590597) approuve exactement le paquet identifié par le SHA-256 `8030128d159e4203483b19f0e37692a53f01baecc38fbccaa321541c23e71a10`. Cette preuve GitHub externe liée à l’empreinte porte l’état courant de qualification. La [preuve M2.1](https://github.com/ayoahha/benchmark-lab-x/issues/34#issuecomment-5302877516) établit séparément l’intégrité cryptographique des fichiers présents. Cette règle documentaire ne devient canonique qu’après sa fusion dans la branche principale.
 - Le paquet qualifie un contrat de sortie. Il ne constitue pas encore une mesure comparative.
 - Aucune campagne comparative V0 ne prouve aujourd’hui le coût fournisseur par sortie officiellement acceptable ni le choix d’une configuration.
 - Le dépôt conserve du code, des cartes, des reçus et des campagnes historiques. Ces preuves restent immuables et ne prouvent pas la nouvelle V0.
