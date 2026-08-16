@@ -23,6 +23,19 @@ PROOF_ID = "U025-P1-LOCAL-V1"
 VERSION = "u025-p1-local/1"
 GIT_BASE = "5287e581f4cdc7e08fc39c8a6e9e45f54bc92e52"
 SOURCE_DATE = "2026-08-15"
+RUNTIME_IDENTITIES = (
+    {
+        "role": "local_generation_observed",
+        "implementation": "CPython",
+        "python": "3.14.7",
+    },
+    {
+        "role": "ci_authoritative",
+        "implementation": "CPython",
+        "python_selector": "3.12",
+        "source": ".github/workflows/ci.yml",
+    },
+)
 PACKAGE_HASHES = {
     "manifeste-paquet.json": "8030128d159e4203483b19f0e37692a53f01baecc38fbccaa321541c23e71a10",
     "brief-proprietaire.md": "3e6e2b2edfa0e5b39f103a251707eb3f3f5f017f641aa53c55d64a6d4434eb11",
@@ -124,6 +137,20 @@ def verify_package() -> None:
     observed = {name: digest((PACKAGE / name).read_bytes()) for name in PACKAGE_HASHES}
     if observed != PACKAGE_HASHES:
         raise InvalidProof(f"empreintes du paquet divergentes: {observed!r}")
+
+
+def verify_runtime() -> None:
+    implementation = platform.python_implementation()
+    version = platform.python_version()
+    selector = ".".join(version.split(".")[:2])
+    accepted = (
+        implementation == "CPython"
+        and (version == "3.14.7" or selector == "3.12")
+    )
+    if not accepted:
+        raise InvalidProof(
+            f"runtime hors identités autorisées: {implementation} {version}"
+        )
 
 
 def witness_sections() -> dict[str, str]:
@@ -591,6 +618,7 @@ def add_bundle(
 
 def build_files() -> dict[str, bytes]:
     verify_package()
+    verify_runtime()
     sections = witness_sections()
     base = acceptable_output()
     case_objects = [
@@ -657,10 +685,7 @@ def build_files() -> dict[str, bytes]:
             ),
         },
         "instrument_version": VERSION,
-        "runtime": {
-            "python": platform.python_version(),
-            "implementation": platform.python_implementation(),
-        },
+        "runtime_identities": list(RUNTIME_IDENTITIES),
         "paths": list(PATHS),
         "authorizations": {
             "local_deterministic_p1": True,
