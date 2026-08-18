@@ -1,0 +1,32 @@
+{
+  "schema_version": "u025/p3-checksums/v3",
+  "files": {
+    "README.md": "7a65aeae2aa363b4c443db7a5fbd282f8f540a4ea76a57a35391c7b768f110fa",
+    "adapters/manual-acquire.py": "e8d67f5bf6aeff40eb4c3fac569209c589ff0a366e964914a50ab28ab25faefa",
+    "adapters/ori-agent.ts": "d27fb105cbea48a55812b28270bd2d4d51b1578a5bd81bd1c36e9442b5c2f574",
+    "adapters/promptfoo-provider.cjs": "c55e2254f5db12fe881d19fe4e155e8f709c2a63a3512672c069cd2a24d18ef6",
+    "adapters/shared_acquisition.py": "4669037ba1ce8ec23bd516660c040579e63037c7ec90f1b7f27a59661aae882a",
+    "authorization.schema.json": "7a7984980e01200bf41ad525ca5b38ee42bd1d3f21a7c0e847989f3ae8f24e01",
+    "blind-review.json": "8335af39f8c35b1201abe52ecea637a3e421dc392a9ba05385188cac99f0c6d5",
+    "budget.json": "fe978259fa00b34941586c931e2c1601216018684d24d60d65d899062558a2d1",
+    "configs/executables.json": "508a92a3276682f361b40b7fe77dbd67423758afd095132735b3efb6b283114f",
+    "configs/manual/procedure.md": "dad336e39e4c696584a1ec62e7cc95781eb39a14244dbb98e51a690cb5025a7a",
+    "configs/ori/p3.eval.ts": "ece1509b7a03f25d6b519681a8837a2ea92ddca94420024172b263cf85509af6",
+    "configs/promptfoo/promptfooconfig.json": "4ae87df5b5059e2ddad976307bcc9c6ecd73caaa766c47a767ca5cdb03607325",
+    "controls/canonical.json": "ffe4de4c3317b37326a48c587da7a6e520f1c71fc64aa2f9866f35cafeb705f3",
+    "controls/promptfoo-assert.cjs": "6fe0725c6f081cb5dfb175191a035a2413643fd73d1147ad9ba07abc962bf0b6",
+    "controls/run_controls.py": "52265cb937cd61dbd0c38bd61eb1d472d59d202528543bb32d714b35f14b335a",
+    "controls/verify_evidence_gate.py": "23da2f17e7c13aedc4561e2343076f8510ac4d8f59473b652a861167b3a41297",
+    "controls/verify_order.py": "d358adeba2c0b20679cf66b9e89df7f15bee6c89a93dfc6310370abf93f6abd7",
+    "evidence-gate.json": "255354477a4a9c3604004b79a329fd97960a1c61f64571afdd65d36a5188c3c4",
+    "fixture-index.json": "aaf9128c69dee2ebda09d204b6afffc3b8b7f6e38090546ed2a637059bd7cf2e",
+    "github-authorities.json": "f79b9d07b5b27b3fb435bb089ad6750bd7363162db0529ee4c872c24637f7902",
+    "lock.json": "8bd42f9959edfe6a287d3df64f17115c88da02626eb36a230969f2eb6cde6183",
+    "matrix.json": "77acf6e7343b61a42e221c4c4853e167db4f47f611097f51c844c886c589322a",
+    "order-manifest.json": "65abbb62877d1b6654fdc0ed0d4ab0e507ca1cd0cf3cbd88e82b0c21b6597a3a",
+    "receipt.schema.json": "e3b4b9e1db6ab3f0546971f1e55478568871e9230f64f98fd0865f6465e24cef",
+    "system-prompt.txt": "4cbe628903f1e39f3822080fdc876e63a7a79473f76ecd66c3323693fb88faed",
+    "v3-lock-receipt.json": "4ed7f0d512455a20489dbe7e955f7784d79d95ad3b66ac86eb0561482467db6f",
+    "zero-execution-receipt.json": "bbdf7537b0962def06cfaea857ff77145ccd1ba2e5ffa4f66059848bde9a72a7"
+  }
+}
