@@ -1,0 +1,54 @@
+{
+  "schema_version": "u025/p3-evidence-gate/v3",
+  "git_base": "ab463d404c7051b4c51269a9b201b01cc1d60b10",
+  "issue": "https://github.com/ayoahha/benchmark-lab-x/issues/59",
+  "requested_expected_observed": "SEPARATED",
+  "promotion_forbidden": ["requested_to_observed", "expected_to_observed"],
+  "future_gos": {
+    "authentication": "GitHub REST API current comment",
+    "required_author": "ayoahha",
+    "required_fields": [
+      "repository",
+      "issue",
+      "id",
+      "node_id",
+      "author",
+      "created_at",
+      "updated_at",
+      "api_url",
+      "html_url",
+      "body_sha256"
+    ],
+    "bodies_published": false,
+    "unauthenticated_or_mismatch": "INCONNU",
+    "gate_if_inconnu": "CLOSED"
+  },
+  "zdr": {
+    "current_observed": "INCONNU",
+    "absent": "INCONNU",
+    "insufficient": "INCONNU",
+    "observed_requires": {
+      "source": "FIRST_PARTY_PROVIDER_RAW",
+      "authenticated": true,
+      "replayable_or_signed": true,
+      "content_addressed": true,
+      "receipt_linked": true
+    },
+    "gate_if_not_observed": "CLOSED"
+  },
+  "billing": {
+    "current_observed": "INCONNU",
+    "absent": "INCONNU",
+    "insufficient": "INCONNU",
+    "observed_requires": {
+      "source": "FIRST_PARTY_PROVIDER_RAW",
+      "authenticated": true,
+      "replayable_or_signed": true,
+      "content_addressed": true,
+      "receipt_linked": true
+    },
+    "gate_if_not_observed": "CLOSED"
+  },
+  "contact_provider_in_this_phase": false
+}
+
