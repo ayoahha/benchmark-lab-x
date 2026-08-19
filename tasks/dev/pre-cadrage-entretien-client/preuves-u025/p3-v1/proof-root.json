@@ -1,13 +1,14 @@
 {
-  "schema_version": "u025/p3-proof-root/v4",
-  "proof_id": "U025-M3-14-P3-LOCK-AMENDMENT-V4",
+  "schema_version": "u025/p3-proof-root/v5",
+  "proof_id": "U025-M3-14-P3-LOCK-AMENDMENT-V5",
   "state": "REVIEW_READY_NO_EXECUTION_AUTHORITY",
-  "git_base": "f74c81d5f4398fab068edb4a6981a9abdba48915",
+  "git_base": "87830e67e811ff6a385cd11cae29f05294f4384f",
   "issue": "https://github.com/ayoahha/benchmark-lab-x/issues/61",
   "v2_root_sha256": "60e2c2e27fdb7ebe46c95f36bdd00583c70471b51b13569de4be70f4bc3a9751",
   "v3_root_sha256": "d4d39f249d0584a543814e458032f82fea88377e8618cc3eecf4c045c558c21f",
-  "lock_sha256": "a5b17c0b901a87f50c7c776ce0240ec2151ea5ef9939867918172acb868939f1",
-  "checksums_sha256": "260703a03a4e6a186433c80f16af89ac4aebf5319c6e7eb2831cd1c121db8c07",
+  "v4_root_sha256": "ece597a443eec2565d60bdf9598c46862217d93d9a2867848d6b1ca796e57d42",
+  "lock_sha256": "43a46d9bd4b4ad3cf1c5d2482544f6bc65422b812f66b43a7e0baae32edf7f52",
+  "checksums_sha256": "9ab349eb1d1fe24d5a4b3cd49fb006c63b161949b146f4cbbef328bb77a9072a",
   "budget_sha256": "2244c5335d87df2dc8441a3ae05cb86957f619a1135a51b25c73166dd91a0035",
   "fixture_index_sha256": "aaf9128c69dee2ebda09d204b6afffc3b8b7f6e38090546ed2a637059bd7cf2e",
   "matrix_sha256": "77acf6e7343b61a42e221c4c4853e167db4f47f611097f51c844c886c589322a",
@@ -19,6 +20,7 @@
   "evidence_gate_sha256": "ffe3c634e68f6d28683e6bed5fd03f4ebe9740a37ff9610bfb2181b688759068",
   "v3_lock_receipt_sha256": "4ed7f0d512455a20489dbe7e955f7784d79d95ad3b66ac86eb0561482467db6f",
   "v4_lock_amendment_receipt_sha256": "7ea00d8bde38ec24367eb3df6735055149ad0f2e0ac0e0dce86a510a5428a0a8",
+  "v5_lock_amendment_receipt_sha256": "91c2ffc802506d0109b6a9e9cfb019da540d311d544e9bf76aca94f5b956b1fb",
   "source_roots": {
     "manifest": "8030128d159e4203483b19f0e37692a53f01baecc38fbccaa321541c23e71a10",
     "p1": "e317647595665fd55a9a7850a90449e467956b0e2c231580a6b5225e83db55ad",
@@ -27,5 +29,5 @@
     "p2_manual_v3": "1aa9d67b15244c547014b2b5c1062dd451369c61d43a33b8877b5e4eacbd8021",
     "m3_12": "641b76c4f6b09616cec52427e12bc2c8dca0df333217c6f8b63edf0107bee136"
   },
-  "root_sha256": "ece597a443eec2565d60bdf9598c46862217d93d9a2867848d6b1ca796e57d42"
+  "root_sha256": "6382b31fa7971266c674a77e9b64c6bea3c7e82ad71b02ad966374ceb4fab9a7"
 }
