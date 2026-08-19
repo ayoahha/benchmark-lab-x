@@ -65,6 +65,8 @@
         "--no-history",
         "--host",
         "127.0.0.1",
+        "--features",
+        "configs/ori/features",
         "configs/ori/p3.eval.ts"
       ],
       "env": {
