@@ -2,9 +2,9 @@
 style_gate: pass
 ---
 
-# Procédure manuelle P3 V2
+# Procédure manuelle P3 V4
 
-Cette procédure est inerte sans quatre GO distincts authentifiés, une preuve ZDR adressée par contenu et une preuve de facturation adressée par contenu. Elle n'autorise aucun appel, aucune tentative fournisseur, aucune campagne, aucune dépense supplémentaire et aucun retry.
+Cette procédure est inerte sans quatre GO distincts authentifiés. Les réglages ZDR et du compte fournisseur relèvent du propriétaire et ne constituent pas une porte du projet. Elle n'autorise aucun appel, aucune tentative fournisseur, aucune campagne, aucune dépense supplémentaire et aucun retry.
 
 ## Commande figée
 
@@ -34,4 +34,4 @@ Le contrat est `blind-review.json`. Rôles, gel des reçus, décision mécanique
 
 ## Arrêt
 
-Sans artefact GO, ZDR ou facturation authentifiable, ou sans prédécesseur réel dont le fichier existe et dont l'empreinte concorde, la commande ferme en `HOLD` ou `INCONNU` avant tout réseau.
+Sans les quatre artefacts GO authentifiables, ou sans prédécesseur réel dont le fichier existe et dont l'empreinte concorde, la commande ferme en `HOLD` ou `INCONNU` avant tout réseau.
