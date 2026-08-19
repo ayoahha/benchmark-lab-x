@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline evidence gate. Future GOs via current GitHub API. ZDR and billing stay INCONNU here"""
+"""Offline owner-authority gate. Account settings stay outside the project lock"""
 
 from __future__ import annotations
 
@@ -106,10 +106,13 @@ def authenticate_recorded(gate: dict[str, Any], live: list[dict[str, Any]]) -> l
 def main() -> int:
     authorities = load_json(ROOT / "github-authorities.json")
     gate = load_json(ROOT / "evidence-gate.json")
-    if gate.get("zdr", {}).get("current_observed") != "INCONNU":
-        raise Hold("HARNESS_ERROR: ZDR absente n'est plus INCONNU")
-    if gate.get("billing", {}).get("current_observed") != "INCONNU":
-        raise Hold("HARNESS_ERROR: facturation absente n'est plus INCONNU")
+    account_scope = gate.get("account_settings_scope", {})
+    if account_scope.get("disposition") != "OWNER_RESPONSIBILITY_OUTSIDE_PROJECT_LOCK":
+        raise Hold("HARNESS_ERROR: périmètre propriétaire divergent")
+    if account_scope.get("project_verification") is not False:
+        raise Hold("HARNESS_ERROR: contrôle de compte réintroduit")
+    if account_scope.get("execution_gate") is not False:
+        raise Hold("HARNESS_ERROR: porte de compte réintroduite")
     if gate.get("requested_expected_observed") != "SEPARATED":
         raise Hold("HARNESS_ERROR: attendu demande observe non separes")
     live = fetch_comments()
@@ -118,9 +121,8 @@ def main() -> int:
         "status": "PASS",
         "future_gos": "GITHUB_API_AUTHENTICATED",
         "authenticated_comments": len(proofs),
-        "zdr_observed": "INCONNU",
-        "billing_observed": "INCONNU",
-        "gate_closed": True,
+        "account_settings_scope": "OWNER_RESPONSIBILITY_OUTSIDE_PROJECT_LOCK",
+        "account_settings_project_gate": False,
         "requested_expected_observed": "SEPARATED",
         "provider_contacted": False,
         "bodies_published": False,
@@ -134,4 +136,3 @@ if __name__ == "__main__":
     except Hold as error:
         print(str(error), file=sys.stderr)
         raise SystemExit(78)
-

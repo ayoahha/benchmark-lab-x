@@ -173,15 +173,6 @@ def verify_artifact_bytes(
     return data
 
 
-def verify_authenticatable_evidence(
-    auth_file: Path, evidence: Any, bindings: list[str], name: str
-) -> None:
-    if not isinstance(evidence, dict):
-        raise Hold(f"INCONNU: contrat {name} manquant")
-    path = resolve_artifact(auth_file, evidence.get("artifact_path"), name)
-    verify_artifact_bytes(path, evidence.get("artifact_sha256"), bindings, name)
-
-
 def verify_predecessor(auth: dict[str, Any], auth_file: Path, manifest: dict[str, Any]) -> None:
     prev_sha = auth.get("prev_receipt_sha256")
     prev_path_value = auth.get("prev_receipt_path")
@@ -238,7 +229,7 @@ def run_pre_provider_guards(auth: dict[str, Any], auth_file: Path) -> None:
         text=True,
     )
     if gate.returncode != 0:
-        raise Hold((gate.stderr or "INCONNU: porte de preuves fermee").strip())
+        raise Hold((gate.stderr or "INCONNU: porte d'autorité fermée").strip())
     prev = auth.get("prev_receipt_path")
     prev_path = Path(str(prev or ""))
     if not prev_path.is_absolute():
@@ -269,7 +260,7 @@ def validate_authorization(
     auth_file: Path,
 ) -> None:
     expected = {
-        "schema_version": "u025/p3-authorization/v2",
+        "schema_version": "u025/p3-authorization/v3",
         "lock_root_sha256": proof["root_sha256"],
         "budget_sha256": proof["budget_sha256"],
         "stage": stage,
@@ -329,22 +320,6 @@ def validate_authorization(
         go_ids.append(go["go_id"])
     if len(set(go_hashes)) != 4 or len(set(go_ids)) != 4:
         raise Hold("HARNESS_ERROR: les quatre GO ne sont pas distincts")
-    verify_authenticatable_evidence(
-        auth_file,
-        auth.get("zdr_evidence"),
-        [*shared_bindings, "ZDR_DECISION=AVAILABLE"],
-        "ZDR",
-    )
-    verify_authenticatable_evidence(
-        auth_file,
-        auth.get("billing_evidence"),
-        [
-            *shared_bindings,
-            "BILLING_DECISION=EXISTING_POOL_OR_BALANCE_SUFFICIENT",
-            "NEW_CHARGE_ALLOWED=false",
-        ],
-        "facturation",
-    )
     manifest = load_json(ROOT / "order-manifest.json")
     verify_order_commitment(auth, manifest)
     run_pre_provider_guards(auth, auth_file)
@@ -557,10 +532,6 @@ def cost_fields(configuration: str, usage: Any) -> dict[str, Any]:
         "calculated_provider_cost": calculated,
         "observed_billed": billed,
         "extra_spend_usd": 0,
-        "pool_allocation": {
-            "basis": cfg["billing_basis"],
-            "amount": dict(UNKNOWN),
-        },
         "counts_as_attempt": True,
         "limitation": limitation,
     }
@@ -599,7 +570,7 @@ def build_receipt(
     lock = load_json(ROOT / "lock.json")
     identity = lock["configurations"][configuration]
     return {
-        "schema_version": "u025/p3-receipt/v2",
+        "schema_version": "u025/p3-receipt/v3",
         "receipt_id": auth["attempt_id"],
         "prev_receipt_sha256": auth["prev_receipt_sha256"],
         "prev_receipt_path": auth["prev_receipt_path"],

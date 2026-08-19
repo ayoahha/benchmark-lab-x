@@ -1,5 +1,5 @@
 {
-  "description": "U025-P3-PROMPTFOO-V2 — une acquisition figée du stimulus PRECADRAGE-ENTRETIEN-CLIENT-V0. Inerte sans quatre GO distincts authentifiés, preuve ZDR et preuve de facturation. Contrôles G-001 à G-005 liés au validateur e631184b84270c4b3dbf931910436ad65b7d08c02016c94d2dfe53e27ead2056. Aucun juge LLM.",
+  "description": "U025-P3-PROMPTFOO-V4 : une acquisition figée du stimulus PRECADRAGE-ENTRETIEN-CLIENT-V0. Inerte sans quatre GO distincts authentifiés. Les réglages ZDR et du compte fournisseur restent hors du périmètre du projet. Contrôles G-001 à G-005 liés au validateur e631184b84270c4b3dbf931910436ad65b7d08c02016c94d2dfe53e27ead2056. Aucun juge LLM.",
   "sharing": false,
   "prompts": [
     "file://../../../stimulus.md"

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "u025/p3-receipt/v2",
+  "$id": "u025/p3-receipt/v3",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -68,7 +68,7 @@
       "required": [
         "currency", "tariff_source", "observed_units", "cache",
         "calculated_provider_cost", "observed_billed", "extra_spend_usd",
-        "pool_allocation", "counts_as_attempt", "limitation"
+        "counts_as_attempt", "limitation"
       ],
       "properties": {
         "currency": {"const": "USD"},
@@ -78,15 +78,6 @@
         "calculated_provider_cost": {"$ref": "#/$defs/unknown_or_observed"},
         "observed_billed": {"$ref": "#/$defs/unknown_or_observed"},
         "extra_spend_usd": {"const": 0},
-        "pool_allocation": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["basis", "amount"],
-          "properties": {
-            "basis": {"type": "string", "minLength": 1},
-            "amount": {"$ref": "#/$defs/unknown_or_observed"}
-          }
-        },
         "counts_as_attempt": {"const": true},
         "limitation": {"enum": ["INCONNU", "HOLD", null]}
       }

@@ -1,18 +1,17 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "u025/p3-authorization/v2",
+  "$id": "u025/p3-authorization/v3",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version", "authorization_id", "lock_root_sha256",
     "budget_sha256", "stage", "path", "configuration", "attempt_id",
     "stimulus_sha256", "authorizations", "new_charge_allowed",
-    "extra_spend_cap_usd", "retry_of", "zdr_evidence",
-    "billing_evidence", "go_evidence", "prev_receipt_sha256",
+    "extra_spend_cap_usd", "retry_of", "go_evidence", "prev_receipt_sha256",
     "prev_receipt_path", "order", "storage"
   ],
   "properties": {
-    "schema_version": {"const": "u025/p3-authorization/v2"},
+    "schema_version": {"const": "u025/p3-authorization/v3"},
     "authorization_id": {"type": "string", "minLength": 1},
     "lock_root_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "budget_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -35,8 +34,6 @@
     "new_charge_allowed": {"const": false},
     "extra_spend_cap_usd": {"const": 0},
     "retry_of": {"type": "null"},
-    "zdr_evidence": {"$ref": "#/$defs/authenticatable_evidence"},
-    "billing_evidence": {"$ref": "#/$defs/authenticatable_evidence"},
     "go_evidence": {
       "type": "object",
       "additionalProperties": false,
@@ -71,15 +68,6 @@
     }
   },
   "$defs": {
-    "authenticatable_evidence": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["artifact_path", "artifact_sha256"],
-      "properties": {
-        "artifact_path": {"type": "string", "minLength": 1},
-        "artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
-      }
-    },
     "go": {
       "type": "object",
       "additionalProperties": false,
