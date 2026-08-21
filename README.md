@@ -48,6 +48,14 @@ Le budget est facultatif. Lorsqu’il est absent, le rapport ne désigne pas arb
 
 Une recommandation unique exige une préférence explicite. Si les preuves sont insuffisantes, incompatibles ou périmées au regard de la politique déclarée, Lab-X s’abstient.
 
+## État final V0 au 21 août 2026
+
+La campagne V0 a été menée jusqu'au rapport de décision M10.2 et se conclut par une `ABSTENTION` : aucune sortie officiellement acceptable (`0/1`), couverture `1/2`, coûts et identités servies `INCONNU`. Aucun gagnant, score ni recommandation n'est produit. La [restitution humaine V0](tasks/dev/pre-cadrage-entretien-client/campagne-v0/restitution-humaine-v0/index.html) présente hors ligne les résultats, les limites et les raisons exactes de l'abstention.
+
+```sh
+open tasks/dev/pre-cadrage-entretien-client/campagne-v0/restitution-humaine-v0/index.html
+```
+
 ## État réel au 14 août 2026
 
 ### Faits actuels

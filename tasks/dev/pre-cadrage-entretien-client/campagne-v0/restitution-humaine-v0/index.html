@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Restitution humaine V0 : campagne de pré-cadrage, conclusion ABSTENTION</title>
+<!-- style_gate: pass -->
+<!-- page générée par generer_page.py : ne pas éditer à la main -->
+<style>
+:root { --encre: #1d1f24; --sourdine: #565b66; --papier: #faf9f6; --carte: #ffffff;
+  --trait: #d9d6cf; --accent: #7a3e00; --accent-doux: #f6ead9; --neutre: #eceef1; }
+* { box-sizing: border-box; }
+body { margin: 0 auto; padding: 1.5rem 1.25rem 3rem; max-width: 62rem; color: var(--encre);
+  background: var(--papier); font: 1rem/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+h1 { font-size: 1.7rem; line-height: 1.25; margin: 0.25rem 0 0.5rem; }
+h2 { font-size: 1.25rem; margin: 2.4rem 0 0.7rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--trait); }
+h3 { font-size: 1.05rem; margin: 1.4rem 0 0.4rem; }
+p, li, dd { max-width: 52rem; }
+code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.86em;
+  background: var(--neutre); padding: 0.08em 0.3em; border-radius: 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+.surtitre { color: var(--sourdine); font-size: 0.85rem; letter-spacing: 0.04em;
+  text-transform: uppercase; margin: 0; }
+.verdict { display: inline-block; margin: 0.6rem 0 0.2rem; padding: 0.5rem 0.9rem;
+  border: 2px solid var(--accent); border-radius: 8px; background: var(--accent-doux);
+  font-size: 1.15rem; }
+.verdict strong { color: var(--accent); letter-spacing: 0.03em; }
+nav.sommaire { margin: 1.2rem 0 0; font-size: 0.92rem; }
+nav.sommaire ol { margin: 0.3rem 0 0; padding-left: 1.2rem; columns: 2; column-gap: 2.5rem; }
+nav.sommaire li { margin: 0.15rem 0; }
+.cartes { display: grid; grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr));
+  gap: 0.8rem; margin: 1.2rem 0; padding: 0; list-style: none; }
+.cartes li { background: var(--carte); border: 1px solid var(--trait); border-radius: 8px;
+  padding: 0.8rem 0.9rem; }
+.cartes .valeur { display: block; font-size: 1.35rem; font-weight: 700; margin-bottom: 0.15rem; }
+.cartes .legende { color: var(--sourdine); font-size: 0.86rem; }
+.duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 1rem; }
+.bloc { background: var(--carte); border: 1px solid var(--trait); border-radius: 8px;
+  padding: 0.9rem 1.1rem; }
+.bloc h3 { margin-top: 0.2rem; }
+.badge { display: inline-block; padding: 0.1em 0.55em; border-radius: 999px;
+  font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; vertical-align: middle; }
+.badge-etat { background: var(--encre); color: var(--papier); }
+.badge-inconnu { background: var(--neutre); color: var(--encre); border: 1px solid var(--trait); }
+.badge-prevu { background: transparent; color: var(--accent); border: 2px dashed var(--accent); }
+.badge-nonofficiel { background: var(--sourdine); color: var(--papier); }
+table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.94rem; }
+caption { text-align: left; color: var(--sourdine); font-size: 0.86rem; padding-bottom: 0.4rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--trait); }
+thead th { border-bottom: 2px solid var(--encre); }
+.table-roule { overflow-x: auto; }
+dl.etats dt { font-weight: 700; margin-top: 0.9rem; }
+dl.etats dd { margin: 0.15rem 0 0 0; color: var(--encre); }
+ul.permis, ul.interdit { list-style: none; padding: 0; }
+ul.permis li, ul.interdit li { margin: 0.45rem 0; padding: 0.45rem 0.7rem; border-left: 4px solid; border-radius: 4px; }
+ul.permis li { border-color: #2e6e3e; background: #eef5ef; }
+ul.interdit li { border-color: #96332b; background: #f8eeed; }
+section[data-statut] { border: 2px dashed var(--trait); border-radius: 8px;
+  padding: 0.2rem 1.1rem 0.9rem; margin-top: 2.4rem; }
+section[data-statut] h2 { border-bottom: none; margin-top: 1rem; }
+footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--trait);
+  color: var(--sourdine); font-size: 0.88rem; }
+footer code { font-size: 0.8rem; }
+details { margin: 0.6rem 0; }
+summary { cursor: pointer; color: var(--accent); }
+.note { color: var(--sourdine); font-size: 0.88rem; }
+</style>
+</head>
+<body>
+<header>
+  <p class="surtitre">Benchmark Lab-X · pilote V0 · page locale, hors ligne</p>
+  <h1>Restitution humaine de la campagne V0</h1>
+  <p class="verdict">Conclusion officielle : <strong><span data-fait="conclusion" data-valeur="ABSTENTION">ABSTENTION</span></strong></p>
+  <p>La campagne V0 a été menée jusqu'au rapport de décision M10.2 et s'est conclue par une abstention.
+  Les preuves disponibles ne permettent de désigner ni gagnant, ni score, ni recommandation.
+  Cette page reprend uniquement des faits déjà enregistrés dans les sources versionnées du dépôt ;
+  elle n'en crée aucun. Chaque valeur affichée est traçable vers sa source dans la
+  <a href="#provenance">section provenance</a>.</p>
+</header>
+
+<nav class="sommaire" aria-label="Sommaire">
+  <strong>Sommaire</strong>
+  <ol>
+    <li><a href="#essentiel">L'essentiel</a></li>
+    <li><a href="#question">La question V0 et le workflow testé</a></li>
+    <li><a href="#deux-etudes">Deux études distinctes</a></li>
+    <li><a href="#panel">Le panel officiel</a></li>
+    <li><a href="#resultats">Les résultats officiels</a></li>
+    <li><a href="#etats">Ce que veulent dire les états</a></li>
+    <li><a href="#pareto">Les trois axes de Pareto</a></li>
+    <li><a href="#abstention">Pourquoi l'abstention</a></li>
+    <li><a href="#conclusions">Conclusions permises et interdites</a></li>
+    <li><a href="#provenance">Provenance et racines de preuve</a></li>
+    <li><a href="#futur">Parcours prévu</a></li>
+    <li><a href="#historique">Essais historiques</a></li>
+  </ol>
+</nav>
+
+<main>
+<section id="essentiel" aria-label="L'essentiel">
+  <ul class="cartes">
+    <li><span class="valeur"><span data-fait="agrege.acceptation" data-valeur="0/1">0 sur 1</span></span>
+      <span class="legende">sortie officiellement acceptable observée sur le panel</span></li>
+    <li><span class="valeur"><span data-fait="agrege.couverture" data-valeur="1/2">1 sur 2</span></span>
+      <span class="legende">créneaux de mesure couverts par le harnais</span></li>
+    <li><span class="valeur"><span data-fait="agrege.cout_total" data-valeur="INCONNU">INCONNU</span></span>
+      <span class="legende">coût fournisseur total observé</span></li>
+    <li><span class="valeur"><span data-fait="revue.dossiers_eligibles" data-valeur="0">0</span></span>
+      <span class="legende">dossier éligible à la revue humaine aveugle</span></li>
+  </ul>
+</section>
+
+<section id="question">
+  <h2>La question V0 et le workflow testé</h2>
+  <p>Benchmark Lab-X répond à une question pratique : sur le workflow exact du besoin,
+  combien coûte en pratique une sortie acceptable, et quelle configuration choisir ?</p>
+  <p>Le pilote V0 porte sur un seul workflow : préparer un pré-cadrage avant un entretien
+  client, pour une activité de conseil en IA et cybersécurité auprès de PME. Le scénario est
+  entièrement synthétique. Le candidat reçoit des notes brutes et doit produire un
+  pré-cadrage structuré, soumis ensuite à la revue d'un consultant.</p>
+  <p>Une sortie est <strong>officiellement acceptable</strong> quand deux conditions sont
+  réunies : les contrôles automatiques rendent <code>PASS</code> sur les propriétés décidables
+  par code, puis une revue humaine aveugle rend <code>ACCEPTABLE</code> sur la fidélité
+  sémantique et l'utilité métier.</p>
+</section>
+
+<section id="deux-etudes">
+  <h2>Deux études distinctes, à ne pas confondre</h2>
+  <div class="duo">
+    <div class="bloc">
+      <h3>Étude d'outillage (U-025)</h3>
+      <p>Elle compare des <strong>façons d'exécuter la mesure</strong>, jamais des modèles.
+      <span data-fait="outillage.nombre_voies" data-valeur="3">Trois</span> voies d'outillage
+      ont été éprouvées sur 16 cas de fixtures :</p>
+      <ul><li>Promptfoo 0.122.0 (<code><span data-fait="outillage.voie.1" data-valeur="PROMPTFOO_0_122_0">PROMPTFOO_0_122_0</span></code>)</li><li>Ori 0.7.0+f411e1a (<code><span data-fait="outillage.voie.2" data-valeur="ORI_0_7_0_F411E1A">ORI_0_7_0_F411E1A</span></code>)</li><li>Méthode manuelle contrôlée (<code><span data-fait="outillage.voie.3" data-valeur="METHODE_MANUELLE_CONTROLEE">METHODE_MANUELLE_CONTROLEE</span></code>)</li></ul>
+      <p>Ces trois voies ont produit une projection strictement identique
+      (<span data-fait="outillage.projection_identique" data-valeur="true">projection identique</span>
+      sur <span data-fait="outillage.cas" data-valeur="16">16</span> cas), ce qui prouve leur fidélité mutuelle
+      sur fixtures. La conclusion d'outillage reste
+      <code><span data-fait="outillage.conclusion" data-valeur="INCONNU">INCONNU</span></code> : aucune voie n'est
+      éliminée, aucune n'est déclarée gagnante, et la dominance d'effort reste
+      <code><span data-fait="outillage.dominance_effort" data-valeur="INCONNU">INCONNU</span></code>.</p>
+      <p class="note">Promptfoo, Ori et la méthode manuelle sont des outils de mesure.
+      Ils n'apparaissent dans aucun classement et ne sont pas des candidats évalués.</p>
+    </div>
+    <div class="bloc">
+      <h3>Comparaison de configurations (campagne V0)</h3>
+      <p>Elle compare des <strong>configurations candidates</strong> d'un panel figé, décrit
+      ci-dessous. C'est cette comparaison qui devait produire la décision V0, et c'est elle
+      qui se conclut par l'abstention.</p>
+      <p>Les deux études sont indépendantes : l'étude d'outillage ne dit rien de la qualité
+      des modèles, et la campagne ne dit rien de la supériorité d'un outil.</p>
+    </div>
+  </div>
+</section>
+
+<section id="panel">
+  <h2>Le panel officiel</h2>
+  <p>Le panel <code><span data-fait="panel.id" data-valeur="PANEL_GROK46_KIMIK3_FIXED_FIRST_PARTY">PANEL_GROK46_KIMIK3_FIXED_FIRST_PARTY</span></code> est
+  <span data-fait="panel.ferme" data-valeur="true">fermé</span> et compte exactement
+  <span data-fait="panel.cardinalite" data-valeur="2">deux</span> configurations. OpenRouter Auto
+  Router est exclu du panel V0 (<span data-fait="panel.auto_router" data-valeur="EXCLUDED">exclu</span>),
+  et aucun canari OpenRouter n'était donc applicable.</p>
+  <div class="table-roule">
+  <table>
+    <caption>Identités demandées et décidées du panel. « Demandé » n'est jamais « servi » :
+    l'identité réellement servie reste INCONNU pour les deux configurations.</caption>
+    <thead>
+      <tr><th scope="col">Configuration</th><th scope="col">Modèle demandé</th>
+      <th scope="col">Fournisseur et route (décidés)</th><th scope="col">Raisonnement</th>
+      <th scope="col">Identité servie (observée)</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th scope="row">Grok 4.6<br><code><span data-fait="grok.configuration" data-valeur="grok46_xai_build_oauth">grok46_xai_build_oauth</span></code></th>
+        <td><span data-fait="grok.modele_demande" data-valeur="grok-4.6">grok-4.6</span></td>
+        <td><code><span data-fait="grok.fournisseur" data-valeur="XAI_FIRST_PARTY">XAI_FIRST_PARTY</span></code><br><code><span data-fait="grok.route" data-valeur="GROK_BUILD_OAUTH_PROXY">GROK_BUILD_OAUTH_PROXY</span></code></td>
+        <td><code><span data-fait="grok.raisonnement" data-valeur="xhigh">xhigh</span></code></td>
+        <td><span class="badge badge-inconnu"><span data-fait="grok.identite_servie" data-valeur="INCONNU">INCONNU</span></span></td>
+      </tr>
+      <tr>
+        <th scope="row">Kimi K3<br><code><span data-fait="kimi.configuration" data-valeur="kimi_k3_cursor_cli">kimi_k3_cursor_cli</span></code></th>
+        <td>famille <span data-fait="kimi.famille_demandee" data-valeur="kimi-k3">kimi-k3</span>, slug exécutable <code><span data-fait="kimi.slug_executable" data-valeur="kimi-k3-max">kimi-k3-max</span></code></td>
+        <td><code><span data-fait="kimi.fournisseur" data-valeur="CURSOR_CLI">CURSOR_CLI</span></code><br><code><span data-fait="kimi.route" data-valeur="CURSOR_AGENT">CURSOR_AGENT</span></code></td>
+        <td><code><span data-fait="kimi.raisonnement" data-valeur="max">max</span></code></td>
+        <td><span class="badge badge-inconnu"><span data-fait="kimi.identite_servie" data-valeur="INCONNU">INCONNU</span></span></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section id="resultats">
+  <h2>Les résultats officiels</h2>
+
+  <h3>Grok 4.6 : une sortie produite, rejetée par les contrôles automatiques</h3>
+  <p>L'acquisition <code><span data-fait="grok.creneau" data-valeur="ACQ-GROK46-PRIMARY-001">ACQ-GROK46-PRIMARY-001</span></code> a produit une sortie
+  candidate (<span data-fait="grok.sortie" data-valeur="AVAILABLE_AND_AUTOMATICALLY_REJECTED">disponible puis automatiquement rejetée</span>).
+  Le validateur automatique a rendu <span data-fait="grok.verdict_automatique" data-valeur="FAIL">FAIL</span> :
+  le contrôle <code>G-005</code> est <span data-fait="grok.porte.g005" data-valeur="true">conforme</span>,
+  le contrôle <code>G-001</code> est <span data-fait="grok.porte.g001" data-valeur="false">non conforme</span>,
+  et l'origine de l'échec est la sortie candidate elle-même
+  (<code><span data-fait="grok.origine_echec" data-valeur="CANDIDATE_ERROR">CANDIDATE_ERROR</span></code>). L'état officiel est donc
+  <code><span data-fait="grok.resultat" data-valeur="CANDIDATE_NOT_ACCEPTABLE">CANDIDATE_NOT_ACCEPTABLE</span></code>. La latence mesurée sous la règle
+  préenregistrée est de <span data-fait="grok.latence_ms" data-valeur="382217">382 217 ms</span>,
+  soit environ 6 min 22 s. L'incident consigné est
+  <code><span data-fait="grok.incident" data-valeur="MISSING_OBSERVATION">MISSING_OBSERVATION</span></code> : l'identité servie n'a pas été observée.</p>
+
+  <h3>Kimi K3 : une panne du harnais, aucune sortie</h3>
+  <p>L'acquisition <code><span data-fait="kimi.creneau" data-valeur="ACQ-KIMIK3-PRIMARY-001">ACQ-KIMIK3-PRIMARY-001</span></code> s'est terminée en
+  <code><span data-fait="kimi.resultat" data-valeur="HARNESS_ERROR">HARNESS_ERROR</span></code> : le harnais de mesure est tombé en
+  panne. La sortie candidate est <span data-fait="kimi.sortie" data-valeur="ABSENT_NOT_RECONSTRUCTED">absente et n&#x27;a pas été reconstruite</span>.
+  Les sources fusionnées consignent l'incident (<span data-fait="kimi.incident" data-valeur="HARNESS_ERROR">HARNESS_ERROR</span>)
+  sans en détailler la cause ; le contact fournisseur et l'appel modèle restent INCONNU.
+  La durée technique terminale de
+  <span data-fait="kimi.duree_technique_ms" data-valeur="43509">43 509 ms</span>
+  (environ 43,5 s) décrit la panne, pas une latence de service : elle est
+  <span data-fait="kimi.duree_technique_exclue_pareto" data-valeur="true">exclue</span>
+  de l'axe de latence. Cette panne est un défaut du harnais : elle compte comme couverture
+  incomplète et n'est pas imputée à la configuration Kimi.</p>
+
+  <h3>Métriques officielles</h3>
+  <div class="table-roule">
+  <table>
+    <caption>Faits repris tels quels de la table M10.1 et du rapport M10.2. Aucune valeur
+    absente n'est remplacée.</caption>
+    <thead>
+      <tr><th scope="col">Configuration</th><th scope="col">Acceptation officielle</th>
+      <th scope="col">Couverture</th><th scope="col">Coût fournisseur total</th>
+      <th scope="col">Coût par sortie acceptable</th><th scope="col">Latence préenregistrée</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th scope="row">Grok 4.6</th>
+        <td><span data-fait="grok.acceptation" data-valeur="0/1">0/1</span></td>
+        <td><span data-fait="grok.couverture" data-valeur="1/1">1/1</span></td>
+        <td><span class="badge badge-inconnu"><span data-fait="grok.cout_total" data-valeur="INCONNU">INCONNU</span></span></td>
+        <td><span class="badge badge-inconnu"><span data-fait="grok.cout_par_acceptable" data-valeur="NON_DEFINI">NON_DEFINI</span></span></td>
+        <td>382 217 ms</td>
+      </tr>
+      <tr>
+        <th scope="row">Kimi K3</th>
+        <td><span class="badge badge-inconnu"><span data-fait="kimi.acceptation" data-valeur="NON_DEFINI">NON_DEFINI</span></span></td>
+        <td><span data-fait="kimi.couverture" data-valeur="0/1">0/1</span></td>
+        <td><span class="badge badge-inconnu"><span data-fait="kimi.cout_total" data-valeur="INCONNU">INCONNU</span></span></td>
+        <td><span class="badge badge-inconnu"><span data-fait="kimi.cout_par_acceptable" data-valeur="NON_DEFINI">NON_DEFINI</span></span></td>
+        <td><span class="badge badge-inconnu"><span data-fait="kimi.latence" data-valeur="INCONNU">INCONNU</span></span></td>
+      </tr>
+      <tr>
+        <th scope="row">Panel agrégé</th>
+        <td>0/1</td>
+        <td>1/2</td>
+        <td><span class="badge badge-inconnu">INCONNU</span></td>
+        <td><span class="badge badge-inconnu"><span data-fait="agrege.cout_par_acceptable" data-valeur="NON_DEFINI">NON_DEFINI</span></span></td>
+        <td>non agrégée</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <p>La fraîcheur des faits d'identité et de prix reste
+  <span class="badge badge-inconnu"><span data-fait="grok.fraicheur" data-valeur="INCONNU">INCONNU</span></span> pour Grok
+  comme pour Kimi (<span class="badge badge-inconnu"><span data-fait="kimi.fraicheur" data-valeur="INCONNU">INCONNU</span></span>).
+  L'effort humain est consigné séparément du coût fournisseur et reste
+  <span class="badge badge-inconnu"><span data-fait="agrege.effort_humain" data-valeur="INCONNU">INCONNU</span></span>
+  sur ses sept composantes. Le plafond de dépense additionnelle de la campagne était de
+  <span data-fait="budget.plafond_additionnel_usd" data-valeur="0">0</span>&nbsp;USD :
+  aucun achat ni allocation d'abonnement n'était autorisé, et le coût réellement encouru
+  sur les routes utilisées n'a pas pu être observé.</p>
+
+  <h3>Revue humaine aveugle : zéro dossier éligible</h3>
+  <p>Seules les sorties avec un <code>PASS</code> automatique sont éligibles à la revue
+  humaine aveugle. La sortie Grok a échoué aux contrôles et la sortie Kimi n'existe pas :
+  les <span data-fait="revue.exclusions" data-valeur="2">deux</span> créneaux ont été exclus et le
+  paquet de revue compte zéro dossier. La décision propriétaire correspondante est
+  <code><span data-fait="revue.decision_proprietaire" data-valeur="EXCLUDE_AUTOMATIC_FAIL_AND_PRODUCE_ZERO_DOSSIER_PACKAGE">EXCLUDE_AUTOMATIC_FAIL_AND_PRODUCE_ZERO_DOSSIER_PACKAGE</span></code>.
+  Aucun verdict humain n'a donc été rendu, et aucun n'a été simulé.</p>
+</section>
+
+<section id="etats">
+  <h2>Ce que veulent dire les états affichés</h2>
+  <p>Les quatre premiers états sont normatifs : ils restent littéraux dans tout le dossier
+  V0 et ne sont jamais convertis en valeur de remplacement. Le dernier est un résultat
+  officiel du contrat.</p>
+  <dl class="etats">
+    <dt><code>INCONNU</code></dt>
+    <dd>La valeur n'a pas été observée. Ce n'est ni zéro, ni un échec, ni une estimation :
+    c'est une absence d'observation, conservée telle quelle.</dd>
+    <dt><code>NON_DEFINI</code></dt>
+    <dd>La métrique n'existe pas mathématiquement dans cette situation. Exemple : un coût
+    par sortie acceptable ne peut pas être calculé quand zéro sortie est acceptable.</dd>
+    <dt><code>HARNESS_ERROR</code></dt>
+    <dd>Le harnais de mesure est tombé en panne. La configuration testée n'est pas fautive :
+    l'incident compte comme un trou de couverture, pas comme un échec du candidat.</dd>
+    <dt><code>ABSTENTION</code></dt>
+    <dd>Les preuves sont insuffisantes pour décider. Lab-X refuse alors de désigner un
+    gagnant plutôt que de fabriquer une conclusion.</dd>
+    <dt><code>CANDIDATE_NOT_ACCEPTABLE</code></dt>
+    <dd>La sortie existe mais a échoué aux contrôles automatiques du contrat. C'est un
+    résultat officiel, décidable, qui compte dans la couverture.</dd>
+  </dl>
+</section>
+
+<section id="pareto">
+  <h2>Les trois axes de Pareto</h2>
+  <p>La politique de décision M6.5 verrouille exactement
+  <span data-fait="pareto.nombre_axes" data-valeur="3">trois</span> axes :</p>
+  <ol><li>le taux de sorties officiellement acceptables, à maximiser (<span data-fait="pareto.axe.1" data-valeur="OFFICIAL_ACCEPTANCE_RATE:MAXIMIZE">OFFICIAL_ACCEPTANCE_RATE</span>)</li><li>le coût fournisseur par sortie officiellement acceptable, à minimiser (<span data-fait="pareto.axe.2" data-valeur="SUPPLIER_COST_PER_OFFICIALLY_ACCEPTABLE_OUTPUT:MINIMIZE">SUPPLIER_COST_PER_OFFICIALLY_ACCEPTABLE_OUTPUT</span>)</li><li>la latence selon la règle préenregistrée, à minimiser (<span data-fait="pareto.axe.3" data-valeur="LATENCY_UNDER_PREREGISTERED_RULE:MINIMIZE">LATENCY_UNDER_PREREGISTERED_RULE</span>)</li></ol>
+  <p>La couverture n'est pas un axe : elle conditionne l'éligibilité des configurations.
+  Le budget n'est pas un axe non plus. Un score global est interdit
+  (<code><span data-fait="decision.score_global" data-valeur="FORBIDDEN">FORBIDDEN</span></code>).</p>
+  <p>Statut du front : <code><span data-fait="pareto.statut" data-valeur="FULL_THREE_AXIS_FRONT_NOT_COMPUTABLE">FULL_THREE_AXIS_FRONT_NOT_COMPUTABLE</span></code>.
+  Le coût par sortie acceptable est NON_DEFINI pour les deux configurations et la latence
+  Kimi est INCONNU : le front complet à trois axes ne peut pas être calculé, et le front
+  publié est vide (<span data-fait="pareto.front_taille" data-valeur="0">0</span> point).</p>
+</section>
+
+<section id="abstention">
+  <h2>Pourquoi l'abstention</h2>
+  <p>L'abstention est imposée par
+  <span data-fait="abstention.nombre_raisons" data-valeur="7">sept</span> preuves manquantes
+  ou insuffisantes, énumérées telles quelles dans le rapport M10.2 :</p>
+  <ol><li><code><span data-fait="abstention.raison.1" data-valeur="INCOMPLETE_COVERAGE">INCOMPLETE_COVERAGE</span></code><br>la couverture est incomplète : un des deux créneaux prévus, celui de Kimi, n'a produit aucun résultat jugeable</li><li><code><span data-fait="abstention.raison.2" data-valeur="SERVED_IDENTITY_PROVENANCE_INCONNU">SERVED_IDENTITY_PROVENANCE_INCONNU</span></code><br>le modèle réellement servi, sa route et ses paramètres effectifs n'ont été observés pour aucune des deux configurations</li><li><code><span data-fait="abstention.raison.3" data-valeur="FRESHNESS_INCONNU">FRESHNESS_INCONNU</span></code><br>la fraîcheur des faits d'identité et de prix n'a pas pu être observée</li><li><code><span data-fait="abstention.raison.4" data-valeur="SUPPLIER_COST_TOTAL_INCONNU">SUPPLIER_COST_TOTAL_INCONNU</span></code><br>aucun coût fournisseur n'a été observé, et aucune valeur de remplacement n'est imputée</li><li><code><span data-fait="abstention.raison.5" data-valeur="SUPPLIER_COST_PER_OFFICIALLY_ACCEPTABLE_OUTPUT_NON_DEFINI">SUPPLIER_COST_PER_OFFICIALLY_ACCEPTABLE_OUTPUT_NON_DEFINI</span></code><br>avec zéro sortie acceptable, le coût par sortie acceptable est mathématiquement indéfini</li><li><code><span data-fait="abstention.raison.6" data-valeur="LATENCY_KIMI_INCONNU">LATENCY_KIMI_INCONNU</span></code><br>sans sortie complète de Kimi, sa latence sous la règle préenregistrée n'existe pas</li><li><code><span data-fait="abstention.raison.7" data-valeur="ABSENT_OR_NON_DECISIVE_OWNER_PREFERENCE">ABSENT_OR_NON_DECISIVE_OWNER_PREFERENCE</span></code><br>aucune préférence propriétaire explicite n'a été fournie pour arbitrer entre plusieurs axes</li></ol>
+  <p>Le rapport M10.2 nomme trois actions humaines possibles, sans valeur de remplacement :
+  conserver l'abstention ; autoriser séparément une future collecte des preuves manquantes ;
+  fournir séparément une préférence propriétaire explicite, seulement après obtention de
+  trois axes complets et comparables.</p>
+</section>
+
+<section id="conclusions">
+  <h2>Ce que ces preuves permettent, et interdisent, de conclure</h2>
+  <h3>Conclusions permises par les preuves actuelles</h3>
+  <ul class="permis">
+    <li>La chaîne de mesure V0 a fonctionné de bout en bout sur une acquisition : sortie
+    produite, contrôles automatiques exécutés, verdict rendu, reçus et racines de preuve
+    enregistrés.</li>
+    <li>Aucune sortie officiellement acceptable n'a été observée sur le panel (0 sur 1
+    décidable).</li>
+    <li>Le créneau Kimi n'est pas couvert : le harnais est tombé en panne avant toute sortie,
+    et la couverture du panel s'établit à 1 sur 2.</li>
+    <li>La revue humaine aveugle n'a reçu aucun dossier, car aucune sortie n'a passé les
+    contrôles automatiques.</li>
+    <li>Les trois voies d'outillage restent survivantes et fidèles entre elles sur fixtures ;
+    aucune n'est éliminée.</li>
+  </ul>
+  <h3>Conclusions interdites, car sans preuve</h3>
+  <ul class="interdit">
+    <li>Désigner un gagnant ou un perdant : le rapport enregistre
+    <code><span data-fait="decision.gagnant" data-valeur="NOT_PRODUCED">NOT_PRODUCED</span></code>.</li>
+    <li>Recommander une configuration : le rapport enregistre
+    <code><span data-fait="decision.recommandation" data-valeur="NOT_PRODUCED">NOT_PRODUCED</span></code>.</li>
+    <li>Produire un score global ou un classement, explicitement interdits par la politique.</li>
+    <li>Juger la qualité générale de Grok 4.6 ou de Kimi K3 : un seul essai par
+    configuration ne prouve que la faisabilité, jamais une généralisation.</li>
+    <li>Traiter le HARNESS_ERROR de Kimi comme un échec du modèle Kimi.</li>
+    <li>Convertir INCONNU ou NON_DEFINI en zéro, en échec ou en estimation.</li>
+    <li>Classer Promptfoo, Ori ou la méthode manuelle entre eux : leur comparaison
+    d'effort reste INCONNU.</li>
+  </ul>
+</section>
+
+<section id="provenance">
+  <h2>Provenance et racines de preuve</h2>
+  <p>Chaque fait de cette page provient d'un fichier versionné du dépôt, à la base git
+  <code><span data-fait="scope.base_git" data-valeur="50b667ed4705bcfff4bdb733308a38927e041517">50b667ed4705bcfff4bdb733308a38927e041517</span></code> pour le rapport M10.2. Les racines
+  SHA-256 ci-dessous scellent chaque jalon ; le script de génération de cette page les
+  recompute depuis les reçus et refuse de produire la page si une seule diverge.</p>
+  <div class="table-roule">
+  <table>
+    <caption>Jalons, fichiers de preuve et racines SHA-256.</caption>
+    <thead>
+      <tr><th scope="col">Jalon</th><th scope="col">Fichier de preuve</th><th scope="col">Racine SHA-256</th></tr>
+    </thead>
+    <tbody><tr><th scope="row">Politique de décision M6.5</th><td><code>tasks/dev/pre-cadrage-entretien-client/campagne-v0/politique-decision-v1/politique-decision.json</code></td><td><code><span data-fait="racine.m6_5" data-valeur="c378f180f93cb9f2ad481137618a8cd1fe2077f97389283ab13567fe6b857000">c378f180f93cb9f2ad481137618a8cd1fe2077f97389283ab13567fe6b857000</span></code></td></tr><tr><th scope="row">Verrou de campagne M6.6</th><td><code>tasks/dev/pre-cadrage-entretien-client/campagne-v0/verrou-campagne-v1/manifeste-empreintes.json</code></td><td><code><span data-fait="racine.m6_6" data-valeur="94f796d167915d8e1ce9fd471b415eff468e8afda685955c1e757d29567b3918">94f796d167915d8e1ce9fd471b415eff468e8afda685955c1e757d29567b3918</span></code></td></tr><tr><th scope="row">Réconciliation des acquisitions M7.2</th><td><code>tasks/dev/pre-cadrage-entretien-client/campagne-v0/reconciliation-m7-2-v1/recu-validation.json</code></td><td><code><span data-fait="racine.m7_2" data-valeur="afab0ffca694ee792534dadcf2a93f58cf451cc71fa9d9c0ddce7d99d15b2ea8">afab0ffca694ee792534dadcf2a93f58cf451cc71fa9d9c0ddce7d99d15b2ea8</span></code></td></tr><tr><th scope="row">Validation automatique M8.2</th><td><code>tasks/dev/pre-cadrage-entretien-client/campagne-v0/validation-automatique-m8-2-v1/recu-validation.json</code></td><td><code><span data-fait="racine.m8_2" data-valeur="5170a77c5253cefd32829f8d560c2d4790536b69c8b4ff56e142ba50f3b131c4">5170a77c5253cefd32829f8d560c2d4790536b69c8b4ff56e142ba50f3b131c4</span></code></td></tr><tr><th scope="row">Préparation de revue aveugle M9.1</th><td><code>tasks/dev/pre-cadrage-entretien-client/campagne-v0/preparation-revue-aveugle-m9-1-v1/recu-preparation.json</code></td><td><code><span data-fait="racine.m9_1" data-valeur="13c80a8a90a740b98f3e790b4022f1e05428547defbc1cb63d9ce802b85e3374">13c80a8a90a740b98f3e790b4022f1e05428547defbc1cb63d9ce802b85e3374</span></code></td></tr><tr><th scope="row">Table des métriques M10.1</th><td><code>tasks/dev/pre-cadrage-entretien-client/campagne-v0/metriques-decision-m10-1-v1/recu-calcul.json</code></td><td><code><span data-fait="racine.m10_1" data-valeur="06c1072c2e1b3c49289387295c1a79b52a2e1d4e1f5fc93bec5f229b7a9c31c9">06c1072c2e1b3c49289387295c1a79b52a2e1d4e1f5fc93bec5f229b7a9c31c9</span></code></td></tr><tr><th scope="row">Rapport de décision M10.2</th><td><code>tasks/dev/pre-cadrage-entretien-client/campagne-v0/rapport-decision-m10-2-v1/recu-reproduction.json</code></td><td><code><span data-fait="racine.m10_2" data-valeur="4abb7e2e137df9d3bf4be1cbb38677e10c56cd94cee52af5bd23d3da512e83ef">4abb7e2e137df9d3bf4be1cbb38677e10c56cd94cee52af5bd23d3da512e83ef</span></code></td></tr><tr><th scope="row">Consolidation outillage U-025</th><td><code>tasks/dev/pre-cadrage-entretien-client/preuves-u025/m3-12-consolidation-v1/proof-root.json</code></td><td><code><span data-fait="racine.u025" data-valeur="641b76c4f6b09616cec52427e12bc2c8dca0df333217c6f8b63edf0107bee136">641b76c4f6b09616cec52427e12bc2c8dca0df333217c6f8b63edf0107bee136</span></code></td></tr></tbody>
+  </table>
+  </div>
+  <details>
+    <summary>Reçus d'acquisition adressés par contenu</summary>
+    <p>Les deux tentatives d'acquisition M7.1 sont scellées par des reçus immuables sous
+    <code>tasks/dev/pre-cadrage-entretien-client/campagne-v0/acquisitions-m7-1-v1/receipts/sha256/</code> :</p>
+    <ul>
+      <li>Grok : <code><span data-fait="recu.grok" data-valeur="c129ad5902a3ab1d730b68ddc09be099aa4efe7ff4a274a59df178bb5d4f8da5">c129ad5902a3ab1d730b68ddc09be099aa4efe7ff4a274a59df178bb5d4f8da5</span></code></li>
+      <li>Kimi : <code><span data-fait="recu.kimi" data-valeur="cc1dd10670a079980cd432c7e6df4499f67f16ed4fdc61bd11958e56b18f820c">cc1dd10670a079980cd432c7e6df4499f67f16ed4fdc61bd11958e56b18f820c</span></code></li>
+    </ul>
+  </details>
+</section>
+
+<section id="futur" data-statut="PREVU_NON_EXISTANT">
+  <h2>Parcours prévu pour ajouter une configuration
+    <span class="badge badge-prevu">PRÉVU, N'EXISTE PAS</span></h2>
+  <p>Ce parcours est une déduction raisonnée à partir de la chaîne de jalons déjà exécutée.
+  Aucune de ces étapes n'existe, n'est implémentée ni n'est autorisée aujourd'hui ; chacune
+  exigerait ses propres autorisations propriétaires et ses propres preuves.</p>
+  <ol>
+    <li>Décision propriétaire amendant le panel figé (successeur de M6.3), avec l'identité
+    complète de la nouvelle configuration.</li>
+    <li>Nouveau verrou de campagne scellant les artefacts amendés (successeur de M6.6).</li>
+    <li>Autorisations distinctes puis acquisition avec reçus immuables (M7).</li>
+    <li>Validation automatique des sorties (M8), préparation de revue aveugle (M9).</li>
+    <li>Recalcul des métriques (M10.1), régénération du rapport de décision (M10.2), puis
+    régénération de cette page.</li>
+  </ol>
+</section>
+
+<section id="historique" data-statut="NON_OFFICIEL">
+  <h2>Essais historiques et exploratoires
+    <span class="badge badge-nonofficiel">NON OFFICIELS</span></h2>
+  <p>Ces artefacts existent dans le dépôt mais n'alimentent pas le résultat officiel V0.</p>
+  <ul>
+    <li>Preuve locale U-025 P1 V1 : remplacée par la V2, qui seule alimente la
+    consolidation.</li>
+    <li>Preuves manuelles U-025 P2 V1 et V2 : remplacées par la V3 ; la V2 prouvait la
+    reprise aux frontières de reçus.</li>
+    <li>Prototype <code>pentagone-rotatif</code> : pipeline historique et spécialisé,
+    archivé hors du pilote V0 ; ses campagnes et reçus restent immuables et ne prouvent
+    rien pour la V0.</li>
+  </ul>
+</section>
+</main>
+
+<footer>
+  <p>Page générée hors ligne, sans script, sans ressource distante, depuis les seules
+  sources versionnées. Le brouillon <code>pages/index.html</code> du dépôt reste un espace
+  réservé non publié : la présente page n'est pas un site public.</p>
+  <p>Régénérer : <code>PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3.13 tasks/dev/pre-cadrage-entretien-client/campagne-v0/restitution-humaine-v0/generer_page.py</code></p>
+  <p>Vérifier la fidélité : <code>PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3.13 tasks/dev/pre-cadrage-entretien-client/campagne-v0/restitution-humaine-v0/verifier_fidelite.py</code></p>
+  <p>Ouvrir localement : <code>open tasks/dev/pre-cadrage-entretien-client/campagne-v0/restitution-humaine-v0/index.html</code></p>
+</footer>
+</body>
+</html>
