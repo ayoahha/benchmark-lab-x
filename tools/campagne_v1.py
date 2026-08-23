@@ -1,9 +1,11 @@
 # /// script
 # requires-python = ">=3.12"
 # ///
-"""Restitution humaine V1 vide et vérification de fidélité page/sources.
+"""Restitution humaine V1, registre de panel abonnement et vérifications.
 
 Interface figée :
+- uv run tools/campagne_v1.py enregistrer [--registre <chemin>] --fichier <chemin>
+- uv run tools/campagne_v1.py panel [--registre <chemin>]
 - uv run tools/campagne_v1.py restituer
 - uv run tools/campagne_v1.py verifier-restitution
 """
@@ -14,6 +16,7 @@ import hashlib
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 VERSION_VUE = "restitution-humaine-v1/vue/1"
@@ -21,6 +24,18 @@ VERSION_VUE = "restitution-humaine-v1/vue/1"
 _RACINE_CAMPAGNE_V1 = Path("tasks/dev/pre-cadrage-entretien-client/campagne-v1")
 CHEMIN_ETAT = _RACINE_CAMPAGNE_V1 / "etat-v1.json"
 CHEMIN_PAGE = _RACINE_CAMPAGNE_V1 / "restitution-humaine-v1" / "index.html"
+
+# Registre officiel de campagne V1 : le panel vit dans ces fichiers, jamais dans le code.
+REGISTRE_OFFICIEL = _RACINE_CAMPAGNE_V1 / "registre-panel-v1"
+
+SCHEMA_CONFIGURATION = "campagne-v1-configuration-abonnement/v1"
+INCONNU = "INCONNU"
+TYPES_INTERFACE = ("cli", "ide", "application", "web")
+# Jetons machine repris à l'identique du harnais V0.
+JETON_FICHIER_PROMPT = "__PROMPT_FILE__"
+JETON_ESPACE_ISOLE = "__ISOLATED_WORKSPACE__"
+
+_MOTIF_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 # Sources autorisées de la restitution, avec la section qui fait autorité.
 SOURCES_AUTORISEES = (
@@ -100,6 +115,300 @@ class ErreurRestitution(Exception):
     """Entrée absente, invalide ou hors du périmètre XS-01."""
 
 
+class ErreurConfiguration(Exception):
+    """Refus fail-closed d'une configuration, nommant le champ fautif."""
+
+
+def _exiger_chaine(chemin_champ: str, valeur: object) -> None:
+    if not isinstance(valeur, str) or not valeur.strip():
+        raise ErreurConfiguration(f"champ '{chemin_champ}' : chaîne non vide attendue")
+
+
+def _exiger_montant_ou_inconnu(chemin_champ: str, valeur: object) -> None:
+    if valeur == INCONNU:
+        return
+    if isinstance(valeur, bool) or not isinstance(valeur, (int, float)) or valeur < 0:
+        raise ErreurConfiguration(
+            f"champ '{chemin_champ}' : nombre positif ou 'INCONNU' attendu"
+        )
+
+
+def _exiger_entier_ou_inconnu(chemin_champ: str, valeur: object) -> None:
+    if valeur == INCONNU:
+        return
+    if isinstance(valeur, bool) or not isinstance(valeur, int) or valeur < 0:
+        raise ErreurConfiguration(
+            f"champ '{chemin_champ}' : entier positif ou 'INCONNU' attendu"
+        )
+
+
+def _exiger_type_interface(chemin_champ: str, valeur: object) -> None:
+    if valeur not in TYPES_INTERFACE:
+        raise ErreurConfiguration(
+            f"champ '{chemin_champ}' hors vocabulaire "
+            f"({' | '.join(TYPES_INTERFACE)})"
+        )
+
+
+def _exiger_liste_de_chaines(chemin_champ: str, valeur: object) -> None:
+    if (
+        not isinstance(valeur, list)
+        or not valeur
+        or any(not isinstance(element, str) or not element.strip() for element in valeur)
+    ):
+        raise ErreurConfiguration(
+            f"champ '{chemin_champ}' : liste non vide de chaînes non vides attendue"
+        )
+
+
+def _exiger_argv(chemin_champ: str, valeur: object) -> None:
+    _exiger_liste_de_chaines(chemin_champ, valeur)
+    if JETON_FICHIER_PROMPT not in valeur:
+        raise ErreurConfiguration(
+            f"champ '{chemin_champ}' : le jeton machine '{JETON_FICHIER_PROMPT}' est requis"
+        )
+
+
+def _exiger_espace_isole(chemin_champ: str, valeur: object) -> None:
+    if valeur != JETON_ESPACE_ISOLE:
+        raise ErreurConfiguration(
+            f"champ '{chemin_champ}' : jeton machine '{JETON_ESPACE_ISOLE}' attendu"
+        )
+
+
+def _exiger_delai(chemin_champ: str, valeur: object) -> None:
+    if isinstance(valeur, bool) or not isinstance(valeur, int) or valeur < 0:
+        raise ErreurConfiguration(
+            f"champ '{chemin_champ}' : entier de secondes (>= 0) attendu"
+        )
+
+
+_CHAMPS_QUOTA = {
+    "unite": _exiger_chaine,
+    "valeur": _exiger_entier_ou_inconnu,
+    "portee": _exiger_chaine,
+    "reset_fenetre": _exiger_chaine,
+    "reset_ancrage": _exiger_chaine,
+    "reset_au_depassement": _exiger_chaine,
+}
+
+_TABLES_CONFIGURATION = {
+    "produit": {"nom": _exiger_chaine, "editeur": _exiger_chaine},
+    "plan": {
+        "nom": _exiger_chaine,
+        "prix_montant": _exiger_montant_ou_inconnu,
+        "prix_devise": _exiger_chaine,
+        "periode": _exiger_chaine,
+        "source_url": _exiger_chaine,
+        "date_publication": _exiger_chaine,
+        "date_consultation": _exiger_chaine,
+    },
+    "interface": {"type": _exiger_type_interface, "version": _exiger_chaine},
+    "modele": {"demande": _exiger_chaine},
+    "harnais": {
+        "argv": _exiger_argv,
+        "espace_de_travail": _exiger_espace_isole,
+        "delai_secondes": _exiger_delai,
+    },
+    "intervention_humaine": {"etapes": _exiger_liste_de_chaines},
+}
+
+
+def _valider_table(prefixe: str, table: object, champs: dict) -> None:
+    if not isinstance(table, dict):
+        raise ErreurConfiguration(f"champ '{prefixe}' absent ou n'est pas une table")
+    for cle in table:
+        if cle not in champs:
+            raise ErreurConfiguration(f"champ '{prefixe}.{cle}' hors vocabulaire")
+    for cle, exiger in champs.items():
+        if cle not in table:
+            raise ErreurConfiguration(f"champ '{prefixe}.{cle}' absent")
+        exiger(f"{prefixe}.{cle}", table[cle])
+
+
+def _valider_configuration(donnees: object) -> dict:
+    if not isinstance(donnees, dict):
+        raise ErreurConfiguration("champ 'schema_version' absent : table TOML attendue")
+    cles_autorisees = {"schema_version", "configuration_id", "quota", *_TABLES_CONFIGURATION}
+    for cle in donnees:
+        if cle not in cles_autorisees:
+            raise ErreurConfiguration(f"champ '{cle}' hors vocabulaire")
+    if donnees.get("schema_version") != SCHEMA_CONFIGURATION:
+        raise ErreurConfiguration(
+            f"champ 'schema_version' : '{SCHEMA_CONFIGURATION}' attendu"
+        )
+    identifiant = donnees.get("configuration_id")
+    if not isinstance(identifiant, str) or not _MOTIF_SLUG.match(identifiant):
+        raise ErreurConfiguration(
+            "champ 'configuration_id' : slug stable attendu (minuscules, chiffres, tirets)"
+        )
+    for nom, champs in _TABLES_CONFIGURATION.items():
+        _valider_table(nom, donnees.get(nom), champs)
+    quotas = donnees.get("quota")
+    if not isinstance(quotas, list) or not quotas:
+        raise ErreurConfiguration("champ 'quota' : au moins une table [[quota]] attendue")
+    for rang, quota in enumerate(quotas, start=1):
+        _valider_table(f"quota[{rang}]", quota, _CHAMPS_QUOTA)
+    return donnees
+
+
+def _charger_configuration(chemin: Path) -> dict:
+    try:
+        donnees = tomllib.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as erreur:
+        raise ErreurConfiguration(
+            f"configuration illisible : {chemin} ({erreur})"
+        ) from erreur
+    return _valider_configuration(donnees)
+
+
+def _libelle_registre(registre: Path | None, cible: Path) -> str:
+    if registre is None:
+        return f"registre officiel {REGISTRE_OFFICIEL.as_posix()}"
+    return f"registre isolé {cible}"
+
+
+def _refus_registre_officiel(racine: Path, registre: Path) -> str | None:
+    """Garde fail-closed commune : '--registre' ne vise jamais le registre officiel.
+
+    La résolution des deux chemins couvre les liens symboliques ; le refus
+    s'applique au registre officiel lui-même comme à tout descendant.
+    """
+    officiel = (racine / REGISTRE_OFFICIEL).resolve()
+    fourni = registre.resolve()
+    if fourni == officiel or officiel in fourni.parents:
+        return (
+            f"ECHEC option '--registre' : '{registre}' résout vers le registre "
+            f"officiel '{REGISTRE_OFFICIEL.as_posix()}' ; l'option '--registre' "
+            "n'accepte qu'un registre isolé, jamais le registre officiel"
+        )
+    return None
+
+
+def enregistrer_configuration(
+    racine: Path, fichier: Path, registre: Path | None = None
+) -> int:
+    if registre is not None:
+        # Garde appliquée avant toute lecture ou écriture du chemin fourni
+        refus = _refus_registre_officiel(racine, registre)
+        if refus is not None:
+            print(refus)
+            return 1
+    try:
+        donnees = _charger_configuration(fichier)
+    except ErreurConfiguration as erreur:
+        print(f"ECHEC {erreur}")
+        return 1
+    if registre is None:
+        cible = racine / REGISTRE_OFFICIEL
+        cible.mkdir(parents=True, exist_ok=True)
+    else:
+        # Ciblage exclusif du registre isolé : l'officiel n'est ni lu ni écrit.
+        cible = registre
+        if not cible.is_dir():
+            print(f"ECHEC registre isolé absent : {cible}")
+            return 1
+    identifiant = donnees["configuration_id"]
+    destination = cible / f"{identifiant}.toml"
+    if destination.exists():
+        print(
+            f"ECHEC champ 'configuration_id' : '{identifiant}' est déjà enregistré "
+            f"dans le {_libelle_registre(registre, cible)}"
+        )
+        return 1
+    destination.write_bytes(fichier.read_bytes())
+    print(
+        f"configuration '{identifiant}' enregistrée, déclarée et non mesurée, "
+        f"dans le {_libelle_registre(registre, cible)}"
+    )
+    return 0
+
+
+def _charger_registre(cible: Path) -> list[tuple[Path, dict]]:
+    """Charge les entrées validées du registre, triées par identifiant."""
+    entrees: list[tuple[Path, dict]] = []
+    for chemin in sorted(cible.glob("*.toml")):
+        donnees = _charger_configuration(chemin)
+        if chemin.stem != donnees["configuration_id"]:
+            raise ErreurConfiguration(
+                f"champ 'configuration_id' : '{donnees['configuration_id']}' ne "
+                f"correspond pas au nom du fichier de registre {chemin.name}"
+            )
+        entrees.append((chemin, donnees))
+    return entrees
+
+
+def _texte_quota(quota: dict) -> str:
+    return " ".join(f"{cle}={quota[cle]}" for cle in _CHAMPS_QUOTA)
+
+
+def _lignes_entree_panel(donnees: dict) -> list[str]:
+    plan = donnees["plan"]
+    harnais = donnees["harnais"]
+    lignes = [
+        f"- configuration : {donnees['configuration_id']} [DECLAREE, NON MESUREE]",
+        f"  produit : {donnees['produit']['nom']} | éditeur : {donnees['produit']['editeur']}",
+        (
+            f"  plan : {plan['nom']} | prix : {plan['prix_montant']} {plan['prix_devise']} "
+            f"| période : {plan['periode']} | source : {plan['source_url']} "
+            f"| publication : {plan['date_publication']} "
+            f"| consultation : {plan['date_consultation']}"
+        ),
+    ]
+    lignes.extend(
+        f"  quota {rang} : {_texte_quota(quota)}"
+        for rang, quota in enumerate(donnees["quota"], start=1)
+    )
+    lignes.extend(
+        [
+            (
+                f"  interface : {donnees['interface']['type']} "
+                f"| version : {donnees['interface']['version']}"
+            ),
+            f"  modèle demandé [REQUESTED] : {donnees['modele']['demande']}",
+            (
+                f"  harnais : argv={harnais['argv']} "
+                f"| espace_de_travail={harnais['espace_de_travail']} "
+                f"| delai_secondes={harnais['delai_secondes']}"
+            ),
+            (
+                "  intervention humaine : "
+                + " ; ".join(donnees["intervention_humaine"]["etapes"])
+            ),
+        ]
+    )
+    return lignes
+
+
+def afficher_panel(racine: Path, registre: Path | None = None) -> int:
+    if registre is None:
+        cible = racine / REGISTRE_OFFICIEL
+    else:
+        # Garde appliquée avant toute lecture du chemin fourni
+        refus = _refus_registre_officiel(racine, registre)
+        if refus is not None:
+            print(refus)
+            return 1
+        cible = registre
+        if not cible.is_dir():
+            print(f"ECHEC registre isolé absent : {cible}")
+            return 1
+    try:
+        entrees = _charger_registre(cible) if cible.is_dir() else []
+    except ErreurConfiguration as erreur:
+        print(f"ECHEC {erreur}")
+        return 1
+    print(f"registre ciblé : {_libelle_registre(registre, cible)}")
+    if not entrees:
+        print("panel : vide (0 configuration déclarée)")
+        return 0
+    print(f"panel : {len(entrees)} configurations déclarées, non mesurées")
+    for _, donnees in entrees:
+        for ligne in _lignes_entree_panel(donnees):
+            print(ligne)
+    return 0
+
+
 def _sha256_fichier(chemin: Path) -> str:
     return hashlib.sha256(chemin.read_bytes()).hexdigest()
 
@@ -129,22 +438,113 @@ def _compter_recus(repertoire: Path) -> int:
     return sum(1 for _ in repertoire.iterdir())
 
 
-def _jetons_attendus(etat: dict, nombre_recus: int) -> tuple[str, str, str]:
-    """Recalcule les trois jetons factuels depuis l'état et les reçus."""
-    if etat["panel"] or nombre_recus:
+def _jetons_attendus(
+    etat: dict, nombre_recus: int, nombre_configurations: int = 0
+) -> tuple[str, str, str]:
+    """Recalcule les trois jetons factuels depuis l'état, les reçus et le registre."""
+    if etat["panel"]:
         raise ErreurRestitution(
-            "état hors périmètre XS-01 : la conclusion n'est dérivable que d'un "
-            "panel vide et de zéro acquisition"
+            "le champ panel de l'état V1 doit rester vide : le panel déclaré vit "
+            "dans le registre officiel versionné"
         )
-    return "panel: vide", f"acquisitions: {nombre_recus}", "conclusion: ABSTENTION"
+    if nombre_recus:
+        raise ErreurRestitution(
+            "état hors périmètre : la conclusion n'est dérivable que de zéro "
+            "acquisition, toute acquisition relève d'une tranche ultérieure"
+        )
+    if nombre_configurations:
+        jeton_panel = (
+            f"panel: {nombre_configurations} configurations déclarées, non mesurées"
+        )
+    else:
+        jeton_panel = "panel: vide"
+    return jeton_panel, f"acquisitions: {nombre_recus}", "conclusion: ABSTENTION"
 
 
-def _empreintes_sources(racine: Path, etat_relatif: str) -> dict[str, str]:
+def _configurations_officielles(racine: Path) -> list[tuple[str, dict]]:
+    """Entrées validées du registre officiel, chemins relatifs à la racine."""
+    registre = racine / REGISTRE_OFFICIEL
+    if not registre.is_dir():
+        return []
+    try:
+        entrees = _charger_registre(registre)
+    except ErreurConfiguration as erreur:
+        raise ErreurRestitution(f"registre officiel invalide : {erreur}") from erreur
+    return [
+        ((REGISTRE_OFFICIEL / chemin.name).as_posix(), donnees)
+        for chemin, donnees in entrees
+    ]
+
+
+SECTION_REGISTRE = "configuration déclarée du registre officiel"
+
+
+def _empreintes_sources(
+    racine: Path, etat_relatif: str, chemins_configurations: tuple[str, ...] = ()
+) -> dict[str, str]:
     empreintes: dict[str, str] = {}
     for chemin, _ in SOURCES_AUTORISEES:
         empreintes[chemin] = _sha256_fichier(racine / chemin)
+    for chemin in chemins_configurations:
+        empreintes[chemin] = _sha256_fichier(racine / chemin)
     empreintes[etat_relatif] = _sha256_fichier(racine / etat_relatif)
     return empreintes
+
+
+def _echapper(valeur: object) -> str:
+    return (
+        str(valeur)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _article_panel(relatif: str, sha256: str, donnees: dict) -> str:
+    """Article de panel régénérable à l'identique depuis le fichier de registre."""
+    plan = donnees["plan"]
+    harnais = donnees["harnais"]
+    quotas = "".join(
+        f"<li>quota {rang} : "
+        + " · ".join(f"{cle} <code>{_echapper(quota[cle])}</code>" for cle in _CHAMPS_QUOTA)
+        + "</li>"
+        for rang, quota in enumerate(donnees["quota"], start=1)
+    )
+    argv = " ".join(f"<code>{_echapper(element)}</code>" for element in harnais["argv"])
+    etapes = " ; ".join(
+        f"<code>{_echapper(etape)}</code>"
+        for etape in donnees["intervention_humaine"]["etapes"]
+    )
+    contenu = (
+        f"<p><strong>{_echapper(donnees['configuration_id'])}</strong> — entrée "
+        "déclarée et non mesurée.</p>"
+        f"<p>produit <code>{_echapper(donnees['produit']['nom'])}</code> · "
+        f"éditeur <code>{_echapper(donnees['produit']['editeur'])}</code></p>"
+        f"<p>plan <code>{_echapper(plan['nom'])}</code> · "
+        f"prix <code>{_echapper(plan['prix_montant'])}</code> "
+        f"<code>{_echapper(plan['prix_devise'])}</code> · "
+        f"période <code>{_echapper(plan['periode'])}</code> · "
+        f"source déclarée <code>{_echapper(plan['source_url'])}</code> · "
+        f"publication <code>{_echapper(plan['date_publication'])}</code> · "
+        f"consultation <code>{_echapper(plan['date_consultation'])}</code></p>"
+        f"<ul>{quotas}</ul>"
+        f"<p>interface <code>{_echapper(donnees['interface']['type'])}</code> · "
+        f"version <code>{_echapper(donnees['interface']['version'])}</code></p>"
+        f"<p>modèle demandé <code>REQUESTED</code> : "
+        f"<code>{_echapper(donnees['modele']['demande'])}</code></p>"
+        f"<p>harnais : argv {argv} · espace de travail "
+        f"<code>{_echapper(harnais['espace_de_travail'])}</code> · délai en secondes "
+        f"<code>{_echapper(harnais['delai_secondes'])}</code></p>"
+        f"<p>intervention humaine : {etapes}</p>"
+        + _span_source(relatif, sha256, SECTION_REGISTRE)
+    )
+    return _article(
+        "fait",
+        contenu,
+        f' data-configuration="{donnees["configuration_id"]}"'
+        ' data-statut="declaree-non-mesuree"',
+    )
 
 
 def _span_source(chemin: str, sha256: str, section: str) -> str:
@@ -162,12 +562,21 @@ def _rendre_page(racine: Path) -> bytes:
     etat = _charger_etat(racine)
     repertoire = _repertoire_recus(racine, etat)
     nombre_recus = _compter_recus(repertoire)
-    jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(etat, nombre_recus)
+    configurations = _configurations_officielles(racine)
+    jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
+        etat, nombre_recus, len(configurations)
+    )
     etat_relatif = CHEMIN_ETAT.as_posix()
-    empreintes = _empreintes_sources(racine, etat_relatif)
+    empreintes = _empreintes_sources(
+        racine, etat_relatif, tuple(chemin for chemin, _ in configurations)
+    )
 
     def src(chemin: str, section: str) -> str:
         return _span_source(chemin, empreintes[chemin], section)
+
+    spans_registre = "".join(
+        src(chemin, SECTION_REGISTRE) for chemin, _ in configurations
+    )
 
     prd = "docs/PRD.md"
     ard = "docs/ARD.md"
@@ -215,21 +624,33 @@ def _rendre_page(racine: Path) -> bytes:
         + "</section>"
     )
 
-    sections.append(
-        "<section id=\"etat-v1\"><h2>État V1 courant</h2>"
-        + _article(
+    if configurations:
+        article_panel_courant = _article(
+            "fait",
+            f"<p><code id=\"jeton-panel\">{jeton_panel}</code> — le registre officiel "
+            "versionné déclare ces configurations abonnement ; aucune n'est mesurée.</p>"
+            + spans_registre,
+        )
+        article_conclusion = _article(
+            "deduction",
+            f"<p><code id=\"jeton-conclusion\">{jeton_conclusion}</code> — déduction "
+            "raisonnée : des configurations sont déclarées mais aucune n'est mesurée "
+            "et aucune acquisition n'existe ; une absence de preuve n'est jamais "
+            "transformée en résultat favorable, donc la seule conclusion dérivable "
+            "est l'abstention. Aucune valeur de remplacement n'est créée.</p>"
+            + src(rules, "U-018"),
+            ' data-premisses="configurations déclarées et non mesurées selon le '
+            "registre officiel versionné ; zéro reçu dans le répertoire de reçus V1 ; "
+            'règle U-018 de docs/RULES.md"',
+        )
+    else:
+        article_panel_courant = _article(
             "fait",
             f"<p><code id=\"jeton-panel\">{jeton_panel}</code> — l'état V1 versionné ne "
             "déclare aucune configuration abonnement.</p>"
             + src(etat_relatif, "état V1 versionné"),
         )
-        + _article(
-            "fait",
-            f"<p><code id=\"jeton-acquisitions\">{jeton_acquisitions}</code> — le "
-            f"répertoire de reçus V1 <code>{chemin_recus}</code> existe et ne contient "
-            "aucun reçu.</p>" + src(etat_relatif, "état V1 versionné"),
-        )
-        + _article(
+        article_conclusion = _article(
             "deduction",
             f"<p><code id=\"jeton-conclusion\">{jeton_conclusion}</code> — déduction "
             "raisonnée : le panel est vide et aucune acquisition n'existe ; une absence "
@@ -239,18 +660,56 @@ def _rendre_page(racine: Path) -> bytes:
             ' data-premisses="panel vide selon l\'état V1 versionné ; zéro reçu dans le '
             "répertoire de reçus V1 ; règle U-018 de docs/RULES.md\"",
         )
+
+    sections.append(
+        "<section id=\"etat-v1\"><h2>État V1 courant</h2>"
+        + article_panel_courant
+        + _article(
+            "fait",
+            f"<p><code id=\"jeton-acquisitions\">{jeton_acquisitions}</code> — le "
+            f"répertoire de reçus V1 <code>{chemin_recus}</code> existe et ne contient "
+            "aucun reçu.</p>" + src(etat_relatif, "état V1 versionné"),
+        )
+        + article_conclusion
         + "</section>"
     )
 
-    sections.append(
-        "<section id=\"inconnues\"><h2>Ce qui reste inconnu</h2>"
-        + _article(
+    if configurations:
+        sections.append(
+            "<section id=\"panel-officiel\"><h2>Panel officiel déclaré</h2>"
+            "<p>Chaque entrée reprend un fichier du registre officiel versionné. "
+            "Elle est déclarée et non mesurée : tout champ non observé reste "
+            "<code>INCONNU</code>, le modèle demandé est marqué REQUESTED, "
+            "et aucune activité de compte, aucune authentification et aucune "
+            "disponibilité n'en est déduite. Aucun préflight, aucune acquisition et "
+            "aucune mesure n'existe.</p>"
+            + "".join(
+                _article_panel(chemin, empreintes[chemin], donnees)
+                for chemin, donnees in configurations
+            )
+            + "</section>"
+        )
+
+    if configurations:
+        article_identites_inconnues = _article(
+            "fait",
+            "<p>Les identités du panel sont déclarées, jamais mesurées : prix, "
+            "devise, période, quotas, resets, versions d'interface et étapes "
+            "non observés restent <code>INCONNU</code> champ par champ jusqu'à une "
+            "observation autorisée.</p>" + spans_registre,
+        )
+    else:
+        article_identites_inconnues = _article(
             "fait",
             "<p>Aucune identité abonnement n'est déclarée : produit, plan, quotas, "
             "resets, interface, harnais et intervention humaine restent "
             "<code>INCONNU</code> pour tout candidat futur.</p>"
             + src(etat_relatif, "état V1 versionné"),
         )
+
+    sections.append(
+        "<section id=\"inconnues\"><h2>Ce qui reste inconnu</h2>"
+        + article_identites_inconnues
         + _article(
             "fait",
             "<p>Aucun reçu V1 n'existe : expérience réelle, coûts, latences et "
@@ -361,14 +820,24 @@ def _rendre_page(racine: Path) -> bytes:
     provenance = "".join(
         f"<li><code>{chemin}</code> ({section}) · SHA-256 "
         f"<code>{empreintes[chemin]}</code></li>"
-        for chemin, section in (*SOURCES_AUTORISEES, (etat_relatif, "état V1 versionné"))
+        for chemin, section in (
+            *SOURCES_AUTORISEES,
+            *((chemin, SECTION_REGISTRE) for chemin, _ in configurations),
+            (etat_relatif, "état V1 versionné"),
+        )
     )
+    if configurations:
+        titre = (
+            "Restitution humaine V1 — profil abonnement — panel déclaré, aucune mesure"
+        )
+    else:
+        titre = "Restitution humaine V1 — profil abonnement — état vide"
     page = (
         "<!DOCTYPE html>\n"
         '<html lang="fr">\n'
         "<head>\n"
         '<meta charset="utf-8">\n'
-        "<title>Restitution humaine V1 — profil abonnement — état vide</title>\n"
+        f"<title>{titre}</title>\n"
         "<style>\n"
         "body{font-family:Georgia,serif;max-width:52rem;margin:2rem auto;"
         "padding:0 1rem;line-height:1.5;color:#1a1a1a;background:#fdfdfb}\n"
@@ -393,7 +862,7 @@ def _rendre_page(racine: Path) -> bytes:
         "</style>\n"
         "</head>\n"
         "<body>\n"
-        "<h1>Restitution humaine V1 — profil abonnement — état vide</h1>\n"
+        f"<h1>{titre}</h1>\n"
         f"<p>Vue <code>{VERSION_VUE}</code>, autonome et hors ligne, régénérée de "
         "façon déterministe depuis les seules sources listées en pied de page. Chaque "
         "affirmation porte sa classe : fait établi, déduction raisonnée ou élément "
@@ -445,9 +914,26 @@ def verifier_restitution(racine: Path) -> int:
     etat = _charger_etat(racine)
     repertoire = _repertoire_recus(racine, etat)
     nombre_recus = _compter_recus(repertoire)
-    jetons_factuels = _jetons_attendus(etat, nombre_recus)
+    configurations = _configurations_officielles(racine)
+    jetons_factuels = _jetons_attendus(etat, nombre_recus, len(configurations))
     etat_relatif = CHEMIN_ETAT.as_posix()
-    empreintes = _empreintes_sources(racine, etat_relatif)
+    empreintes = _empreintes_sources(
+        racine, etat_relatif, tuple(chemin for chemin, _ in configurations)
+    )
+
+    for chemin, donnees in configurations:
+        attendu = _article_panel(chemin, empreintes[chemin], donnees)
+        if attendu not in page:
+            echecs.append(
+                "entrée de panel infidèle ou absente : "
+                f"{donnees['configuration_id']}"
+            )
+    nombre_affiche = page.count(' data-configuration="')
+    if nombre_affiche != len(configurations):
+        echecs.append(
+            f"{len(configurations)} entrées de panel attendues dans la page, "
+            f"{nombre_affiche} trouvées"
+        )
 
     page_basse = page.lower()
     for sequence in SEQUENCES_DISTANTES:
@@ -509,8 +995,30 @@ def verifier_restitution(racine: Path) -> int:
     return 0
 
 
-def principal(arguments: list[str]) -> int:
-    racine = Path(__file__).resolve().parent.parent
+def _analyser_options(
+    arguments: list[str], noms_autorises: tuple[str, ...]
+) -> dict[str, str] | None:
+    """Rend les paires option/valeur, ou None sur toute forme hors contrat."""
+    valeurs: dict[str, str] = {}
+    rang = 0
+    while rang < len(arguments):
+        nom = arguments[rang]
+        if nom not in noms_autorises or nom in valeurs or rang + 1 >= len(arguments):
+            return None
+        valeurs[nom] = arguments[rang + 1]
+        rang += 2
+    return valeurs
+
+
+_USAGE = (
+    "usage : campagne_v1.py enregistrer [--registre <chemin>] --fichier <chemin> "
+    "| panel [--registre <chemin>] | restituer | verifier-restitution"
+)
+
+
+def principal(arguments: list[str], racine: Path | None = None) -> int:
+    if racine is None:
+        racine = Path(__file__).resolve().parent.parent
     if arguments == ["restituer"]:
         try:
             return restituer(racine)
@@ -523,7 +1031,21 @@ def principal(arguments: list[str]) -> int:
         except ErreurRestitution as erreur:
             print(f"ECHEC {erreur}")
             return 1
-    print("usage : campagne_v1.py restituer | verifier-restitution")
+    if arguments[:1] == ["enregistrer"]:
+        options = _analyser_options(arguments[1:], ("--registre", "--fichier"))
+        if options is None or "--fichier" not in options:
+            print(_USAGE)
+            return 2
+        registre = Path(options["--registre"]) if "--registre" in options else None
+        return enregistrer_configuration(racine, Path(options["--fichier"]), registre)
+    if arguments[:1] == ["panel"]:
+        options = _analyser_options(arguments[1:], ("--registre",))
+        if options is None:
+            print(_USAGE)
+            return 2
+        registre = Path(options["--registre"]) if "--registre" in options else None
+        return afficher_panel(racine, registre)
+    print(_USAGE)
     return 2
 
 
