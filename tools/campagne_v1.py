@@ -161,11 +161,25 @@ def _exiger_liste_de_chaines(chemin_champ: str, valeur: object) -> None:
         )
 
 
-def _exiger_argv(chemin_champ: str, valeur: object) -> None:
-    _exiger_liste_de_chaines(chemin_champ, valeur)
-    if JETON_FICHIER_PROMPT not in valeur:
+def _exiger_stdin_fichier(chemin_champ: str, valeur: object) -> None:
+    if valeur != JETON_FICHIER_PROMPT:
         raise ErreurConfiguration(
-            f"champ '{chemin_champ}' : le jeton machine '{JETON_FICHIER_PROMPT}' est requis"
+            f"champ '{chemin_champ}' : jeton machine '{JETON_FICHIER_PROMPT}' attendu"
+        )
+
+
+def _exiger_prompt_exactement_une_fois(harnais: dict) -> None:
+    """Le prompt vit dans argv ou dans stdin_fichier, jamais zéro ni deux fois"""
+    occurrences = sum(
+        element.count(JETON_FICHIER_PROMPT) for element in harnais["argv"]
+    )
+    if "stdin_fichier" in harnais:
+        occurrences += 1
+    if occurrences != 1:
+        raise ErreurConfiguration(
+            "champs 'harnais.argv' et 'harnais.stdin_fichier' : le jeton machine "
+            f"'{JETON_FICHIER_PROMPT}' doit apparaître exactement une fois dans "
+            f"leur union ({occurrences} au lieu de 1)"
         )
 
 
@@ -206,24 +220,33 @@ _TABLES_CONFIGURATION = {
     "interface": {"type": _exiger_type_interface, "version": _exiger_chaine},
     "modele": {"demande": _exiger_chaine},
     "harnais": {
-        "argv": _exiger_argv,
+        "argv": _exiger_liste_de_chaines,
         "espace_de_travail": _exiger_espace_isole,
         "delai_secondes": _exiger_delai,
     },
     "intervention_humaine": {"etapes": _exiger_liste_de_chaines},
 }
 
+# Seul champ optionnel du contrat générique : la source stdin du prompt (XS-02)
+_CHAMPS_OPTIONNELS = {"harnais": {"stdin_fichier": _exiger_stdin_fichier}}
 
-def _valider_table(prefixe: str, table: object, champs: dict) -> None:
+
+def _valider_table(
+    prefixe: str, table: object, champs: dict, optionnels: dict | None = None
+) -> None:
+    optionnels = optionnels or {}
     if not isinstance(table, dict):
         raise ErreurConfiguration(f"champ '{prefixe}' absent ou n'est pas une table")
     for cle in table:
-        if cle not in champs:
+        if cle not in champs and cle not in optionnels:
             raise ErreurConfiguration(f"champ '{prefixe}.{cle}' hors vocabulaire")
     for cle, exiger in champs.items():
         if cle not in table:
             raise ErreurConfiguration(f"champ '{prefixe}.{cle}' absent")
         exiger(f"{prefixe}.{cle}", table[cle])
+    for cle, exiger in optionnels.items():
+        if cle in table:
+            exiger(f"{prefixe}.{cle}", table[cle])
 
 
 def _valider_configuration(donnees: object) -> dict:
@@ -243,7 +266,8 @@ def _valider_configuration(donnees: object) -> dict:
             "champ 'configuration_id' : slug stable attendu (minuscules, chiffres, tirets)"
         )
     for nom, champs in _TABLES_CONFIGURATION.items():
-        _valider_table(nom, donnees.get(nom), champs)
+        _valider_table(nom, donnees.get(nom), champs, _CHAMPS_OPTIONNELS.get(nom))
+    _exiger_prompt_exactement_une_fois(donnees["harnais"])
     quotas = donnees.get("quota")
     if not isinstance(quotas, list) or not quotas:
         raise ErreurConfiguration("champ 'quota' : au moins une table [[quota]] attendue")
@@ -368,7 +392,12 @@ def _lignes_entree_panel(donnees: dict) -> list[str]:
             f"  modèle demandé [REQUESTED] : {donnees['modele']['demande']}",
             (
                 f"  harnais : argv={harnais['argv']} "
-                f"| espace_de_travail={harnais['espace_de_travail']} "
+                + (
+                    f"| stdin={harnais['stdin_fichier']} "
+                    if "stdin_fichier" in harnais
+                    else ""
+                )
+                + f"| espace_de_travail={harnais['espace_de_travail']} "
                 f"| delai_secondes={harnais['delai_secondes']}"
             ),
             (
@@ -512,6 +541,11 @@ def _article_panel(relatif: str, sha256: str, donnees: dict) -> str:
         for rang, quota in enumerate(donnees["quota"], start=1)
     )
     argv = " ".join(f"<code>{_echapper(element)}</code>" for element in harnais["argv"])
+    stdin = (
+        f" · stdin <code>{_echapper(harnais['stdin_fichier'])}</code>"
+        if "stdin_fichier" in harnais
+        else ""
+    )
     etapes = " ; ".join(
         f"<code>{_echapper(etape)}</code>"
         for etape in donnees["intervention_humaine"]["etapes"]
@@ -533,7 +567,7 @@ def _article_panel(relatif: str, sha256: str, donnees: dict) -> str:
         f"version <code>{_echapper(donnees['interface']['version'])}</code></p>"
         f"<p>modèle demandé <code>REQUESTED</code> : "
         f"<code>{_echapper(donnees['modele']['demande'])}</code></p>"
-        f"<p>harnais : argv {argv} · espace de travail "
+        f"<p>harnais : argv {argv}{stdin} · espace de travail "
         f"<code>{_echapper(harnais['espace_de_travail'])}</code> · délai en secondes "
         f"<code>{_echapper(harnais['delai_secondes'])}</code></p>"
         f"<p>intervention humaine : {etapes}</p>"
