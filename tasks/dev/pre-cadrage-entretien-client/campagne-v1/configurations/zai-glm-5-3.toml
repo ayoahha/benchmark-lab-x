@@ -32,7 +32,8 @@ version = "INCONNU"
 demande = "glm-5.3"
 
 [harnais]
-argv = ["opencodex", "__PROMPT_FILE__"]
+argv = ["codex", "exec", "--model", "zai/glm-5.3", "--cd", "__ISOLATED_WORKSPACE__", "--config", "model_reasoning_effort=\"high\"", "-"]
+stdin_fichier = "__PROMPT_FILE__"
 espace_de_travail = "__ISOLATED_WORKSPACE__"
 delai_secondes = 0
 

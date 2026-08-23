@@ -255,6 +255,87 @@ class ContratDelaiTests(BaseXS02):
         self.assertEqual(list(bac.iterdir()), [])
 
 
+_ARGV_CODEX_ZAI = (
+    'argv = ["codex", "exec", "--model", "zai/glm-5.3", "--cd", '
+    '"__ISOLATED_WORKSPACE__", "--config", "model_reasoning_effort=\\"high\\"", "-"]'
+)
+
+
+class ContratStdinFichierTests(BaseXS02):
+    """Contrat XS-02 : __PROMPT_FILE__ exactement une fois dans argv ∪ stdin_fichier."""
+
+    def setUp(self):
+        super().setUp()
+        self.bac = self.racine / "bac-a-sable"
+        self.bac.mkdir()
+
+    def _candidate(self, ligne_argv: str, ligne_stdin: str | None = None) -> Path:
+        demonstration = (
+            FIXTURES / "demonstration/claude-code-demonstration-fable-5.toml"
+        )
+        remplacement = ligne_argv
+        if ligne_stdin is not None:
+            remplacement += "\n" + ligne_stdin
+        texte = demonstration.read_text(encoding="utf-8").replace(
+            'argv = ["claude", "__PROMPT_FILE__"]', remplacement
+        )
+        chemin = self.racine / "candidate.toml"
+        chemin.write_text(texte, encoding="utf-8")
+        return chemin
+
+    def _enregistrer_candidate(self, chemin: Path) -> tuple[int, str]:
+        return _principal(
+            ["enregistrer", "--registre", str(self.bac), "--fichier", str(chemin)],
+            self.racine,
+        )
+
+    def test_stdin_fichier_avec_argv_sans_jeton_accepte(self):
+        chemin = self._candidate(_ARGV_CODEX_ZAI, 'stdin_fichier = "__PROMPT_FILE__"')
+        code, sortie = self._enregistrer_candidate(chemin)
+        self.assertEqual(code, 0, sortie)
+        self.assertTrue(
+            (self.bac / "claude-code-demonstration-fable-5.toml").is_file()
+        )
+
+    def test_jeton_absent_d_argv_et_de_stdin_fichier_refuse(self):
+        chemin = self._candidate(_ARGV_CODEX_ZAI)
+        code, sortie = self._enregistrer_candidate(chemin)
+        self.assertEqual(code, 1)
+        self.assertIn("harnais.argv", sortie)
+        self.assertIn("harnais.stdin_fichier", sortie)
+        self.assertIn("exactement une fois", sortie)
+        self.assertEqual(list(self.bac.iterdir()), [])
+
+    def test_jeton_present_dans_argv_et_stdin_fichier_refuse(self):
+        chemin = self._candidate(
+            'argv = ["claude", "__PROMPT_FILE__"]',
+            'stdin_fichier = "__PROMPT_FILE__"',
+        )
+        code, sortie = self._enregistrer_candidate(chemin)
+        self.assertEqual(code, 1)
+        self.assertIn("harnais.argv", sortie)
+        self.assertIn("harnais.stdin_fichier", sortie)
+        self.assertIn("exactement une fois", sortie)
+        self.assertEqual(list(self.bac.iterdir()), [])
+
+    def test_jeton_double_dans_argv_seul_refuse(self):
+        chemin = self._candidate(
+            'argv = ["claude", "__PROMPT_FILE__", "__PROMPT_FILE__"]'
+        )
+        code, sortie = self._enregistrer_candidate(chemin)
+        self.assertEqual(code, 1)
+        self.assertIn("exactement une fois", sortie)
+        self.assertEqual(list(self.bac.iterdir()), [])
+
+    def test_stdin_fichier_non_conforme_refuse_en_nommant_le_champ(self):
+        chemin = self._candidate(_ARGV_CODEX_ZAI, 'stdin_fichier = "prompt.txt"')
+        code, sortie = self._enregistrer_candidate(chemin)
+        self.assertEqual(code, 1)
+        self.assertIn("harnais.stdin_fichier", sortie)
+        self.assertIn("__PROMPT_FILE__", sortie)
+        self.assertEqual(list(self.bac.iterdir()), [])
+
+
 class GardeRegistreOfficielTests(BaseXS02):
     """Isolation absolue : '--registre' ne vise jamais le registre officiel."""
 
@@ -309,6 +390,67 @@ class GardeRegistreOfficielTests(BaseXS02):
         self.assertNotIn("claude-code-demonstration-fable-5", sortie)
 
 
+_HARNAIS_ZAI_ATTENDU = (
+    "[harnais]\n"
+    'argv = ["codex", "exec", "--model", "zai/glm-5.3", "--cd", '
+    '"__ISOLATED_WORKSPACE__", "--config", "model_reasoning_effort=\\"high\\"", '
+    '"-"]\n'
+    'stdin_fichier = "__PROMPT_FILE__"\n'
+    'espace_de_travail = "__ISOLATED_WORKSPACE__"\n'
+    'delai_secondes = 0\n'
+)
+
+_ARGV_SANS_STDIN_ATTENDUS = {
+    "antigravity-gemini-3-7-flash": 'argv = ["agy", "__PROMPT_FILE__"]',
+    "claude-code-fable-5": 'argv = ["claude", "__PROMPT_FILE__"]',
+    "claude-code-opus-5": 'argv = ["claude", "__PROMPT_FILE__"]',
+    "codex-gpt-5-6-sol": 'argv = ["codex", "__PROMPT_FILE__"]',
+    "cursor-kimi-k3": 'argv = ["agent", "__PROMPT_FILE__"]',
+    "grok-build-grok-4-6": 'argv = ["grok", "__PROMPT_FILE__"]',
+}
+
+
+class ContratZaiOfficielTests(BaseXS02):
+    """Route agente Z.AI corrigée : Codex CLI agent, prompt sur stdin."""
+
+    def test_source_zai_porte_le_contrat_harnais_codex_stdin(self):
+        source = CONFIGURATIONS_OFFICIELLES / "zai-glm-5-3.toml"
+        self.assertIn(_HARNAIS_ZAI_ATTENDU, source.read_text(encoding="utf-8"))
+        code, sortie = _principal(
+            ["enregistrer", "--fichier", str(source)], self.racine
+        )
+        self.assertEqual(code, 0, sortie)
+
+    def test_source_zai_et_registre_officiel_identiques(self):
+        source = CONFIGURATIONS_OFFICIELLES / "zai-glm-5-3.toml"
+        registre = RACINE / M.REGISTRE_OFFICIEL / "zai-glm-5-3.toml"
+        self.assertEqual(source.read_bytes(), registre.read_bytes())
+
+    def test_six_autres_configurations_inchangees_sans_stdin_fichier(self):
+        for identifiant, ligne_argv in _ARGV_SANS_STDIN_ATTENDUS.items():
+            for repertoire in (CONFIGURATIONS_OFFICIELLES, RACINE / M.REGISTRE_OFFICIEL):
+                with self.subTest(configuration=identifiant, repertoire=str(repertoire)):
+                    texte = (repertoire / f"{identifiant}.toml").read_text(
+                        encoding="utf-8"
+                    )
+                    self.assertIn(ligne_argv, texte)
+                    self.assertNotIn("stdin_fichier", texte)
+
+    def test_panel_affiche_argv_codex_et_source_stdin_pour_zai(self):
+        self._enregistrer_les_sept()
+        code, sortie = _principal(["panel"], self.racine)
+        self.assertEqual(code, 0, sortie)
+        self.assertIn(
+            "argv=['codex', 'exec', '--model', 'zai/glm-5.3', '--cd', "
+            "'__ISOLATED_WORKSPACE__', '--config', "
+            "'model_reasoning_effort=\"high\"', '-']",
+            sortie,
+        )
+        self.assertIn("stdin=__PROMPT_FILE__", sortie)
+        # Une seule configuration porte la source stdin, les six autres aucune
+        self.assertEqual(sortie.count("stdin="), 1)
+
+
 _ENTREES_RESTITUTION = tuple(chemin for chemin, _ in M.SOURCES_AUTORISEES) + (
     M.CHEMIN_ETAT.as_posix(),
 )
@@ -340,6 +482,22 @@ class RestitutionPanelTests(BaseXS02):
             self.assertIn(f'data-configuration="{identifiant}"', page)
         self.assertEqual(page.count("<code>REQUESTED</code>"), 7)
         self.assertNotIn("panel: vide", page)
+
+    def test_page_affiche_argv_codex_et_source_stdin_pour_zai(self):
+        page = self._restituer()
+        for fragment in (
+            "<code>codex</code>",
+            "<code>exec</code>",
+            "<code>zai/glm-5.3</code>",
+            "<code>model_reasoning_effort=&quot;high&quot;</code>",
+            "<code>-</code>",
+            "stdin <code>__PROMPT_FILE__</code>",
+        ):
+            self.assertIn(fragment, page)
+        # Une seule entrée de panel porte la source stdin
+        self.assertEqual(page.count("stdin <code>"), 1)
+        code, sortie = _principal(["verifier-restitution"], self.racine)
+        self.assertEqual(code, 0, sortie)
 
     def test_restitutions_successives_byte_identiques_avec_panel(self):
         premiere = self._restituer()
