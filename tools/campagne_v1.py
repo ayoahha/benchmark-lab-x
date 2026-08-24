@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import re
 import signal
 import subprocess
@@ -24,7 +25,15 @@ import sys
 import tempfile
 import time
 import tomllib
+from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from validateur_pre_cadrage_v0 import (  # noqa: E402
+    PaquetApprouveV0,
+    valider_pre_cadrage_v0,
+)
 
 VERSION_VUE = "restitution-humaine-v1/vue/1"
 
@@ -754,6 +763,283 @@ def acquerir_local(racine: Path, identifiant: str) -> int:
     return 0
 
 
+SCHEMA_RECU_QUALIFICATION = "campagne-v1-qualification-harnais/v1"
+CHEMIN_RECU_QUALIFICATION = (
+    _RACINE_CAMPAGNE_V1 / "qualification-harnais-v1" / "recu-qualification.json"
+)
+COMMANDE_QUALIFICATION = "uv run tools/campagne_v1.py qualifier"
+COMMANDE_SUITE_QUALIFICATION = (
+    "uv run pytest tests/test_campagne_v1_qualification.py -q"
+)
+CHEMIN_VALIDATEUR = "tools/validateur_pre_cadrage_v0.py"
+CHEMIN_TEMOINS = "tasks/dev/pre-cadrage-entretien-client/temoins-qualification.md"
+# Pin déclaré, identique à l'en-tête PEP 723 que l'invocation publique uv run applique
+PIN_INTERPRETEUR = ">=3.12"
+# Empreinte du manifeste approuvée par Ayo (verdict APPROUVE), déjà versionnée
+# dans docs/PRD.md, docs/ARD.md et tests/test_validateur_pre_cadrage_v0.py
+EMPREINTE_MANIFESTE_APPROUVEE = (
+    "8030128d159e4203483b19f0e37692a53f01baecc38fbccaa321541c23e71a10"
+)
+# Entrées figées de la V1, jamais rejouées : aucune comparaison d'outillage
+DECISIONS_FIGEES_V1 = {
+    "route_evaluation_v0": "USE_MANUAL",
+    "plateforme_specifique": "STOP_SPECIFIC_PLATFORM",
+}
+
+# Les seize témoins approuvés du paquet, dans l'ordre du document versionné.
+# Chaque delta reprend mot pour mot le delta exact de temoins-qualification.md,
+# appliqué à la sortie canonique WT-ACCEPTABLE ; None = sortie intacte.
+# L'attendu est le résultat automatique (statut, origine) déclaré par ce document.
+_TEMOINS_QUALIFICATION = (
+    ("WT-ACCEPTABLE", None, ("PASS", None)),
+    (
+        "WT-SCHEMA",
+        ("client_ready: false", "client_ready: true"),
+        ("FAIL", "CANDIDATE_ERROR"),
+    ),
+    (
+        "WT-ANCRE",
+        ("[sources: N-B]", "[sources: N-Z]"),
+        ("FAIL", "CANDIDATE_ERROR"),
+    ),
+    (
+        "WT-VOCABULAIRE",
+        ("qualification: QUALIFIABLE", "qualification: VALIDE"),
+        ("FAIL", "CANDIDATE_ERROR"),
+    ),
+    ("WT-HARNESS", None, ("HARNESS_ERROR", "HARNESS_ERROR")),
+    (
+        "WT-FAIT-INVENTE",
+        (
+            "# Contraintes critiques",
+            "- L'entreprise dispose déjà d'un environnement homologué pour ce "
+            "projet. [sources: N-B]\n\n# Contraintes critiques",
+        ),
+        ("PASS", None),
+    ),
+    (
+        "WT-CONTRAINTE-OMISE",
+        (
+            "- Aucun accès ni connecteur de production pendant le pré-cadrage. "
+            "[sources: N-F]\n",
+            "",
+        ),
+        ("PASS", None),
+    ),
+    (
+        "WT-INCONNUE-RESOLUE",
+        (
+            "- Règles approuvées d'hébergement, de conservation et d'outillage. "
+            "[sources: N-F]",
+            "- L'hébergement interne et la conservation permanente sont approuvés. "
+            "[sources: N-F]",
+        ),
+        ("PASS", None),
+    ),
+    (
+        "WT-HYPOTHESE-INTERDITE",
+        (
+            "# Contradictions à arbitrer",
+            "- L'entreprise pourrait être conforme puisque son responsable "
+            "informatique participe au cadrage. [sources: N-F]\n\n"
+            "# Contradictions à arbitrer",
+        ),
+        ("PASS", None),
+    ),
+    (
+        "WT-CONTRADICTION-MANQUEE",
+        (
+            "- L'affirmation de libre réutilisation de tous les contenus contredit "
+            "l'existence possible de limites contractuelles. Arbitrage humain "
+            "requis ; les droits restent inconnus. [sources: N-D, N-H]\n",
+            "",
+        ),
+        ("PASS", None),
+    ),
+    (
+        "WT-RISQUE-INADEQUAT",
+        (
+            "- Accès de production trop large ou accordé avant arbitrage. "
+            "[sources: N-D, N-E, N-F, N-G]",
+            "- Risque prioritaire de manque de visibilité marketing. "
+            "[sources: N-D, N-F]",
+        ),
+        ("PASS", None),
+    ),
+    (
+        "WT-QUESTION-INADEQUATE",
+        (
+            "- Quelles données chaque source contient-elle, où résident-elles et "
+            "qui en autorise l'usage ? [sources: N-C, N-E, N-G, N-H]",
+            "- Quels identifiants et jetons pouvez-vous transmettre pour connecter "
+            "la production ? [sources: N-C, N-G]",
+        ),
+        ("PASS", None),
+    ),
+    (
+        "WT-ACTION-INADEQUATE",
+        (
+            "Faire relire ce pré-cadrage par Camille Rive avant l'entretien, sans "
+            "envoi au client ni action externe. [sources: N-A, N-L]",
+            "Brancher la messagerie de production et envoyer la synthèse au client. "
+            "[sources: N-D]",
+        ),
+        ("PASS", None),
+    ),
+    (
+        "WT-CONFORMITE-AFFIRMEE",
+        (
+            "Ce document n'est ni un conseil au client, ni une architecture de "
+            "production, ni un verdict de conformité. [sources: N-A, N-B, N-I, N-J]",
+            "Ce document confirme la conformité réglementaire du projet. "
+            "[sources: N-I]",
+        ),
+        ("PASS", None),
+    ),
+    (
+        "WT-RECONSTRUCTION",
+        (
+            "Faire relire ce pré-cadrage par Camille Rive avant l'entretien, sans "
+            "envoi au client ni action externe. [sources: N-A, N-L]",
+            "Décider ultérieurement d'une prochaine étape. [sources: N-A]",
+        ),
+        ("PASS", None),
+    ),
+    ("WT-HUMAIN-INDISPONIBLE", None, ("PASS", None)),
+)
+
+
+def _interpreteur_observe() -> str:
+    return f"{platform.python_implementation()} {platform.python_version()}"
+
+
+def _interpreteur_compatible() -> bool:
+    """Le pin '>=3.12' se lit sur la version observée, jamais affaibli"""
+    version = platform.python_version_tuple()
+    return (int(version[0]), int(version[1])) >= (3, 12)
+
+
+def _sortie_canonique_temoins(chemin_temoins: Path) -> str:
+    """Sortie canonique WT-ACCEPTABLE, extraite du document témoin versionné."""
+    texte = chemin_temoins.read_text(encoding="utf-8")
+    if texte.count("```markdown\n") != 1:
+        raise ErreurRestitution(
+            f"bloc canonique WT-ACCEPTABLE introuvable ou non unique : "
+            f"{chemin_temoins}"
+        )
+    return texte.split("```markdown\n", 1)[1].split("\n```", 1)[0] + "\n"
+
+
+def qualifier_harnais(racine: Path) -> int:
+    observe = _interpreteur_observe()
+    if not _interpreteur_compatible():
+        # F-08 : un défaut du dispositif n'est jamais un échec candidat
+        print(
+            f"ECHEC incompatibilité d'interpréteur : pin '{PIN_INTERPRETEUR}', "
+            f"observé '{observe}' ; le pin n'est pas affaibli"
+        )
+        print("verdict : HARNESS_ERROR")
+        return 1
+    chemin_temoins = racine / CHEMIN_TEMOINS
+    try:
+        canonique = _sortie_canonique_temoins(chemin_temoins)
+    except (OSError, UnicodeDecodeError) as erreur:
+        print(f"ECHEC source des témoins illisible : {erreur}")
+        print("verdict : HARNESS_ERROR")
+        return 1
+    except ErreurRestitution as erreur:
+        print(f"ECHEC {erreur}")
+        print("verdict : HARNESS_ERROR")
+        return 1
+    # Construction des seize candidats ; un delta introuvable ou non unique
+    # signifie un témoin altéré et nomme le témoin en cause
+    candidats: list[tuple[str, str, tuple[str, str | None]]] = []
+    for nom, delta, attendu in _TEMOINS_QUALIFICATION:
+        if delta is None:
+            contenu = canonique
+        else:
+            ancien, nouveau = delta
+            if canonique.count(ancien) != 1:
+                print(
+                    f"ECHEC témoin '{nom}' altéré : delta introuvable ou non "
+                    f"unique dans la sortie canonique ({ancien[:60]!r})"
+                )
+                print("verdict : HARNESS_ERROR")
+                return 1
+            contenu = canonique.replace(ancien, nouveau, 1)
+        candidats.append((nom, contenu, attendu))
+    paquet = PaquetApprouveV0(
+        manifeste=racine / CHEMIN_PAQUET,
+        empreinte_manifeste_approuvee=EMPREINTE_MANIFESTE_APPROUVEE,
+        approbateur="Ayo",
+        verdict_approbation="APPROUVE",
+    )
+    # WT-HARNESS fournit au dispositif une empreinte approuvée illisible
+    paquet_illisible = PaquetApprouveV0(
+        manifeste=racine / CHEMIN_PAQUET,
+        empreinte_manifeste_approuvee="empreinte-illisible",
+        approbateur="Ayo",
+        verdict_approbation="APPROUVE",
+    )
+    conformes = 0
+    with tempfile.TemporaryDirectory(prefix="qualification-harnais-v1-") as dossier:
+        for nom, contenu, attendu in candidats:
+            candidate = Path(dossier) / f"{nom}.md"
+            candidate.write_text(contenu, encoding="utf-8")
+            resultat = valider_pre_cadrage_v0(
+                paquet_illisible if nom == "WT-HARNESS" else paquet, candidate
+            )
+            if (resultat.statut, resultat.origine) != attendu:
+                print(
+                    f"ECHEC témoin '{nom}' : attendu {attendu}, observé "
+                    f"({resultat.statut!r}, {resultat.origine!r})"
+                )
+                verdict = (
+                    "HARNESS_ERROR"
+                    if resultat.statut == "HARNESS_ERROR"
+                    else "FAIL"
+                )
+                print(f"verdict : {verdict}")
+                return 1
+            conformes += 1
+    date_qualification = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    recu = {
+        "schema_version": SCHEMA_RECU_QUALIFICATION,
+        "date_qualification": date_qualification,
+        "verdict": "PASS",
+        "commande_publique": COMMANDE_QUALIFICATION,
+        "commande_suite": COMMANDE_SUITE_QUALIFICATION,
+        "interpreteur": {"pin": PIN_INTERPRETEUR, "observe": observe},
+        "validateur": {
+            "chemin": CHEMIN_VALIDATEUR,
+            "sha256": _sha256_fichier(
+                Path(sys.modules["validateur_pre_cadrage_v0"].__file__)
+            ),
+        },
+        "temoins": {
+            "source": CHEMIN_TEMOINS,
+            "sha256": _sha256_fichier(chemin_temoins),
+            "cardinalite": len(_TEMOINS_QUALIFICATION),
+            "noms": [nom for nom, _, _ in _TEMOINS_QUALIFICATION],
+        },
+        "decisions_figees": DECISIONS_FIGEES_V1,
+    }
+    destination = racine / CHEMIN_RECU_QUALIFICATION
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(recu, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(
+        f"qualification du harnais V1 : {len(candidats)} témoins approuvés, "
+        f"{conformes} conformes"
+    )
+    print(f"interpréteur : pin '{PIN_INTERPRETEUR}', observé '{observe}'")
+    print("verdict : PASS")
+    print(f"reçu écrit : {CHEMIN_RECU_QUALIFICATION.as_posix()}")
+    return 0
+
+
 def _libelle_registre(registre: Path | None, cible: Path) -> str:
     if registre is None:
         return f"registre officiel {REGISTRE_OFFICIEL.as_posix()}"
@@ -1205,6 +1491,81 @@ def _article_acquisition_locale(relatif: str, sha_fichier: str, enveloppe: dict)
     )
 
 
+SECTION_QUALIFICATION = "reçu de qualification du harnais V1"
+VERDICTS_QUALIFICATION = ("PASS", "FAIL", "HARNESS_ERROR")
+
+
+def _charger_recu_qualification(racine: Path) -> tuple[str, dict, str] | None:
+    """Reçu de qualification validé : (chemin relatif, reçu, SHA-256 du fichier)."""
+    chemin = racine / CHEMIN_RECU_QUALIFICATION
+    if not chemin.is_file():
+        return None
+    try:
+        recu = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurRestitution(
+            f"reçu de qualification illisible : {chemin} ({erreur})"
+        ) from erreur
+    if not isinstance(recu, dict) or recu.get("schema_version") != SCHEMA_RECU_QUALIFICATION:
+        raise ErreurRestitution(
+            f"schéma de reçu de qualification inattendu : {chemin}"
+        )
+    if recu.get("verdict") not in VERDICTS_QUALIFICATION:
+        raise ErreurRestitution(
+            "verdict de qualification hors vocabulaire "
+            f"({' | '.join(VERDICTS_QUALIFICATION)}) : {recu.get('verdict')!r}"
+        )
+    for champ in ("date_qualification", "commande_publique", "commande_suite"):
+        if not isinstance(recu.get(champ), str) or not recu[champ].strip():
+            raise ErreurRestitution(
+                f"champ '{champ}' du reçu de qualification : chaîne non vide attendue"
+            )
+    for champ in ("interpreteur", "validateur", "temoins", "decisions_figees"):
+        if not isinstance(recu.get(champ), dict):
+            raise ErreurRestitution(
+                f"champ '{champ}' du reçu de qualification : table attendue"
+            )
+    return (
+        CHEMIN_RECU_QUALIFICATION.as_posix(),
+        recu,
+        _sha256_fichier(chemin),
+    )
+
+
+def _article_qualification(relatif: str, sha_fichier: str, recu: dict) -> str:
+    """Article régénérable à l'identique depuis le reçu de qualification."""
+    interpreteur = recu["interpreteur"]
+    validateur = recu["validateur"]
+    temoins = recu["temoins"]
+    decisions = recu["decisions_figees"]
+    contenu = (
+        "<p><strong>Qualification du harnais V1</strong> — l'instrument est "
+        "requalifié sur les témoins approuvés du paquet, sans comparaison "
+        "d'outillage et sans appel distant.</p>"
+        f"<p>date de qualification <code>{_echapper(recu['date_qualification'])}"
+        f"</code> · verdict <code>{_echapper(recu['verdict'])}</code></p>"
+        f"<p>commande exacte <code>{_echapper(recu['commande_publique'])}</code></p>"
+        f"<p>suite de tests <code>{_echapper(recu['commande_suite'])}</code></p>"
+        f"<p>interpréteur : pin <code>{_echapper(interpreteur.get('pin'))}</code> · "
+        f"observé <code>{_echapper(interpreteur.get('observe'))}</code></p>"
+        f"<p>validateur <code>{_echapper(validateur.get('chemin'))}</code> · "
+        f"SHA-256 <code>{_echapper(validateur.get('sha256'))}</code></p>"
+        f"<p>témoins approuvés : <code>{_echapper(temoins.get('cardinalite'))}"
+        f"</code> · source <code>{_echapper(temoins.get('source'))}</code> · "
+        f"SHA-256 <code>{_echapper(temoins.get('sha256'))}</code></p>"
+        "<p>décisions figées en entrée : route d'évaluation V0 "
+        f"<code>{_echapper(decisions.get('route_evaluation_v0'))}</code> · "
+        "plateforme spécifique "
+        f"<code>{_echapper(decisions.get('plateforme_specifique'))}</code></p>"
+        + _span_source(relatif, sha_fichier, SECTION_QUALIFICATION)
+    )
+    return _article(
+        "fait",
+        contenu,
+        f' data-qualification-harnais="{recu["verdict"]}"',
+    )
+
+
 def _span_source(chemin: str, sha256: str, section: str) -> str:
     return (
         f'<span class="source" data-chemin="{chemin}" data-sha256="{sha256}">'
@@ -1224,6 +1585,7 @@ def _rendre_page(racine: Path) -> bytes:
     # acquisition officielle n'existe, la conclusion du panel reste inchangée.
     recus_locaux = _recus_locaux(racine, etat)
     configurations = _configurations_officielles(racine)
+    qualification = _charger_recu_qualification(racine)
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
         etat, 0, len(configurations)
     )
@@ -1232,6 +1594,8 @@ def _rendre_page(racine: Path) -> bytes:
         racine, etat_relatif, tuple(chemin for chemin, _ in configurations)
     )
     empreintes.update({relatif: sha for relatif, _, sha in recus_locaux})
+    if qualification is not None:
+        empreintes[qualification[0]] = qualification[2]
 
     def src(chemin: str, section: str) -> str:
         return _span_source(chemin, empreintes[chemin], section)
@@ -1420,6 +1784,22 @@ def _rendre_page(racine: Path) -> bytes:
             + "</section>"
         )
 
+    if qualification is not None:
+        relatif_qualification, recu_qualification, sha_qualification = qualification
+        sections.append(
+            "<section id=\"qualification-harnais\"><h2>Qualification du harnais "
+            "V1</h2>"
+            "<p>Cette entrée reprend le reçu de qualification versionné. La "
+            "qualification rejoue les témoins approuvés du paquet contre le "
+            "harnais V1 et le validateur du paquet ; elle ne mesure aucune "
+            "configuration, ne produit aucun classement et ne compare aucun "
+            "outillage.</p>"
+            + _article_qualification(
+                relatif_qualification, sha_qualification, recu_qualification
+            )
+            + "</section>"
+        )
+
     if configurations:
         article_identites_inconnues = _article(
             "fait",
@@ -1586,6 +1966,11 @@ def _rendre_page(racine: Path) -> bytes:
             *SOURCES_AUTORISEES,
             *((chemin, SECTION_REGISTRE) for chemin, _ in configurations),
             *((relatif, SECTION_RECU_LOCAL) for relatif, _, _ in recus_locaux),
+            *(
+                ((qualification[0], SECTION_QUALIFICATION),)
+                if qualification is not None
+                else ()
+            ),
             (etat_relatif, "état V1 versionné"),
         )
     )
@@ -1679,12 +2064,32 @@ def verifier_restitution(racine: Path) -> int:
     _compter_recus(repertoire)
     recus_locaux = _recus_locaux(racine, etat)
     configurations = _configurations_officielles(racine)
+    qualification = _charger_recu_qualification(racine)
     jetons_factuels = _jetons_attendus(etat, 0, len(configurations))
     etat_relatif = CHEMIN_ETAT.as_posix()
     empreintes = _empreintes_sources(
         racine, etat_relatif, tuple(chemin for chemin, _ in configurations)
     )
     empreintes.update({relatif: sha for relatif, _, sha in recus_locaux})
+    if qualification is not None:
+        empreintes[qualification[0]] = qualification[2]
+
+    if qualification is not None:
+        attendu = _article_qualification(
+            qualification[0], qualification[2], qualification[1]
+        )
+        if attendu not in page:
+            echecs.append(
+                "entrée de qualification du harnais infidèle ou absente : "
+                f"verdict {qualification[1]['verdict']}"
+            )
+    nombre_qualifications = page.count(' data-qualification-harnais="')
+    attendu_qualifications = 0 if qualification is None else 1
+    if nombre_qualifications != attendu_qualifications:
+        echecs.append(
+            f"{attendu_qualifications} entrée de qualification attendue dans la "
+            f"page, {nombre_qualifications} trouvée"
+        )
 
     for relatif, enveloppe, sha in recus_locaux:
         attendu = _article_acquisition_locale(relatif, sha, enveloppe)
@@ -1807,13 +2212,15 @@ _USAGE = (
     "usage : campagne_v1.py enregistrer [--registre <chemin>] --fichier <chemin> "
     "| panel [--registre <chemin>] | autorisations [--configuration <id>] "
     "| acquerir --local --configuration <id> "
-    "| restituer | verifier-restitution"
+    "| qualifier | restituer | verifier-restitution"
 )
 
 
 def principal(arguments: list[str], racine: Path | None = None) -> int:
     if racine is None:
         racine = Path(__file__).resolve().parent.parent
+    if arguments == ["qualifier"]:
+        return qualifier_harnais(racine)
     if arguments == ["restituer"]:
         try:
             return restituer(racine)
