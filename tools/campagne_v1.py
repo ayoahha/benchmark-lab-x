@@ -613,6 +613,16 @@ def _executer_borne(
 
 
 def acquerir_local(racine: Path, identifiant: str) -> int:
+    # Confinement : le contrat de slug est vérifié avant toute construction ou
+    # résolution de chemin ; traversée, séparateur et chemin absolu sont refusés
+    # sans lecture de cible, sans exécution et sans écriture de reçu
+    if not _MOTIF_SLUG.match(identifiant):
+        print(
+            f"ECHEC champ 'configuration_id' : '{identifiant}' n'est pas un slug "
+            "stable (minuscules, chiffres, tirets) ; identifiant refusé avant "
+            "toute résolution de chemin hors du répertoire local"
+        )
+        return 1
     chemin_configuration = racine / CONFIGURATIONS_LOCALES / f"{identifiant}.toml"
     if not chemin_configuration.is_file():
         print(
@@ -1276,6 +1286,22 @@ def _rendre_page(racine: Path) -> bytes:
         + "</section>"
     )
 
+    # Fidélité MSW : avec un reçu local présent, l'absence d'acquisition et de
+    # reçu se dit uniquement à portée officielle qualifiée, jamais littéralement
+    if recus_locaux:
+        absence_acquisition = (
+            "aucune acquisition officielle n'existe ; le reçu de démonstration "
+            "locale, hors panel officiel, n'établit aucune mesure du panel"
+        )
+        premisse_recus = (
+            f"{len(recus_locaux)} reçu(s) de démonstration locale hors panel "
+            "officiel et aucun reçu rattaché au panel officiel dans le "
+            "répertoire de reçus V1"
+        )
+    else:
+        absence_acquisition = "aucune acquisition n'existe"
+        premisse_recus = "zéro reçu dans le répertoire de reçus V1"
+
     if configurations:
         article_panel_courant = _article(
             "fait",
@@ -1287,12 +1313,12 @@ def _rendre_page(racine: Path) -> bytes:
             "deduction",
             f"<p><code id=\"jeton-conclusion\">{jeton_conclusion}</code> — déduction "
             "raisonnée : des configurations sont déclarées mais aucune n'est mesurée "
-            "et aucune acquisition n'existe ; une absence de preuve n'est jamais "
+            f"et {absence_acquisition} ; une absence de preuve n'est jamais "
             "transformée en résultat favorable, donc la seule conclusion dérivable "
             "est l'abstention. Aucune valeur de remplacement n'est créée.</p>"
             + src(rules, "U-018"),
             ' data-premisses="configurations déclarées et non mesurées selon le '
-            "registre officiel versionné ; zéro reçu dans le répertoire de reçus V1 ; "
+            f"registre officiel versionné ; {premisse_recus} ; "
             'règle U-018 de docs/RULES.md"',
         )
     else:
@@ -1305,12 +1331,12 @@ def _rendre_page(racine: Path) -> bytes:
         article_conclusion = _article(
             "deduction",
             f"<p><code id=\"jeton-conclusion\">{jeton_conclusion}</code> — déduction "
-            "raisonnée : le panel est vide et aucune acquisition n'existe ; une absence "
+            f"raisonnée : le panel est vide et {absence_acquisition} ; une absence "
             "de preuve n'est jamais transformée en résultat favorable, donc la seule "
             "conclusion dérivable est l'abstention. Aucune valeur de remplacement n'est "
             "créée.</p>" + src(rules, "U-018"),
-            ' data-premisses="panel vide selon l\'état V1 versionné ; zéro reçu dans le '
-            "répertoire de reçus V1 ; règle U-018 de docs/RULES.md\"",
+            " data-premisses=\"panel vide selon l'état V1 versionné ; "
+            f'{premisse_recus} ; règle U-018 de docs/RULES.md"',
         )
 
     if recus_locaux:
@@ -1345,8 +1371,15 @@ def _rendre_page(racine: Path) -> bytes:
             "Elle est déclarée et non mesurée : tout champ non observé reste "
             "<code>INCONNU</code>, le modèle demandé est marqué REQUESTED, "
             "et aucune activité de compte, aucune authentification et aucune "
-            "disponibilité n'en est déduite. Aucun préflight, aucune acquisition et "
-            "aucune mesure n'existe.</p>"
+            "disponibilité n'en est déduite. "
+            + (
+                "Aucun préflight, aucune acquisition officielle et aucune mesure "
+                "du panel n'existe ; le reçu de démonstration locale reste hors "
+                "panel officiel."
+                if recus_locaux
+                else "Aucun préflight, aucune acquisition et aucune mesure n'existe."
+            )
+            + "</p>"
             + "".join(
                 _article_panel(chemin, empreintes[chemin], donnees)
                 for chemin, donnees in configurations
@@ -1409,10 +1442,19 @@ def _rendre_page(racine: Path) -> bytes:
         + article_identites_inconnues
         + _article(
             "fait",
-            "<p>Aucun reçu V1 n'existe : expérience réelle, coûts, latences et "
-            "couverture restent <code>INCONNU</code>. Aucune sortie acceptable "
-            "n'existant, tout coût par sortie officiellement acceptable serait "
-            "<code>NON_DEFINI</code>.</p>"
+            (
+                "<p>Aucun reçu V1 rattaché au panel officiel n'existe : "
+                "expérience réelle, coûts, latences et couverture du panel "
+                "restent <code>INCONNU</code> ; le reçu de démonstration locale, "
+                "hors panel officiel, n'établit aucune de ces mesures. Aucune "
+                "sortie officiellement acceptable n'existant, tout coût par "
+                "sortie officiellement acceptable serait <code>NON_DEFINI</code>.</p>"
+                if recus_locaux
+                else "<p>Aucun reçu V1 n'existe : expérience réelle, coûts, "
+                "latences et couverture restent <code>INCONNU</code>. Aucune "
+                "sortie acceptable n'existant, tout coût par sortie "
+                "officiellement acceptable serait <code>NON_DEFINI</code>.</p>"
+            )
             + src(etat_relatif, "état V1 versionné")
             + src(rules, "U-020"),
         )
