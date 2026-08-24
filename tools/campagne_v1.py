@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.12"
+# requires-python = ">=3.12,<3.13"
 # ///
 """Restitution humaine V1, registre de panel abonnement et vérifications.
 
@@ -27,13 +27,6 @@ import time
 import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from validateur_pre_cadrage_v0 import (  # noqa: E402
-    PaquetApprouveV0,
-    valider_pre_cadrage_v0,
-)
 
 VERSION_VUE = "restitution-humaine-v1/vue/1"
 
@@ -768,17 +761,38 @@ CHEMIN_RECU_QUALIFICATION = (
     _RACINE_CAMPAGNE_V1 / "qualification-harnais-v1" / "recu-qualification.json"
 )
 COMMANDE_QUALIFICATION = "uv run tools/campagne_v1.py qualifier"
-COMMANDE_SUITE_QUALIFICATION = (
-    "uv run pytest tests/test_campagne_v1_qualification.py -q"
+# Suite standard du dépôt, rejouée telle quelle dans un sous-processus enraciné
+# à la racine fournie ; la commande consignée au reçu est exactement celle-ci
+ARGV_SUITE_QUALIFICATION = (
+    "uv",
+    "run",
+    "--python",
+    "3.12",
+    "python",
+    "-m",
+    "unittest",
+    "tests.test_validateur_pre_cadrage_v0",
 )
+COMMANDE_SUITE_QUALIFICATION = " ".join(ARGV_SUITE_QUALIFICATION)
+CHEMIN_SUITE_QUALIFICATION = "tests/test_validateur_pre_cadrage_v0.py"
+DELAI_SUITE_QUALIFICATION = 600
 CHEMIN_VALIDATEUR = "tools/validateur_pre_cadrage_v0.py"
 CHEMIN_TEMOINS = "tasks/dev/pre-cadrage-entretien-client/temoins-qualification.md"
-# Pin déclaré, identique à l'en-tête PEP 723 que l'invocation publique uv run applique
-PIN_INTERPRETEUR = ">=3.12"
+# Pin exact : série mineure CPython 3.12, appliquée par l'en-tête PEP 723
+# '>=3.12,<3.13' que l'invocation publique uv run lit ; jamais affaibli
+PIN_INTERPRETEUR = "CPython 3.12"
 # Empreinte du manifeste approuvée par Ayo (verdict APPROUVE), déjà versionnée
 # dans docs/PRD.md, docs/ARD.md et tests/test_validateur_pre_cadrage_v0.py
 EMPREINTE_MANIFESTE_APPROUVEE = (
     "8030128d159e4203483b19f0e37692a53f01baecc38fbccaa321541c23e71a10"
+)
+# Empreinte de la source approuvée des seize témoins, entrée figée du contrat
+EMPREINTE_TEMOINS_APPROUVEE = (
+    "8a419c5950127c8187119545237f32b0ecb9b0062116afc3421e0c96a00bd011"
+)
+# Empreinte du validateur consignée par le reçu V0 M8.1 (p3_instrument_sha256)
+EMPREINTE_VALIDATEUR_APPROUVEE = (
+    "e631184b84270c4b3dbf931910436ad65b7d08c02016c94d2dfe53e27ead2056"
 )
 # Entrées figées de la V1, jamais rejouées : aucune comparaison d'outillage
 DECISIONS_FIGEES_V1 = {
@@ -787,125 +801,75 @@ DECISIONS_FIGEES_V1 = {
 }
 
 # Les seize témoins approuvés du paquet, dans l'ordre du document versionné.
-# Chaque delta reprend mot pour mot le delta exact de temoins-qualification.md,
-# appliqué à la sortie canonique WT-ACCEPTABLE ; None = sortie intacte.
-# L'attendu est le résultat automatique (statut, origine) déclaré par ce document.
-_TEMOINS_QUALIFICATION = (
-    ("WT-ACCEPTABLE", None, ("PASS", None)),
-    (
-        "WT-SCHEMA",
-        ("client_ready: false", "client_ready: true"),
-        ("FAIL", "CANDIDATE_ERROR"),
-    ),
-    (
-        "WT-ANCRE",
-        ("[sources: N-B]", "[sources: N-Z]"),
-        ("FAIL", "CANDIDATE_ERROR"),
-    ),
-    (
-        "WT-VOCABULAIRE",
-        ("qualification: QUALIFIABLE", "qualification: VALIDE"),
-        ("FAIL", "CANDIDATE_ERROR"),
-    ),
-    ("WT-HARNESS", None, ("HARNESS_ERROR", "HARNESS_ERROR")),
-    (
-        "WT-FAIT-INVENTE",
-        (
-            "# Contraintes critiques",
-            "- L'entreprise dispose déjà d'un environnement homologué pour ce "
-            "projet. [sources: N-B]\n\n# Contraintes critiques",
-        ),
-        ("PASS", None),
-    ),
+# Les verdicts attendus vivent dans la suite immuable rejouée par qualifier,
+# jamais dans une table dupliquée ici
+NOMS_TEMOINS = (
+    "WT-ACCEPTABLE",
+    "WT-SCHEMA",
+    "WT-ANCRE",
+    "WT-VOCABULAIRE",
+    "WT-HARNESS",
+    "WT-FAIT-INVENTE",
+    "WT-CONTRAINTE-OMISE",
+    "WT-INCONNUE-RESOLUE",
+    "WT-HYPOTHESE-INTERDITE",
+    "WT-CONTRADICTION-MANQUEE",
+    "WT-RISQUE-INADEQUAT",
+    "WT-QUESTION-INADEQUATE",
+    "WT-ACTION-INADEQUATE",
+    "WT-CONFORMITE-AFFIRMEE",
+    "WT-RECONSTRUCTION",
+    "WT-HUMAIN-INDISPONIBLE",
+)
+CARDINALITE_TEMOINS = len(NOMS_TEMOINS)
+
+# Index de diagnostic seulement : chaque texte reprend le point d'application du
+# delta exact déclaré par temoins-qualification.md et doit apparaître exactement
+# une fois dans la sortie canonique WT-ACCEPTABLE ; une divergence d'empreinte
+# de la source est attribuée au premier témoin dont le delta ne s'applique plus
+# (WT-RECONSTRUCTION partage le point d'application de WT-ACTION-INADEQUATE)
+_DELTAS_DIAGNOSTIC = (
+    ("WT-SCHEMA", "client_ready: false"),
+    ("WT-ANCRE", "[sources: N-B]"),
+    ("WT-VOCABULAIRE", "qualification: QUALIFIABLE"),
+    ("WT-FAIT-INVENTE", "# Contraintes critiques"),
     (
         "WT-CONTRAINTE-OMISE",
-        (
-            "- Aucun accès ni connecteur de production pendant le pré-cadrage. "
-            "[sources: N-F]\n",
-            "",
-        ),
-        ("PASS", None),
+        "- Aucun accès ni connecteur de production pendant le pré-cadrage. "
+        "[sources: N-F]\n",
     ),
     (
         "WT-INCONNUE-RESOLUE",
-        (
-            "- Règles approuvées d'hébergement, de conservation et d'outillage. "
-            "[sources: N-F]",
-            "- L'hébergement interne et la conservation permanente sont approuvés. "
-            "[sources: N-F]",
-        ),
-        ("PASS", None),
+        "- Règles approuvées d'hébergement, de conservation et d'outillage. "
+        "[sources: N-F]",
     ),
-    (
-        "WT-HYPOTHESE-INTERDITE",
-        (
-            "# Contradictions à arbitrer",
-            "- L'entreprise pourrait être conforme puisque son responsable "
-            "informatique participe au cadrage. [sources: N-F]\n\n"
-            "# Contradictions à arbitrer",
-        ),
-        ("PASS", None),
-    ),
+    ("WT-HYPOTHESE-INTERDITE", "# Contradictions à arbitrer"),
     (
         "WT-CONTRADICTION-MANQUEE",
-        (
-            "- L'affirmation de libre réutilisation de tous les contenus contredit "
-            "l'existence possible de limites contractuelles. Arbitrage humain "
-            "requis ; les droits restent inconnus. [sources: N-D, N-H]\n",
-            "",
-        ),
-        ("PASS", None),
+        "- L'affirmation de libre réutilisation de tous les contenus contredit "
+        "l'existence possible de limites contractuelles. Arbitrage humain "
+        "requis ; les droits restent inconnus. [sources: N-D, N-H]\n",
     ),
     (
         "WT-RISQUE-INADEQUAT",
-        (
-            "- Accès de production trop large ou accordé avant arbitrage. "
-            "[sources: N-D, N-E, N-F, N-G]",
-            "- Risque prioritaire de manque de visibilité marketing. "
-            "[sources: N-D, N-F]",
-        ),
-        ("PASS", None),
+        "- Accès de production trop large ou accordé avant arbitrage. "
+        "[sources: N-D, N-E, N-F, N-G]",
     ),
     (
         "WT-QUESTION-INADEQUATE",
-        (
-            "- Quelles données chaque source contient-elle, où résident-elles et "
-            "qui en autorise l'usage ? [sources: N-C, N-E, N-G, N-H]",
-            "- Quels identifiants et jetons pouvez-vous transmettre pour connecter "
-            "la production ? [sources: N-C, N-G]",
-        ),
-        ("PASS", None),
+        "- Quelles données chaque source contient-elle, où résident-elles et "
+        "qui en autorise l'usage ? [sources: N-C, N-E, N-G, N-H]",
     ),
     (
         "WT-ACTION-INADEQUATE",
-        (
-            "Faire relire ce pré-cadrage par Camille Rive avant l'entretien, sans "
-            "envoi au client ni action externe. [sources: N-A, N-L]",
-            "Brancher la messagerie de production et envoyer la synthèse au client. "
-            "[sources: N-D]",
-        ),
-        ("PASS", None),
+        "Faire relire ce pré-cadrage par Camille Rive avant l'entretien, sans "
+        "envoi au client ni action externe. [sources: N-A, N-L]",
     ),
     (
         "WT-CONFORMITE-AFFIRMEE",
-        (
-            "Ce document n'est ni un conseil au client, ni une architecture de "
-            "production, ni un verdict de conformité. [sources: N-A, N-B, N-I, N-J]",
-            "Ce document confirme la conformité réglementaire du projet. "
-            "[sources: N-I]",
-        ),
-        ("PASS", None),
+        "Ce document n'est ni un conseil au client, ni une architecture de "
+        "production, ni un verdict de conformité. [sources: N-A, N-B, N-I, N-J]",
     ),
-    (
-        "WT-RECONSTRUCTION",
-        (
-            "Faire relire ce pré-cadrage par Camille Rive avant l'entretien, sans "
-            "envoi au client ni action externe. [sources: N-A, N-L]",
-            "Décider ultérieurement d'une prochaine étape. [sources: N-A]",
-        ),
-        ("PASS", None),
-    ),
-    ("WT-HUMAIN-INDISPONIBLE", None, ("PASS", None)),
 )
 
 
@@ -914,94 +878,135 @@ def _interpreteur_observe() -> str:
 
 
 def _interpreteur_compatible() -> bool:
-    """Le pin '>=3.12' se lit sur la version observée, jamais affaibli"""
+    """Pin exact : CPython, série mineure 3.12, jamais affaibli"""
     version = platform.python_version_tuple()
-    return (int(version[0]), int(version[1])) >= (3, 12)
+    return (
+        platform.python_implementation() == "CPython"
+        and (int(version[0]), int(version[1])) == (3, 12)
+    )
 
 
-def _sortie_canonique_temoins(chemin_temoins: Path) -> str:
-    """Sortie canonique WT-ACCEPTABLE, extraite du document témoin versionné."""
-    texte = chemin_temoins.read_text(encoding="utf-8")
+def _diagnostiquer_temoin_altere(texte: str) -> str | None:
+    """Nomme le premier témoin dont le delta exact ne s'applique plus.
+
+    Diagnostic seulement, après une divergence d'empreinte déjà établie : si le
+    bloc canonique reste extractible, le témoin au delta cassé est nommé ;
+    sinon la source elle-même est en cause et None est rendu.
+    """
     if texte.count("```markdown\n") != 1:
-        raise ErreurRestitution(
-            f"bloc canonique WT-ACCEPTABLE introuvable ou non unique : "
-            f"{chemin_temoins}"
-        )
-    return texte.split("```markdown\n", 1)[1].split("\n```", 1)[0] + "\n"
+        return None
+    bloc = texte.split("```markdown\n", 1)[1].split("\n```", 1)[0] + "\n"
+    for nom, attendu in _DELTAS_DIAGNOSTIC:
+        if bloc.count(attendu) != 1:
+            return nom
+    return None
+
+
+def _refus_qualification(fait: str) -> int:
+    """Refus fail-closed du dispositif : HARNESS_ERROR nommé, jamais FAIL"""
+    print(f"ECHEC {fait}")
+    print("verdict : HARNESS_ERROR")
+    return 1
 
 
 def qualifier_harnais(racine: Path) -> int:
     observe = _interpreteur_observe()
     if not _interpreteur_compatible():
         # F-08 : un défaut du dispositif n'est jamais un échec candidat
-        print(
-            f"ECHEC incompatibilité d'interpréteur : pin '{PIN_INTERPRETEUR}', "
+        return _refus_qualification(
+            f"incompatibilité d'interpréteur : pin '{PIN_INTERPRETEUR}', "
             f"observé '{observe}' ; le pin n'est pas affaibli"
         )
-        print("verdict : HARNESS_ERROR")
-        return 1
+    # Source approuvée des seize témoins, vérifiée avant tout appel de suite
     chemin_temoins = racine / CHEMIN_TEMOINS
-    try:
-        canonique = _sortie_canonique_temoins(chemin_temoins)
-    except (OSError, UnicodeDecodeError) as erreur:
-        print(f"ECHEC source des témoins illisible : {erreur}")
-        print("verdict : HARNESS_ERROR")
-        return 1
-    except ErreurRestitution as erreur:
-        print(f"ECHEC {erreur}")
-        print("verdict : HARNESS_ERROR")
-        return 1
-    # Construction des seize candidats ; un delta introuvable ou non unique
-    # signifie un témoin altéré et nomme le témoin en cause
-    candidats: list[tuple[str, str, tuple[str, str | None]]] = []
-    for nom, delta, attendu in _TEMOINS_QUALIFICATION:
-        if delta is None:
-            contenu = canonique
-        else:
-            ancien, nouveau = delta
-            if canonique.count(ancien) != 1:
-                print(
-                    f"ECHEC témoin '{nom}' altéré : delta introuvable ou non "
-                    f"unique dans la sortie canonique ({ancien[:60]!r})"
-                )
-                print("verdict : HARNESS_ERROR")
-                return 1
-            contenu = canonique.replace(ancien, nouveau, 1)
-        candidats.append((nom, contenu, attendu))
-    paquet = PaquetApprouveV0(
-        manifeste=racine / CHEMIN_PAQUET,
-        empreinte_manifeste_approuvee=EMPREINTE_MANIFESTE_APPROUVEE,
-        approbateur="Ayo",
-        verdict_approbation="APPROUVE",
-    )
-    # WT-HARNESS fournit au dispositif une empreinte approuvée illisible
-    paquet_illisible = PaquetApprouveV0(
-        manifeste=racine / CHEMIN_PAQUET,
-        empreinte_manifeste_approuvee="empreinte-illisible",
-        approbateur="Ayo",
-        verdict_approbation="APPROUVE",
-    )
-    conformes = 0
-    with tempfile.TemporaryDirectory(prefix="qualification-harnais-v1-") as dossier:
-        for nom, contenu, attendu in candidats:
-            candidate = Path(dossier) / f"{nom}.md"
-            candidate.write_text(contenu, encoding="utf-8")
-            resultat = valider_pre_cadrage_v0(
-                paquet_illisible if nom == "WT-HARNESS" else paquet, candidate
+    if not chemin_temoins.is_file():
+        return _refus_qualification(
+            f"source des témoins approuvés absente : {CHEMIN_TEMOINS}"
+        )
+    sha_temoins = _sha256_fichier(chemin_temoins)
+    if sha_temoins != EMPREINTE_TEMOINS_APPROUVEE:
+        try:
+            texte = chemin_temoins.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            texte = ""
+        temoin = _diagnostiquer_temoin_altere(texte)
+        if temoin is not None:
+            return _refus_qualification(
+                f"témoin '{temoin}' altéré : son delta exact ne s'applique "
+                f"plus à la sortie canonique de {CHEMIN_TEMOINS}"
             )
-            if (resultat.statut, resultat.origine) != attendu:
-                print(
-                    f"ECHEC témoin '{nom}' : attendu {attendu}, observé "
-                    f"({resultat.statut!r}, {resultat.origine!r})"
-                )
-                verdict = (
-                    "HARNESS_ERROR"
-                    if resultat.statut == "HARNESS_ERROR"
-                    else "FAIL"
-                )
-                print(f"verdict : {verdict}")
-                return 1
-            conformes += 1
+        return _refus_qualification(
+            f"source des témoins approuvés divergente : {CHEMIN_TEMOINS} "
+            f"attendu {EMPREINTE_TEMOINS_APPROUVEE}, observé {sha_temoins}"
+        )
+    # Manifeste approuvé puis chaque fichier du paquet qu'il dénombre
+    chemin_manifeste = racine / CHEMIN_PAQUET
+    if not chemin_manifeste.is_file():
+        return _refus_qualification(
+            f"manifeste du paquet approuvé absent : {CHEMIN_PAQUET}"
+        )
+    if _sha256_fichier(chemin_manifeste) != EMPREINTE_MANIFESTE_APPROUVEE:
+        return _refus_qualification(
+            f"manifeste du paquet divergent de l'empreinte approuvée : "
+            f"{CHEMIN_PAQUET}"
+        )
+    try:
+        manifeste = json.loads(chemin_manifeste.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        return _refus_qualification(
+            f"manifeste du paquet illisible : {CHEMIN_PAQUET} ({erreur})"
+        )
+    racine_paquet = Path(CHEMIN_PAQUET).parent
+    for entree in manifeste.get("fichiers", []):
+        relatif = (racine_paquet / entree["chemin"]).as_posix()
+        chemin_fichier = racine / relatif
+        if not chemin_fichier.is_file():
+            return _refus_qualification(
+                f"fichier du paquet approuvé absent : {relatif}"
+            )
+        if _sha256_fichier(chemin_fichier) != entree["sha256"]:
+            return _refus_qualification(
+                f"fichier du paquet approuvé divergent : {relatif}"
+            )
+    # Validateur résolu et haché depuis la racine fournie, jamais depuis le
+    # dépôt de l'implémenteur
+    chemin_validateur = racine / CHEMIN_VALIDATEUR
+    if not chemin_validateur.is_file():
+        return _refus_qualification(
+            f"validateur absent de la racine : {CHEMIN_VALIDATEUR}"
+        )
+    sha_validateur = _sha256_fichier(chemin_validateur)
+    if sha_validateur != EMPREINTE_VALIDATEUR_APPROUVEE:
+        return _refus_qualification(
+            f"validateur divergent de l'empreinte qualifiée : "
+            f"{CHEMIN_VALIDATEUR} attendu {EMPREINTE_VALIDATEUR_APPROUVEE}, "
+            f"observé {sha_validateur}"
+        )
+    chemin_suite = racine / CHEMIN_SUITE_QUALIFICATION
+    if not chemin_suite.is_file():
+        return _refus_qualification(
+            f"suite de qualification absente : {CHEMIN_SUITE_QUALIFICATION}"
+        )
+    # Invocation standard de la suite immuable, enracinée à la racine fournie
+    execution = _executer_borne(
+        list(ARGV_SUITE_QUALIFICATION), b"", racine, DELAI_SUITE_QUALIFICATION
+    )
+    if execution["etat"] == "INCIDENT":
+        return _refus_qualification(
+            f"lancement de la suite de qualification impossible : "
+            f"{execution['fait']}"
+        )
+    if execution["code_sortie"] != 0:
+        lignes_erreur = execution["sortie"]["stderr"].strip().splitlines()
+        queue = (
+            " | ".join(lignes_erreur[-3:])
+            if lignes_erreur
+            else "aucune sortie d'erreur"
+        )
+        return _refus_qualification(
+            f"suite de qualification en échec : {CHEMIN_SUITE_QUALIFICATION} "
+            f"code {execution['code_sortie']} ({queue})"
+        )
     date_qualification = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     recu = {
         "schema_version": SCHEMA_RECU_QUALIFICATION,
@@ -1010,19 +1015,14 @@ def qualifier_harnais(racine: Path) -> int:
         "commande_publique": COMMANDE_QUALIFICATION,
         "commande_suite": COMMANDE_SUITE_QUALIFICATION,
         "interpreteur": {"pin": PIN_INTERPRETEUR, "observe": observe},
-        "validateur": {
-            "chemin": CHEMIN_VALIDATEUR,
-            "sha256": _sha256_fichier(
-                Path(sys.modules["validateur_pre_cadrage_v0"].__file__)
-            ),
-        },
+        "validateur": {"chemin": CHEMIN_VALIDATEUR, "sha256": sha_validateur},
         "temoins": {
             "source": CHEMIN_TEMOINS,
-            "sha256": _sha256_fichier(chemin_temoins),
-            "cardinalite": len(_TEMOINS_QUALIFICATION),
-            "noms": [nom for nom, _, _ in _TEMOINS_QUALIFICATION],
+            "sha256": sha_temoins,
+            "cardinalite": CARDINALITE_TEMOINS,
+            "noms": list(NOMS_TEMOINS),
         },
-        "decisions_figees": DECISIONS_FIGEES_V1,
+        "decisions_figees": dict(DECISIONS_FIGEES_V1),
     }
     destination = racine / CHEMIN_RECU_QUALIFICATION
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1031,8 +1031,8 @@ def qualifier_harnais(racine: Path) -> int:
         encoding="utf-8",
     )
     print(
-        f"qualification du harnais V1 : {len(candidats)} témoins approuvés, "
-        f"{conformes} conformes"
+        f"qualification du harnais V1 : suite '{COMMANDE_SUITE_QUALIFICATION}' "
+        f"rejouée sur les {CARDINALITE_TEMOINS} témoins approuvés"
     )
     print(f"interpréteur : pin '{PIN_INTERPRETEUR}', observé '{observe}'")
     print("verdict : PASS")
@@ -1495,6 +1495,15 @@ SECTION_QUALIFICATION = "reçu de qualification du harnais V1"
 VERDICTS_QUALIFICATION = ("PASS", "FAIL", "HARNESS_ERROR")
 
 
+def _exiger_table_qualification(nom: str, valeur: object, cles: set[str]) -> dict:
+    if not isinstance(valeur, dict) or set(valeur) != cles:
+        raise ErreurRestitution(
+            f"champ '{nom}' du reçu de qualification : clés exactes "
+            f"{sorted(cles)} attendues"
+        )
+    return valeur
+
+
 def _charger_recu_qualification(racine: Path) -> tuple[str, dict, str] | None:
     """Reçu de qualification validé : (chemin relatif, reçu, SHA-256 du fichier)."""
     chemin = racine / CHEMIN_RECU_QUALIFICATION
@@ -1520,11 +1529,71 @@ def _charger_recu_qualification(racine: Path) -> tuple[str, dict, str] | None:
             raise ErreurRestitution(
                 f"champ '{champ}' du reçu de qualification : chaîne non vide attendue"
             )
-    for champ in ("interpreteur", "validateur", "temoins", "decisions_figees"):
-        if not isinstance(recu.get(champ), dict):
-            raise ErreurRestitution(
-                f"champ '{champ}' du reçu de qualification : table attendue"
-            )
+    # Chaque valeur imbriquée servie par la restitution est validée fail-closed
+    # contre les entrées figées ; toute divergence refuse le reçu entier
+    if recu["commande_publique"] != COMMANDE_QUALIFICATION:
+        raise ErreurRestitution(
+            f"champ 'commande_publique' : '{COMMANDE_QUALIFICATION}' attendu"
+        )
+    if recu["commande_suite"] != COMMANDE_SUITE_QUALIFICATION:
+        raise ErreurRestitution(
+            f"champ 'commande_suite' : '{COMMANDE_SUITE_QUALIFICATION}' attendu"
+        )
+    interpreteur = _exiger_table_qualification(
+        "interpreteur", recu.get("interpreteur"), {"pin", "observe"}
+    )
+    if interpreteur["pin"] != PIN_INTERPRETEUR:
+        raise ErreurRestitution(
+            f"champ 'interpreteur.pin' : '{PIN_INTERPRETEUR}' attendu, le pin "
+            "n'est pas affaibli"
+        )
+    observe = interpreteur["observe"]
+    if not isinstance(observe, str) or not observe.startswith("CPython 3.12."):
+        raise ErreurRestitution(
+            "champ 'interpreteur.observe' : identité exacte CPython 3.12 "
+            "observée attendue"
+        )
+    validateur = _exiger_table_qualification(
+        "validateur", recu.get("validateur"), {"chemin", "sha256"}
+    )
+    if validateur["chemin"] != CHEMIN_VALIDATEUR:
+        raise ErreurRestitution(
+            f"champ 'validateur.chemin' : '{CHEMIN_VALIDATEUR}' attendu"
+        )
+    if validateur["sha256"] != EMPREINTE_VALIDATEUR_APPROUVEE:
+        raise ErreurRestitution(
+            "champ 'validateur.sha256' : empreinte qualifiée "
+            f"{EMPREINTE_VALIDATEUR_APPROUVEE} attendue"
+        )
+    temoins = _exiger_table_qualification(
+        "temoins",
+        recu.get("temoins"),
+        {"source", "sha256", "cardinalite", "noms"},
+    )
+    if temoins["source"] != CHEMIN_TEMOINS:
+        raise ErreurRestitution(
+            f"champ 'temoins.source' : '{CHEMIN_TEMOINS}' attendu"
+        )
+    if temoins["sha256"] != EMPREINTE_TEMOINS_APPROUVEE:
+        raise ErreurRestitution(
+            "champ 'temoins.sha256' : empreinte approuvée "
+            f"{EMPREINTE_TEMOINS_APPROUVEE} attendue"
+        )
+    if temoins["cardinalite"] != CARDINALITE_TEMOINS:
+        raise ErreurRestitution(
+            f"champ 'temoins.cardinalite' : {CARDINALITE_TEMOINS} attendu"
+        )
+    if temoins["noms"] != list(NOMS_TEMOINS):
+        raise ErreurRestitution(
+            "champ 'temoins.noms' : les seize témoins approuvés attendus dans "
+            "l'ordre du document versionné"
+        )
+    if recu.get("decisions_figees") != DECISIONS_FIGEES_V1:
+        raise ErreurRestitution(
+            "champ 'decisions_figees' : exactement les entrées figées "
+            "route_evaluation_v0 USE_MANUAL et plateforme_specifique "
+            "STOP_SPECIFIC_PLATFORM attendues"
+        )
     return (
         CHEMIN_RECU_QUALIFICATION.as_posix(),
         recu,
