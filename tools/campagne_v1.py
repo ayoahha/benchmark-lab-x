@@ -7,6 +7,7 @@ Interface figée :
 - uv run tools/campagne_v1.py enregistrer [--registre <chemin>] --fichier <chemin>
 - uv run tools/campagne_v1.py panel [--registre <chemin>]
 - uv run tools/campagne_v1.py autorisations [--configuration <id>]
+- uv run tools/campagne_v1.py acquerir --local --configuration <id>
 - uv run tools/campagne_v1.py restituer
 - uv run tools/campagne_v1.py verifier-restitution
 """
@@ -15,8 +16,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import signal
+import subprocess
 import sys
+import tempfile
+import time
 import tomllib
 from pathlib import Path
 
@@ -28,6 +34,28 @@ CHEMIN_PAGE = _RACINE_CAMPAGNE_V1 / "restitution-humaine-v1" / "index.html"
 
 # Registre officiel de campagne V1 : le panel vit dans ces fichiers, jamais dans le code.
 REGISTRE_OFFICIEL = _RACINE_CAMPAGNE_V1 / "registre-panel-v1"
+
+# Configurations locales non officielles : seules cibles de 'acquerir --local'.
+CONFIGURATIONS_LOCALES = _RACINE_CAMPAGNE_V1 / "configurations-locales"
+
+SCHEMA_RECU = "campagne-v1-recu-abonnement/v1"
+PROFIL_MESURE_RECU = "subscription"
+
+# Sources citées telles quelles par le reçu, sans promotion ni approbation.
+CHEMIN_CARTE = "tasks/dev/pre-cadrage-entretien-client/brief-proprietaire.md"
+CHEMIN_PAQUET = "tasks/dev/pre-cadrage-entretien-client/manifeste-paquet.json"
+CHEMIN_STIMULUS = "tasks/dev/pre-cadrage-entretien-client/stimulus.md"
+
+# Vocabulaire incident fermé du profil abonnement V1.
+INCIDENTS_V1 = (
+    "PROVIDER_FAILURE",
+    "HARNESS_ERROR",
+    "IDENTITY_MISMATCH",
+    "MISSING_OBSERVATION",
+    "QUOTA_EXHAUSTED",
+)
+# Incidents exigeant un fait explicite et attribuable, jamais déduits d'une absence.
+INCIDENTS_ATTRIBUABLES = ("PROVIDER_FAILURE", "IDENTITY_MISMATCH", "QUOTA_EXHAUSTED")
 
 SCHEMA_CONFIGURATION = "campagne-v1-configuration-abonnement/v1"
 INCONNU = "INCONNU"
@@ -287,6 +315,435 @@ def _charger_configuration(chemin: Path) -> dict:
     return _valider_configuration(donnees)
 
 
+class ErreurRecu(Exception):
+    """Refus fail-closed d'un reçu V1 abonnement, nommant le fait fautif."""
+
+
+def octets_canoniques(valeur: object) -> bytes:
+    """Convention canonique reprise de tools/campaign_v0_shared_core_adapter.py."""
+    return (
+        json.dumps(
+            valeur,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
+def adresse_canonique(valeur: object) -> str:
+    return hashlib.sha256(octets_canoniques(valeur)).hexdigest()
+
+
+_MOTIF_SHA256 = re.compile(r"^[a-f0-9]{64}$")
+
+
+def _exiger_cles(nom: str, valeur: object, cles: set[str]) -> dict:
+    if not isinstance(valeur, dict) or set(valeur) != cles:
+        raise ErreurRecu(f"champ '{nom}' : clés exactes {sorted(cles)} attendues")
+    return valeur
+
+
+def _exiger_sha256_recu(nom: str, valeur: object) -> None:
+    if not isinstance(valeur, str) or not _MOTIF_SHA256.match(valeur):
+        raise ErreurRecu(f"champ '{nom}' : SHA-256 hexadécimal attendu")
+
+
+def _valider_source_recu(nom: str, valeur: object, chemin_attendu: str) -> dict:
+    source = _exiger_cles(nom, valeur, {"chemin", "sha256"})
+    if source["chemin"] != chemin_attendu:
+        raise ErreurRecu(f"champ '{nom}.chemin' : '{chemin_attendu}' attendu")
+    _exiger_sha256_recu(f"{nom}.sha256", source["sha256"])
+    return source
+
+
+def _valider_execution_recu(valeur: object) -> None:
+    if not isinstance(valeur, dict):
+        raise ErreurRecu("champ 'execution' : table attendue")
+    etat = valeur.get("etat")
+    if etat == "OBSERVED":
+        # La preuve locale d'OBSERVED est la capture elle-même : sortie,
+        # code de sortie et latence mesurés par le processus local.
+        observe = _exiger_cles(
+            "execution", valeur, {"etat", "sortie", "code_sortie", "latence_ms"}
+        )
+        sortie = _exiger_cles("execution.sortie", observe["sortie"], {"stdout", "stderr"})
+        if not isinstance(sortie["stdout"], str) or not isinstance(sortie["stderr"], str):
+            raise ErreurRecu("champ 'execution.sortie' : textes capturés attendus")
+        if isinstance(observe["code_sortie"], bool) or not isinstance(
+            observe["code_sortie"], int
+        ):
+            raise ErreurRecu("champ 'execution.code_sortie' : entier observé attendu")
+        latence = observe["latence_ms"]
+        if isinstance(latence, bool) or not isinstance(latence, int) or latence < 0:
+            raise ErreurRecu("champ 'execution.latence_ms' : entier positif attendu")
+        return
+    if etat == "INCIDENT":
+        cles = {"etat", "incident", "fait"}
+        if valeur.get("incident") in INCIDENTS_ATTRIBUABLES:
+            cles.add("preuve_attribuable")
+        incident = _exiger_cles("execution", valeur, cles)
+        if incident["incident"] not in INCIDENTS_V1:
+            raise ErreurRecu(
+                f"champ 'execution.incident' : '{incident['incident']}' hors "
+                f"vocabulaire ({' | '.join(INCIDENTS_V1)})"
+            )
+        if not isinstance(incident["fait"], str) or not incident["fait"].strip():
+            raise ErreurRecu("champ 'execution.fait' : fait fautif nommé attendu")
+        if incident["incident"] in INCIDENTS_ATTRIBUABLES:
+            preuve = incident["preuve_attribuable"]
+            if not isinstance(preuve, str) or not preuve.strip():
+                raise ErreurRecu(
+                    f"champ 'execution.preuve_attribuable' : l'incident "
+                    f"'{incident['incident']}' exige un fait explicite et "
+                    "attribuable, jamais une déduction d'absence"
+                )
+        return
+    raise ErreurRecu(
+        f"champ 'execution.etat' : '{etat}' hors vocabulaire (OBSERVED | INCIDENT)"
+    )
+
+
+def _valider_observable_sans_preuve(nom: str, valeur: object) -> None:
+    """INCONNU reste INCONNU : OBSERVED exige une preuve locale dans le reçu."""
+    if valeur == INCONNU:
+        return
+    if isinstance(valeur, dict) and valeur.get("etat") == "OBSERVED":
+        observe = _exiger_cles(nom, valeur, {"etat", "valeur", "preuve"})
+        preuve = observe["preuve"]
+        if isinstance(preuve, str) and preuve.strip():
+            return
+        raise ErreurRecu(
+            f"champ '{nom}' : OBSERVED sans preuve refusé, la valeur reste INCONNU"
+        )
+    raise ErreurRecu(
+        f"champ '{nom}' : 'INCONNU' ou observation prouvée attendu"
+    )
+
+
+_CLES_CHARGE_RECU = {
+    "measurement_profile",
+    "creneau",
+    "predecesseur_adresse_contenu",
+    "carte",
+    "paquet",
+    "stimulus",
+    "configuration",
+    "plan_declare",
+    "interface_declaree",
+    "quota_observe",
+    "requete",
+    "execution",
+    "provenance_servie",
+}
+
+
+def _valider_recu(enveloppe: object) -> dict:
+    recu = _exiger_cles(
+        "recu", enveloppe, {"schema_version", "content_address", "payload"}
+    )
+    if recu["schema_version"] != SCHEMA_RECU:
+        raise ErreurRecu(f"champ 'schema_version' : '{SCHEMA_RECU}' attendu")
+    adresse = _exiger_cles(
+        "content_address", recu["content_address"], {"algorithm", "sha256"}
+    )
+    if adresse["algorithm"] != "SHA256":
+        raise ErreurRecu("champ 'content_address.algorithm' : 'SHA256' attendu")
+    charge = _exiger_cles("payload", recu["payload"], _CLES_CHARGE_RECU)
+    if adresse["sha256"] != adresse_canonique(charge):
+        raise ErreurRecu(
+            "champ 'content_address.sha256' : adresse de contenu divergente du "
+            "payload canonique"
+        )
+    if charge["measurement_profile"] != PROFIL_MESURE_RECU:
+        raise ErreurRecu(
+            f"champ 'measurement_profile' : '{PROFIL_MESURE_RECU}' attendu"
+        )
+    predecesseur = charge["predecesseur_adresse_contenu"]
+    if predecesseur is not None:
+        _exiger_sha256_recu("predecesseur_adresse_contenu", predecesseur)
+    _valider_source_recu("carte", charge["carte"], CHEMIN_CARTE)
+    _valider_source_recu("paquet", charge["paquet"], CHEMIN_PAQUET)
+    stimulus = _valider_source_recu("stimulus", charge["stimulus"], CHEMIN_STIMULUS)
+    configuration = _exiger_cles(
+        "configuration", charge["configuration"], {"identifiant", "chemin", "sha256"}
+    )
+    if not isinstance(configuration["identifiant"], str) or not _MOTIF_SLUG.match(
+        configuration["identifiant"]
+    ):
+        raise ErreurRecu("champ 'configuration.identifiant' : slug stable attendu")
+    _exiger_sha256_recu("configuration.sha256", configuration["sha256"])
+    creneau_attendu = f"{configuration['identifiant']}:{stimulus['sha256']}"
+    if charge["creneau"] != creneau_attendu:
+        raise ErreurRecu(
+            "champ 'creneau' : dérivation exacte "
+            "'<configuration_id>:<sha256 du stimulus>' attendue"
+        )
+    for nom in ("plan_declare", "interface_declaree"):
+        declare = _exiger_cles(nom, charge[nom], {"etat", "champs"})
+        if declare["etat"] != "DECLARE" or not isinstance(declare["champs"], dict):
+            raise ErreurRecu(f"champ '{nom}' : état DECLARE et champs déclarés attendus")
+    _valider_observable_sans_preuve("quota_observe", charge["quota_observe"])
+    requete = _exiger_cles(
+        "requete",
+        charge["requete"],
+        {"etat", "argv_resolu", "mode_stdin", "espace_de_travail"},
+    )
+    if (
+        requete["etat"] != "REQUESTED"
+        or not isinstance(requete["argv_resolu"], list)
+        or not requete["argv_resolu"]
+        or any(not isinstance(element, str) for element in requete["argv_resolu"])
+        or requete["espace_de_travail"] != JETON_ESPACE_ISOLE
+    ):
+        raise ErreurRecu(
+            "champ 'requete' : descripteur REQUESTED avec argv résolu et espace "
+            "isolé attendu"
+        )
+    _valider_execution_recu(charge["execution"])
+    _valider_observable_sans_preuve("provenance_servie", charge["provenance_servie"])
+    return recu
+
+
+def _charger_recus(repertoire: Path) -> list[tuple[Path, dict]]:
+    """Reçus valides du répertoire, chaînés, dans l'ordre matériel du chaînage."""
+    if not repertoire.is_dir():
+        return []
+    par_adresse: dict[str, tuple[Path, dict]] = {}
+    for chemin in sorted(repertoire.iterdir()):
+        try:
+            enveloppe = json.loads(chemin.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+            raise ErreurRecu(f"reçu illisible : {chemin.name} ({erreur})") from erreur
+        recu = _valider_recu(enveloppe)
+        adresse = recu["content_address"]["sha256"]
+        if chemin.name != f"{adresse}.json":
+            raise ErreurRecu(
+                f"reçu '{chemin.name}' : nom de fichier divergent de l'adresse de "
+                f"contenu {adresse}"
+            )
+        par_adresse[adresse] = (chemin, recu)
+    if not par_adresse:
+        return []
+    predecesseurs = [
+        recu["payload"]["predecesseur_adresse_contenu"]
+        for _, recu in par_adresse.values()
+    ]
+    non_nuls = [adresse for adresse in predecesseurs if adresse is not None]
+    if len(non_nuls) != len(set(non_nuls)) or predecesseurs.count(None) != 1:
+        raise ErreurRecu("chaînage append-only divergent : prédécesseurs ambigus")
+    for adresse in non_nuls:
+        if adresse not in par_adresse:
+            raise ErreurRecu(f"prédécesseur inconnu du répertoire : {adresse}")
+    creneaux = [recu["payload"]["creneau"] for _, recu in par_adresse.values()]
+    if len(creneaux) != len(set(creneaux)):
+        raise ErreurRecu("collision append-only : deux reçus occupent le même créneau")
+    # Reconstruction de l'ordre matériel par le chaînage, du premier au dernier.
+    suivant = {
+        recu["payload"]["predecesseur_adresse_contenu"]: adresse
+        for adresse, (_, recu) in par_adresse.items()
+    }
+    ordonnes: list[tuple[Path, dict]] = []
+    courant = suivant.get(None)
+    while courant is not None:
+        ordonnes.append(par_adresse[courant])
+        courant = suivant.get(courant)
+    if len(ordonnes) != len(par_adresse):
+        raise ErreurRecu("chaînage append-only divergent : chaîne non linéaire")
+    return ordonnes
+
+
+def _executer_borne(
+    argv: list[str], entree: bytes, espace: Path, delai_secondes: int
+) -> dict:
+    """Exécute argv dans une nouvelle session ; au délai, termine le groupe entier."""
+    depart = time.monotonic()
+    try:
+        processus = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=espace,
+            start_new_session=True,
+        )
+    except OSError as erreur:
+        return {
+            "etat": "INCIDENT",
+            "incident": "HARNESS_ERROR",
+            "fait": f"lancement local impossible : {erreur}",
+        }
+    try:
+        stdout, stderr = processus.communicate(entree, timeout=delai_secondes)
+    except subprocess.TimeoutExpired:
+        # La nouvelle session fait du parent le chef de groupe : la terminaison
+        # puis la mise à mort visent le groupe entier, descendants compris.
+        groupe = processus.pid
+        try:
+            os.killpg(groupe, signal.SIGTERM)
+            limite = time.monotonic() + 0.5
+            while time.monotonic() < limite and processus.poll() is None:
+                time.sleep(0.02)
+            os.killpg(groupe, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        processus.wait()
+        for tube in (processus.stdin, processus.stdout, processus.stderr):
+            tube.close()
+        return {
+            "etat": "INCIDENT",
+            "incident": "HARNESS_ERROR",
+            "fait": (
+                f"délai local de {delai_secondes} s dépassé : terminaison envoyée "
+                "au groupe de processus entier, puis groupe tué et parent récolté"
+            ),
+        }
+    latence_ms = int((time.monotonic() - depart) * 1000)
+    return {
+        "etat": "OBSERVED",
+        "sortie": {
+            "stdout": stdout.decode("utf-8", errors="replace"),
+            "stderr": stderr.decode("utf-8", errors="replace"),
+        },
+        "code_sortie": processus.returncode,
+        "latence_ms": latence_ms,
+    }
+
+
+def acquerir_local(racine: Path, identifiant: str) -> int:
+    chemin_configuration = racine / CONFIGURATIONS_LOCALES / f"{identifiant}.toml"
+    if not chemin_configuration.is_file():
+        print(
+            f"ECHEC configuration locale absente : '{identifiant}' introuvable "
+            f"dans {CONFIGURATIONS_LOCALES.as_posix()}"
+        )
+        return 1
+    try:
+        configuration = _charger_configuration(chemin_configuration)
+    except ErreurConfiguration as erreur:
+        print(f"ECHEC {erreur}")
+        return 1
+    if configuration["configuration_id"] != identifiant:
+        print(
+            f"ECHEC champ 'configuration_id' : "
+            f"'{configuration['configuration_id']}' ne correspond pas à "
+            f"'{identifiant}'"
+        )
+        return 1
+    try:
+        etat = _charger_etat(racine)
+    except ErreurRestitution as erreur:
+        print(f"ECHEC {erreur}")
+        return 1
+    sources: dict[str, dict] = {}
+    for nom, relatif in (
+        ("carte", CHEMIN_CARTE),
+        ("paquet", CHEMIN_PAQUET),
+        ("stimulus", CHEMIN_STIMULUS),
+    ):
+        chemin_source = racine / relatif
+        if not chemin_source.is_file():
+            print(f"ECHEC source du reçu absente : {relatif}")
+            return 1
+        sources[nom] = {"chemin": relatif, "sha256": _sha256_fichier(chemin_source)}
+    creneau = f"{identifiant}:{sources['stimulus']['sha256']}"
+    repertoire = _repertoire_recus(racine, etat)
+    try:
+        recus = _charger_recus(repertoire)
+    except ErreurRecu as erreur:
+        print(f"ECHEC {erreur}")
+        return 1
+    for _, existant in recus:
+        if existant["payload"]["creneau"] == creneau:
+            print(
+                f"ECHEC collision append-only : le créneau '{creneau}' est déjà "
+                "occupé, le reçu existant reste inchangé"
+            )
+            return 1
+    predecesseur = recus[-1][1]["content_address"]["sha256"] if recus else None
+    harnais = configuration["harnais"]
+    stimulus_octets = (racine / CHEMIN_STIMULUS).read_bytes()
+    with tempfile.TemporaryDirectory() as espace_texte:
+        espace = Path(espace_texte)
+        fichier_prompt = espace / "stimulus.md"
+        fichier_prompt.write_bytes(stimulus_octets)
+        argv_execute = [
+            element.replace(JETON_ESPACE_ISOLE, str(espace)).replace(
+                JETON_FICHIER_PROMPT, str(fichier_prompt)
+            )
+            for element in harnais["argv"]
+        ]
+        entree = stimulus_octets if "stdin_fichier" in harnais else b""
+        execution = _executer_borne(
+            argv_execute, entree, espace, harnais["delai_secondes"]
+        )
+        # L'argv consigné remplace les chemins volatils par leurs jetons machine.
+        argv_resolu = [
+            element.replace(str(fichier_prompt), JETON_FICHIER_PROMPT).replace(
+                str(espace), JETON_ESPACE_ISOLE
+            )
+            for element in argv_execute
+        ]
+    charge = {
+        "measurement_profile": PROFIL_MESURE_RECU,
+        "creneau": creneau,
+        "predecesseur_adresse_contenu": predecesseur,
+        "carte": sources["carte"],
+        "paquet": sources["paquet"],
+        "stimulus": sources["stimulus"],
+        "configuration": {
+            "identifiant": identifiant,
+            "chemin": (CONFIGURATIONS_LOCALES / f"{identifiant}.toml").as_posix(),
+            "sha256": _sha256_fichier(chemin_configuration),
+        },
+        "plan_declare": {"etat": "DECLARE", "champs": configuration["plan"]},
+        "interface_declaree": {"etat": "DECLARE", "champs": configuration["interface"]},
+        "quota_observe": INCONNU,
+        "requete": {
+            "etat": "REQUESTED",
+            "argv_resolu": argv_resolu,
+            "mode_stdin": (
+                JETON_FICHIER_PROMPT if "stdin_fichier" in harnais else "aucun"
+            ),
+            "espace_de_travail": JETON_ESPACE_ISOLE,
+        },
+        "execution": execution,
+        "provenance_servie": INCONNU,
+    }
+    enveloppe = {
+        "schema_version": SCHEMA_RECU,
+        "content_address": {"algorithm": "SHA256", "sha256": adresse_canonique(charge)},
+        "payload": charge,
+    }
+    try:
+        _valider_recu(enveloppe)
+    except ErreurRecu as erreur:
+        print(f"ECHEC reçu incohérent, rien n'est écrit : {erreur}")
+        return 1
+    repertoire.mkdir(parents=True, exist_ok=True)
+    adresse = enveloppe["content_address"]["sha256"]
+    destination = repertoire / f"{adresse}.json"
+    try:
+        # Création exclusive : un reçu existant n'est jamais réécrit.
+        with open(destination, "xb") as fichier:
+            fichier.write(octets_canoniques(enveloppe))
+    except FileExistsError:
+        print(f"ECHEC collision append-only : le reçu {destination.name} existe déjà")
+        return 1
+    print(
+        f"reçu V1 abonnement écrit : "
+        f"{(destination.relative_to(racine)).as_posix()}"
+    )
+    print(f"créneau : {creneau}")
+    print(f"adresse de contenu : {adresse}")
+    print(f"prédécesseur : {predecesseur if predecesseur is not None else 'null'}")
+    if execution["etat"] == "INCIDENT":
+        print(f"incident : {execution['incident']} — {execution['fait']}")
+    return 0
+
+
 def _libelle_registre(registre: Path | None, cible: Path) -> str:
     if registre is None:
         return f"registre officiel {REGISTRE_OFFICIEL.as_posix()}"
@@ -521,10 +978,33 @@ def _compter_recus(repertoire: Path) -> int:
     return sum(1 for _ in repertoire.iterdir())
 
 
+def _recus_locaux(racine: Path, etat: dict) -> list[tuple[str, dict, str]]:
+    """Reçus V1 locaux valides : (chemin relatif, enveloppe, SHA-256 du fichier).
+
+    Tout fichier du répertoire doit être un reçu V1 abonnement valide et
+    chaîné ; sinon la restitution refuse fail-closed.
+    """
+    repertoire = _repertoire_recus(racine, etat)
+    try:
+        recus = _charger_recus(repertoire)
+    except ErreurRecu as erreur:
+        raise ErreurRestitution(f"reçu V1 local invalide : {erreur}") from erreur
+    return [
+        (
+            chemin.relative_to(racine).as_posix(),
+            enveloppe,
+            _sha256_fichier(chemin),
+        )
+        for chemin, enveloppe in recus
+    ]
+
+
 def _jetons_attendus(
     etat: dict, nombre_recus: int, nombre_configurations: int = 0
 ) -> tuple[str, str, str]:
-    """Recalcule les trois jetons factuels depuis l'état, les reçus et le registre."""
+    """Recalcule les trois jetons factuels depuis l'état, les acquisitions
+    officielles et le registre. Les reçus locaux de démonstration, hors panel
+    officiel, n'entrent pas dans ce décompte."""
     if etat["panel"]:
         raise ErreurRestitution(
             "le champ panel de l'état V1 doit rester vide : le panel déclaré vit "
@@ -667,6 +1147,54 @@ def _article_autorisations(relatif: str, sha256: str, donnees: dict) -> str:
     )
 
 
+SECTION_RECU_LOCAL = "reçu V1 local versionné, hors panel officiel"
+
+
+def _article_acquisition_locale(relatif: str, sha_fichier: str, enveloppe: dict) -> str:
+    """Article régénérable à l'identique depuis le fichier de reçu V1 local."""
+    charge = enveloppe["payload"]
+    execution = charge["execution"]
+    if execution["etat"] == "OBSERVED":
+        lignes_execution = (
+            f"<p>exécution observée : code de sortie "
+            f"<code>{_echapper(execution['code_sortie'])}</code> · latence "
+            f"<code>{_echapper(execution['latence_ms'])}</code> ms</p>"
+            f"<p>sortie capturée : <code>{_echapper(execution['sortie']['stdout'])}"
+            "</code></p>"
+        )
+    else:
+        lignes_execution = (
+            f"<p>incident nommé : <code>{_echapper(execution['incident'])}</code> — "
+            f"{_echapper(execution['fait'])}</p>"
+        )
+    predecesseur = charge["predecesseur_adresse_contenu"]
+    contenu = (
+        f"<p><strong>{_echapper(charge['configuration']['identifiant'])}</strong> — "
+        "démonstration locale du harnais, hors panel officiel. Aucun modèle, aucun "
+        "fournisseur, aucun compte et aucun réseau.</p>"
+        f"<p>reçu <code>{relatif}</code> · SHA-256 du fichier "
+        f"<code>{sha_fichier}</code></p>"
+        f"<p>profil de mesure <code>{_echapper(charge['measurement_profile'])}</code> · "
+        f"créneau <code>{_echapper(charge['creneau'])}</code></p>"
+        f"<p>adresse de contenu <code>{enveloppe['content_address']['sha256']}</code> · "
+        f"prédécesseur <code>{_echapper(predecesseur) if predecesseur is not None else 'null'}"
+        "</code></p>"
+        f"<p>configuration locale <code>{_echapper(charge['configuration']['chemin'])}"
+        f"</code> · SHA-256 <code>{charge['configuration']['sha256']}</code></p>"
+        f"<p>stimulus <code>{_echapper(charge['stimulus']['chemin'])}</code> · "
+        f"SHA-256 <code>{charge['stimulus']['sha256']}</code></p>"
+        + lignes_execution
+        + f"<p>quota observé : <code>{_echapper(charge['quota_observe'])}</code> · "
+        f"provenance servie : <code>{_echapper(charge['provenance_servie'])}</code></p>"
+        + _span_source(relatif, sha_fichier, SECTION_RECU_LOCAL)
+    )
+    return _article(
+        "fait",
+        contenu,
+        f' data-acquisition-locale="{charge["configuration"]["identifiant"]}"',
+    )
+
+
 def _span_source(chemin: str, sha256: str, section: str) -> str:
     return (
         f'<span class="source" data-chemin="{chemin}" data-sha256="{sha256}">'
@@ -681,15 +1209,19 @@ def _article(classe: str, contenu: str, attributs: str = "") -> str:
 def _rendre_page(racine: Path) -> bytes:
     etat = _charger_etat(racine)
     repertoire = _repertoire_recus(racine, etat)
-    nombre_recus = _compter_recus(repertoire)
+    _compter_recus(repertoire)
+    # Tout fichier du répertoire doit être un reçu local valide ; aucune
+    # acquisition officielle n'existe, la conclusion du panel reste inchangée.
+    recus_locaux = _recus_locaux(racine, etat)
     configurations = _configurations_officielles(racine)
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
-        etat, nombre_recus, len(configurations)
+        etat, 0, len(configurations)
     )
     etat_relatif = CHEMIN_ETAT.as_posix()
     empreintes = _empreintes_sources(
         racine, etat_relatif, tuple(chemin for chemin, _ in configurations)
     )
+    empreintes.update({relatif: sha for relatif, _, sha in recus_locaux})
 
     def src(chemin: str, section: str) -> str:
         return _span_source(chemin, empreintes[chemin], section)
@@ -781,14 +1313,26 @@ def _rendre_page(racine: Path) -> bytes:
             "répertoire de reçus V1 ; règle U-018 de docs/RULES.md\"",
         )
 
+    if recus_locaux:
+        texte_recus = (
+            f"répertoire de reçus V1 <code>{chemin_recus}</code> existe et contient "
+            f"{len(recus_locaux)} reçu(s) de démonstration locale hors panel "
+            "officiel, et aucune acquisition officielle."
+        )
+    else:
+        texte_recus = (
+            f"répertoire de reçus V1 <code>{chemin_recus}</code> existe et ne "
+            "contient aucun reçu."
+        )
     sections.append(
         "<section id=\"etat-v1\"><h2>État V1 courant</h2>"
         + article_panel_courant
         + _article(
             "fait",
             f"<p><code id=\"jeton-acquisitions\">{jeton_acquisitions}</code> — le "
-            f"répertoire de reçus V1 <code>{chemin_recus}</code> existe et ne contient "
-            "aucun reçu.</p>" + src(etat_relatif, "état V1 versionné"),
+            + texte_recus
+            + "</p>"
+            + src(etat_relatif, "état V1 versionné"),
         )
         + article_conclusion
         + "</section>"
@@ -823,6 +1367,22 @@ def _rendre_page(racine: Path) -> bytes:
             + "".join(
                 _article_autorisations(chemin, empreintes[chemin], donnees)
                 for chemin, donnees in configurations
+            )
+            + "</section>"
+        )
+
+    if recus_locaux:
+        sections.append(
+            "<section id=\"acquisition-locale\"><h2>Acquisition locale de "
+            "démonstration, hors panel officiel</h2>"
+            "<p>Chaque entrée reprend un reçu V1 abonnement local versionné, "
+            "adressé par contenu et append-only. Cette démonstration du harnais "
+            "est hors panel officiel : elle ne classe aucune configuration, ne "
+            "modifie aucune conclusion relative au panel abonnement et sa "
+            "lisibilité n'améliore aucune preuve.</p>"
+            + "".join(
+                _article_acquisition_locale(relatif, sha, enveloppe)
+                for relatif, enveloppe, sha in recus_locaux
             )
             + "</section>"
         )
@@ -960,6 +1520,7 @@ def _rendre_page(racine: Path) -> bytes:
         for chemin, section in (
             *SOURCES_AUTORISEES,
             *((chemin, SECTION_REGISTRE) for chemin, _ in configurations),
+            *((relatif, SECTION_RECU_LOCAL) for relatif, _, _ in recus_locaux),
             (etat_relatif, "état V1 versionné"),
         )
     )
@@ -1050,13 +1611,29 @@ def verifier_restitution(racine: Path) -> int:
     # Attendus recalculés depuis les entrées, indépendamment du rendu.
     etat = _charger_etat(racine)
     repertoire = _repertoire_recus(racine, etat)
-    nombre_recus = _compter_recus(repertoire)
+    _compter_recus(repertoire)
+    recus_locaux = _recus_locaux(racine, etat)
     configurations = _configurations_officielles(racine)
-    jetons_factuels = _jetons_attendus(etat, nombre_recus, len(configurations))
+    jetons_factuels = _jetons_attendus(etat, 0, len(configurations))
     etat_relatif = CHEMIN_ETAT.as_posix()
     empreintes = _empreintes_sources(
         racine, etat_relatif, tuple(chemin for chemin, _ in configurations)
     )
+    empreintes.update({relatif: sha for relatif, _, sha in recus_locaux})
+
+    for relatif, enveloppe, sha in recus_locaux:
+        attendu = _article_acquisition_locale(relatif, sha, enveloppe)
+        if attendu not in page:
+            echecs.append(
+                "entrée d'acquisition locale infidèle ou absente : "
+                f"{enveloppe['payload']['configuration']['identifiant']}"
+            )
+    nombre_locales = page.count(' data-acquisition-locale="')
+    if nombre_locales != len(recus_locaux):
+        echecs.append(
+            f"{len(recus_locaux)} entrées d'acquisition locale attendues dans la "
+            f"page, {nombre_locales} trouvées"
+        )
 
     for chemin, donnees in configurations:
         attendu = _article_panel(chemin, empreintes[chemin], donnees)
@@ -1164,6 +1741,7 @@ def _analyser_options(
 _USAGE = (
     "usage : campagne_v1.py enregistrer [--registre <chemin>] --fichier <chemin> "
     "| panel [--registre <chemin>] | autorisations [--configuration <id>] "
+    "| acquerir --local --configuration <id> "
     "| restituer | verifier-restitution"
 )
 
@@ -1196,6 +1774,16 @@ def principal(arguments: list[str], racine: Path | None = None) -> int:
             print(_USAGE)
             return 2
         return afficher_autorisations(racine, options.get("--configuration"))
+    if arguments[:1] == ["acquerir"]:
+        # Forme figée : seule l'acquisition locale non officielle existe.
+        if (
+            len(arguments) != 4
+            or arguments[1] != "--local"
+            or arguments[2] != "--configuration"
+        ):
+            print(_USAGE)
+            return 2
+        return acquerir_local(racine, arguments[3])
     if arguments[:1] == ["panel"]:
         options = _analyser_options(arguments[1:], ("--registre",))
         if options is None:
