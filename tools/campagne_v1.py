@@ -6,6 +6,7 @@
 Interface figée :
 - uv run tools/campagne_v1.py enregistrer [--registre <chemin>] --fichier <chemin>
 - uv run tools/campagne_v1.py panel [--registre <chemin>]
+- uv run tools/campagne_v1.py autorisations [--configuration <id>]
 - uv run tools/campagne_v1.py restituer
 - uv run tools/campagne_v1.py verifier-restitution
 """
@@ -438,6 +439,59 @@ def afficher_panel(racine: Path, registre: Path | None = None) -> int:
     return 0
 
 
+def _lignes_autorisations(donnees: dict) -> list[str]:
+    """Aperçu des autorisations : faits déclarés des TOML, jamais des observations."""
+    plan = donnees["plan"]
+    lignes = [
+        f"- configuration : {donnees['configuration_id']} [DECLAREE, NON MESUREE]",
+        f"  compte concerné : {INCONNU}",
+        f"  plan : {plan['nom']}",
+        (
+            "  authentification interactive exigée : "
+            + " ; ".join(donnees["intervention_humaine"]["etapes"])
+        ),
+    ]
+    lignes.extend(
+        f"  quota engagé {rang} : {_texte_quota(quota)}"
+        for rang, quota in enumerate(donnees["quota"], start=1)
+    )
+    lignes.append(
+        f"  dépense engagée : prix_montant={plan['prix_montant']} "
+        f"| prix_devise={plan['prix_devise']} | periode={plan['periode']}"
+    )
+    return lignes
+
+
+def afficher_autorisations(racine: Path, identifiant: str | None = None) -> int:
+    registre = racine / REGISTRE_OFFICIEL
+    try:
+        entrees = _charger_registre(registre) if registre.is_dir() else []
+    except ErreurConfiguration as erreur:
+        print(f"ECHEC {erreur}")
+        return 1
+    if identifiant is not None:
+        entrees = [
+            (chemin, donnees)
+            for chemin, donnees in entrees
+            if donnees["configuration_id"] == identifiant
+        ]
+        if not entrees:
+            print(
+                f"ECHEC option '--configuration' : '{identifiant}' absent du "
+                f"registre officiel {REGISTRE_OFFICIEL.as_posix()}"
+            )
+            return 1
+    print(
+        f"autorisations : {len(entrees)} configurations déclarées, non mesurées "
+        "— aperçu avant toute action distante, sans authentification, sans "
+        "lecture de compte, sans inspection de facturation"
+    )
+    for _, donnees in entrees:
+        for ligne in _lignes_autorisations(donnees):
+            print(ligne)
+    return 0
+
+
 def _sha256_fichier(chemin: Path) -> str:
     return hashlib.sha256(chemin.read_bytes()).hexdigest()
 
@@ -581,6 +635,38 @@ def _article_panel(relatif: str, sha256: str, donnees: dict) -> str:
     )
 
 
+def _article_autorisations(relatif: str, sha256: str, donnees: dict) -> str:
+    """Article d'autorisations régénérable à l'identique depuis le registre."""
+    plan = donnees["plan"]
+    etapes = " ; ".join(
+        f"<code>{_echapper(etape)}</code>"
+        for etape in donnees["intervention_humaine"]["etapes"]
+    )
+    quotas = "".join(
+        f"<li>quota engagé {rang} : "
+        + " · ".join(f"{cle} <code>{_echapper(quota[cle])}</code>" for cle in _CHAMPS_QUOTA)
+        + "</li>"
+        for rang, quota in enumerate(donnees["quota"], start=1)
+    )
+    contenu = (
+        f"<p><strong>{_echapper(donnees['configuration_id'])}</strong> — "
+        "autorisations déclarées, non mesurées.</p>"
+        f"<p>compte concerné : <code>{INCONNU}</code></p>"
+        f"<p>plan : <code>{_echapper(plan['nom'])}</code></p>"
+        f"<p>authentification interactive exigée : {etapes}</p>"
+        f"<ul>{quotas}</ul>"
+        f"<p>dépense engagée : prix_montant <code>{_echapper(plan['prix_montant'])}</code> · "
+        f"prix_devise <code>{_echapper(plan['prix_devise'])}</code> · "
+        f"periode <code>{_echapper(plan['periode'])}</code></p>"
+        + _span_source(relatif, sha256, SECTION_REGISTRE)
+    )
+    return _article(
+        "fait",
+        contenu,
+        f' data-autorisation="{donnees["configuration_id"]}"',
+    )
+
+
 def _span_source(chemin: str, sha256: str, section: str) -> str:
     return (
         f'<span class="source" data-chemin="{chemin}" data-sha256="{sha256}">'
@@ -719,6 +805,23 @@ def _rendre_page(racine: Path) -> bytes:
             "aucune mesure n'existe.</p>"
             + "".join(
                 _article_panel(chemin, empreintes[chemin], donnees)
+                for chemin, donnees in configurations
+            )
+            + "</section>"
+        )
+
+    if configurations:
+        sections.append(
+            "<section id=\"autorisations\"><h2>Aperçu des autorisations</h2>"
+            "<p>Faits déclarés issus des fichiers TOML du registre officiel "
+            "versionné, rendus avant toute action distante. Aucune "
+            "authentification, aucune lecture de compte et aucune inspection de "
+            "facturation ou de quota réel n'a eu lieu : le compte concerné reste "
+            "<code>INCONNU</code>, le quota engagé et la dépense engagée sont des "
+            "engagements déclarés, jamais une consommation observée ni une "
+            "disponibilité.</p>"
+            + "".join(
+                _article_autorisations(chemin, empreintes[chemin], donnees)
                 for chemin, donnees in configurations
             )
             + "</section>"
@@ -969,6 +1072,20 @@ def verifier_restitution(racine: Path) -> int:
             f"{nombre_affiche} trouvées"
         )
 
+    for chemin, donnees in configurations:
+        attendu = _article_autorisations(chemin, empreintes[chemin], donnees)
+        if attendu not in page:
+            echecs.append(
+                "entrée d'autorisations infidèle ou absente : "
+                f"{donnees['configuration_id']}"
+            )
+    nombre_autorisations = page.count(' data-autorisation="')
+    if nombre_autorisations != len(configurations):
+        echecs.append(
+            f"{len(configurations)} entrées d'autorisations attendues dans la "
+            f"page, {nombre_autorisations} trouvées"
+        )
+
     page_basse = page.lower()
     for sequence in SEQUENCES_DISTANTES:
         if sequence in page_basse:
@@ -1046,7 +1163,8 @@ def _analyser_options(
 
 _USAGE = (
     "usage : campagne_v1.py enregistrer [--registre <chemin>] --fichier <chemin> "
-    "| panel [--registre <chemin>] | restituer | verifier-restitution"
+    "| panel [--registre <chemin>] | autorisations [--configuration <id>] "
+    "| restituer | verifier-restitution"
 )
 
 
@@ -1072,6 +1190,12 @@ def principal(arguments: list[str], racine: Path | None = None) -> int:
             return 2
         registre = Path(options["--registre"]) if "--registre" in options else None
         return enregistrer_configuration(racine, Path(options["--fichier"]), registre)
+    if arguments[:1] == ["autorisations"]:
+        options = _analyser_options(arguments[1:], ("--configuration",))
+        if options is None:
+            print(_USAGE)
+            return 2
+        return afficher_autorisations(racine, options.get("--configuration"))
     if arguments[:1] == ["panel"]:
         options = _analyser_options(arguments[1:], ("--registre",))
         if options is None:
