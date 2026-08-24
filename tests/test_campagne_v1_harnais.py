@@ -160,6 +160,34 @@ class AcquisitionLocaleTests(BaseXS04):
         self.assertIn("configuration-fantome", sortie)
         self.assertFalse(self.recus.exists())
 
+    def test_identifiant_traversee_refuse_avant_toute_resolution(self):
+        # Cible extérieure au répertoire local, atteignable par traversée : son
+        # contenu invalide rendrait toute lecture observable dans le message
+        exterieur = self.racine / "tasks/dev/pre-cadrage-entretien-client/exterieur"
+        exterieur.mkdir(parents=True)
+        (exterieur / "local-system-wc.toml").write_text(
+            "contenu TOML invalide {{{", encoding="utf-8"
+        )
+        for identifiant in (
+            "../../exterieur/local-system-wc",
+            "/etc/local-system-wc",
+            "sous/chemin",
+        ):
+            with self.subTest(identifiant=identifiant):
+                code, sortie = _principal(
+                    ["acquerir", "--local", "--configuration", identifiant],
+                    self.racine,
+                )
+                self.assertEqual(code, 1)
+                # Le refus vise l'identifiant lui-même, avant toute lecture :
+                # aucun chemin de fichier résolu ni trace d'illisibilité de la
+                # cible extérieure n'apparaît dans le fait nommé
+                self.assertIn(identifiant, sortie)
+                self.assertIn("configuration_id", sortie)
+                self.assertNotIn("illisible", sortie)
+                self.assertNotIn(".toml", sortie)
+        self.assertFalse(self.recus.exists())
+
     def test_acquerir_local_ne_resout_pas_le_registre_officiel(self):
         officiel = self.racine / M.REGISTRE_OFFICIEL
         officiel.mkdir(parents=True)
@@ -580,6 +608,33 @@ class RestitutionLocaleTests(BaseXS04):
     def test_sans_recu_local_la_page_reste_identique_a_l_existant(self):
         page = self._restituer()
         self.assertNotIn('<section id="acquisition-locale">', page)
+        # Sans reçu local, les formulations d'absence historiques demeurent
+        self.assertIn("Aucun reçu V1 n'existe", page)
+        self.assertIn("zéro reçu dans le répertoire de reçus V1", page)
+        code, sortie = _principal(["verifier-restitution"], self.racine)
+        self.assertEqual(code, 0, sortie)
+
+    def test_page_avec_recu_local_qualifie_la_portee_officielle(self):
+        self.assertEqual(self._acquerir()[0], 0)
+        page = self._restituer()
+        # Plus d'affirmation littérale d'absence sans portée qualifiée
+        for interdit in (
+            "Aucun reçu V1 n'existe",
+            "zéro reçu dans le répertoire",
+            "aucune acquisition n'existe",
+            "aucune acquisition et aucune mesure n'existe",
+        ):
+            with self.subTest(interdit=interdit):
+                self.assertNotIn(interdit, page)
+        # Le reçu local est distingué de l'absence rattachée au panel officiel
+        self.assertIn("aucune acquisition officielle", page)
+        self.assertIn("aucun reçu rattaché au panel officiel", page)
+        self.assertIn("Aucun reçu V1 rattaché au panel officiel n'existe", page)
+        # ABSTENTION du panel et jetons normatifs préservés
+        self.assertIn("conclusion: ABSTENTION", page)
+        self.assertIn("acquisitions: 0", page)
+        self.assertIn("NON_DEFINI", page)
+        self.assertIn("INCONNU", page)
         code, sortie = _principal(["verifier-restitution"], self.racine)
         self.assertEqual(code, 0, sortie)
 
