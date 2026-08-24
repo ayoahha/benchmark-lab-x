@@ -1,14 +1,14 @@
 {
   "commande_publique": "uv run tools/campagne_v1.py qualifier",
-  "commande_suite": "uv run pytest tests/test_campagne_v1_qualification.py -q",
-  "date_qualification": "2026-08-24T19:50:41Z",
+  "commande_suite": "uv run --python 3.12 python -m unittest tests.test_validateur_pre_cadrage_v0",
+  "date_qualification": "2026-08-24T20:27:16Z",
   "decisions_figees": {
     "plateforme_specifique": "STOP_SPECIFIC_PLATFORM",
     "route_evaluation_v0": "USE_MANUAL"
   },
   "interpreteur": {
     "observe": "CPython 3.12.13",
-    "pin": ">=3.12"
+    "pin": "CPython 3.12"
   },
   "schema_version": "campagne-v1-qualification-harnais/v1",
   "temoins": {

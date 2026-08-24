@@ -1,11 +1,12 @@
 # /// script
-# requires-python = ">=3.12"
+# requires-python = ">=3.12,<3.13"
 # ///
 """Contrôles XS-05 : qualification du harnais V1 sur les témoins approuvés."""
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import shutil
@@ -13,6 +14,7 @@ import sys
 import unittest
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 RACINE = Path(__file__).parent.parent
 sys.path.insert(0, str(RACINE / "tools"))
@@ -27,10 +29,24 @@ _PAQUET = (
     "tasks/dev/pre-cadrage-entretien-client/temoins-qualification.md",
 )
 
+# Instrument et suite immuables, rejoués depuis la racine fournie
+_INSTRUMENT = (
+    "tools/validateur_pre_cadrage_v0.py",
+    "tests/test_validateur_pre_cadrage_v0.py",
+)
+
 CHEMIN_RECU = (
     "tasks/dev/pre-cadrage-entretien-client/campagne-v1/"
     "qualification-harnais-v1/recu-qualification.json"
 )
+
+# Empreinte approuvée de la source des seize témoins, entrée figée du contrat
+EMPREINTE_TEMOINS = (
+    "8a419c5950127c8187119545237f32b0ecb9b0062116afc3421e0c96a00bd011"
+)
+
+# Identité CPython 3.12 concrète simulée pour la frontière système des tests
+VERSION_SIMULEE = "3.12.13"
 
 
 def _principal(arguments: list[str], racine: Path) -> tuple[int, str]:
@@ -41,20 +57,44 @@ def _principal(arguments: list[str], racine: Path) -> tuple[int, str]:
 
 
 class BaseXS05(unittest.TestCase):
-    """Racine isolée : paquet approuvé complet et état V1."""
+    """Racine isolée : paquet approuvé, état V1, validateur et suite immuables."""
 
     def setUp(self):
         self._temporaire = tempfile.TemporaryDirectory()
         self.addCleanup(self._temporaire.cleanup)
         self.racine = Path(self._temporaire.name)
-        for relatif in (*_PAQUET, M.CHEMIN_ETAT.as_posix()):
+        for relatif in (*_PAQUET, *_INSTRUMENT, M.CHEMIN_ETAT.as_posix()):
             destination = self.racine / relatif
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(RACINE / relatif, destination)
         self.recu = self.racine / CHEMIN_RECU
+        self.temoins = (
+            self.racine
+            / "tasks/dev/pre-cadrage-entretien-client/temoins-qualification.md"
+        )
+        self.validateur = self.racine / "tools/validateur_pre_cadrage_v0.py"
+        self.suite = self.racine / "tests/test_validateur_pre_cadrage_v0.py"
 
     def _qualifier(self) -> tuple[int, str]:
-        return _principal(["qualifier"], self.racine)
+        # La suite tourne par la commande figée de l'Issue sous l'interpréteur
+        # hôte : la frontière système est simulée à un CPython 3.12 concret ;
+        # les tests dédiés d'incompatibilité posent leurs propres valeurs.
+        # La validation runtime de production reste intacte et le
+        # sous-processus de suite s'exécute réellement sous CPython 3.12
+        with (
+            mock.patch.object(
+                M.platform, "python_implementation", return_value="CPython"
+            ),
+            mock.patch.object(
+                M.platform, "python_version", return_value=VERSION_SIMULEE
+            ),
+            mock.patch.object(
+                M.platform,
+                "python_version_tuple",
+                return_value=tuple(VERSION_SIMULEE.split(".")),
+            ),
+        ):
+            return _principal(["qualifier"], self.racine)
 
     def _lire_recu(self) -> dict:
         return json.loads(self.recu.read_text(encoding="utf-8"))
@@ -70,9 +110,6 @@ class QualifierTests(BaseXS05):
         self.assertEqual(recu["verdict"], "PASS")
 
     def test_recu_porte_les_champs_requis_du_contrat(self):
-        import hashlib
-        import platform
-
         code, sortie = self._qualifier()
         self.assertEqual(code, 0, sortie)
         recu = self._lire_recu()
@@ -86,25 +123,24 @@ class QualifierTests(BaseXS05):
         self.assertEqual(
             recu["commande_publique"], "uv run tools/campagne_v1.py qualifier"
         )
+        # Commande de suite portable exactement égale à l'exécution réelle
         self.assertEqual(
             recu["commande_suite"],
-            "uv run pytest tests/test_campagne_v1_qualification.py -q",
+            "uv run --python 3.12 python -m unittest "
+            "tests.test_validateur_pre_cadrage_v0",
         )
-        # Pin déclaré compatible uv run, et identité exacte observée
-        self.assertEqual(recu["interpreteur"]["pin"], ">=3.12")
+        # Pin exact CPython 3.12 et identité exacte observée
+        self.assertEqual(recu["interpreteur"]["pin"], "CPython 3.12")
         self.assertEqual(
-            recu["interpreteur"]["observe"],
-            f"{platform.python_implementation()} {platform.python_version()}",
+            recu["interpreteur"]["observe"], f"CPython {VERSION_SIMULEE}"
         )
-        # Chemin et SHA-256 du validateur réellement exécuté
+        # Chemin et SHA-256 du validateur résolu depuis la racine fournie
         self.assertEqual(
             recu["validateur"]["chemin"], "tools/validateur_pre_cadrage_v0.py"
         )
         self.assertEqual(
             recu["validateur"]["sha256"],
-            hashlib.sha256(
-                (RACINE / "tools/validateur_pre_cadrage_v0.py").read_bytes()
-            ).hexdigest(),
+            hashlib.sha256(self.validateur.read_bytes()).hexdigest(),
         )
         # Source et cardinalité des seize témoins approuvés
         temoins = recu["temoins"]
@@ -112,12 +148,7 @@ class QualifierTests(BaseXS05):
             temoins["source"],
             "tasks/dev/pre-cadrage-entretien-client/temoins-qualification.md",
         )
-        self.assertEqual(
-            temoins["sha256"],
-            hashlib.sha256(
-                (self.racine / temoins["source"]).read_bytes()
-            ).hexdigest(),
-        )
+        self.assertEqual(temoins["sha256"], EMPREINTE_TEMOINS)
         self.assertEqual(temoins["cardinalite"], 16)
         self.assertEqual(len(temoins["noms"]), 16)
         self.assertEqual(len(set(temoins["noms"])), 16)
@@ -145,32 +176,87 @@ class QualifierTests(BaseXS05):
         for interdit in ("content_address", "proof_root", "self_hash"):
             self.assertNotIn(interdit, recu)
 
+    def test_hash_du_validateur_vient_de_la_racine_fournie(self):
+        # Le validateur de la racine diverge de l'immuable qualifié : la
+        # qualification refuse HARNESS_ERROR au lieu de hacher le dépôt
+        self.validateur.write_text(
+            self.validateur.read_text(encoding="utf-8") + "\n# mutation\n",
+            encoding="utf-8",
+        )
+        code, sortie = self._qualifier()
+        self.assertNotEqual(code, 0)
+        self.assertIn("verdict : HARNESS_ERROR", sortie)
+        self.assertIn("tools/validateur_pre_cadrage_v0.py", sortie)
+        self.assertNotIn("verdict : FAIL", sortie)
+        self.assertFalse(self.recu.exists())
+
+    def test_validateur_absent_de_la_racine_est_harness_error(self):
+        self.validateur.unlink()
+        code, sortie = self._qualifier()
+        self.assertNotEqual(code, 0)
+        self.assertIn("verdict : HARNESS_ERROR", sortie)
+        self.assertIn("tools/validateur_pre_cadrage_v0.py", sortie)
+        self.assertNotIn("verdict : FAIL", sortie)
+        self.assertFalse(self.recu.exists())
+
+    def test_suite_indisponible_est_harness_error_jamais_fail(self):
+        self.suite.unlink()
+        code, sortie = self._qualifier()
+        self.assertNotEqual(code, 0)
+        self.assertIn("verdict : HARNESS_ERROR", sortie)
+        self.assertIn("tests/test_validateur_pre_cadrage_v0.py", sortie)
+        self.assertNotIn("verdict : FAIL", sortie)
+        self.assertFalse(self.recu.exists())
+
+    def test_suite_en_echec_est_harness_error_jamais_fail(self):
+        # Une suite de validation divergente ou en échec est un défaut du
+        # dispositif : HARNESS_ERROR, jamais un FAIL candidat
+        self.suite.write_text(
+            "import unittest\n\n\n"
+            "class EchecSimule(unittest.TestCase):\n"
+            "    def test_echec(self):\n"
+            "        self.fail('échec simulé de la suite')\n",
+            encoding="utf-8",
+        )
+        code, sortie = self._qualifier()
+        self.assertNotEqual(code, 0)
+        self.assertIn("verdict : HARNESS_ERROR", sortie)
+        self.assertNotIn("verdict : FAIL", sortie)
+        self.assertFalse(self.recu.exists())
+
     def test_temoin_altere_rend_non_zero_et_nomme_le_temoin(self):
         # Altère le matériau du témoin WT-VOCABULAIRE dans la sortie canonique :
-        # son delta exact ne s'applique plus, le témoin altéré est nommé
-        chemin_temoins = (
-            self.racine
-            / "tasks/dev/pre-cadrage-entretien-client/temoins-qualification.md"
-        )
-        texte = chemin_temoins.read_text(encoding="utf-8")
+        # divergence de corpus nommant le témoin affecté, jamais un FAIL candidat
+        texte = self.temoins.read_text(encoding="utf-8")
         bloc = texte.split("```markdown\n", 1)[1].split("\n```", 1)[0]
         bloc_altere = bloc.replace(
             "qualification: QUALIFIABLE", "qualification: QUALIFIE", 1
         )
         self.assertNotEqual(bloc, bloc_altere)
-        chemin_temoins.write_text(
+        self.temoins.write_text(
             texte.replace(bloc, bloc_altere, 1), encoding="utf-8"
         )
         code, sortie = self._qualifier()
         self.assertNotEqual(code, 0)
         self.assertIn("WT-VOCABULAIRE", sortie)
-        self.assertNotIn("verdict : PASS", sortie)
+        self.assertIn("verdict : HARNESS_ERROR", sortie)
+        self.assertNotIn("verdict : FAIL", sortie)
         self.assertFalse(self.recu.exists())
 
-    def test_temoin_divergent_rend_non_zero_sans_ecrire_de_recu(self):
-        # Un paquet dont un fichier diverge des empreintes approuvées rend le
-        # dispositif incapable d'établir PASS : le premier témoin divergent est
-        # nommé et le reçu existant reste inchangé
+    def test_source_temoins_alteree_hors_delta_est_harness_error(self):
+        # Altération qui ne casse aucun delta canonique : la source approuvée
+        # elle-même est nommée, le verdict reste HARNESS_ERROR, jamais FAIL
+        self.temoins.write_bytes(self.temoins.read_bytes() + b"\nnote ajoutee\n")
+        code, sortie = self._qualifier()
+        self.assertNotEqual(code, 0)
+        self.assertIn("temoins-qualification.md", sortie)
+        self.assertIn("verdict : HARNESS_ERROR", sortie)
+        self.assertNotIn("verdict : FAIL", sortie)
+        self.assertFalse(self.recu.exists())
+
+    def test_fichier_du_paquet_divergent_est_harness_error(self):
+        # Un fichier du paquet approuvé diverge : divergence de corpus nommée,
+        # HARNESS_ERROR sans écrire ni réécrire de reçu
         self.assertEqual(self._qualifier()[0], 0)
         octets_avant = self.recu.read_bytes()
         brief = (
@@ -180,31 +266,42 @@ class QualifierTests(BaseXS05):
         brief.write_bytes(brief.read_bytes() + b"\n")
         code, sortie = self._qualifier()
         self.assertNotEqual(code, 0)
-        self.assertIn("WT-ACCEPTABLE", sortie)
-        self.assertIn("HARNESS_ERROR", sortie)
-        self.assertNotIn("verdict : PASS", sortie)
+        self.assertIn("brief-proprietaire.md", sortie)
+        self.assertIn("verdict : HARNESS_ERROR", sortie)
+        self.assertNotIn("verdict : FAIL", sortie)
         self.assertEqual(self.recu.read_bytes(), octets_avant)
 
     def test_incompatibilite_interpreteur_produit_harness_error_jamais_fail(self):
-        from unittest import mock
-
-        # Frontière système simulée : interpréteur observé sous le pin >=3.12
-        with (
-            mock.patch.object(
-                M.platform, "python_version_tuple", return_value=("3", "11", "9")
-            ),
-            mock.patch.object(
-                M.platform, "python_version", return_value="3.11.9"
-            ),
+        # Frontière système posée par ce test seul, sans la fixture 3.12 :
+        # interpréteur observé hors du pin exact CPython 3.12
+        for version, version_tuple in (
+            ("3.11.9", ("3", "11", "9")),
+            ("3.14.2", ("3", "14", "2")),
         ):
-            code, sortie = self._qualifier()
-        self.assertNotEqual(code, 0)
-        self.assertIn("HARNESS_ERROR", sortie)
-        # F-08 : jamais pris pour un échec candidat
-        self.assertNotIn("FAIL", sortie)
-        self.assertIn(">=3.12", sortie)
-        self.assertIn("3.11.9", sortie)
-        self.assertFalse(self.recu.exists())
+            with self.subTest(version=version):
+                with (
+                    mock.patch.object(
+                        M.platform,
+                        "python_implementation",
+                        return_value="CPython",
+                    ),
+                    mock.patch.object(
+                        M.platform,
+                        "python_version_tuple",
+                        return_value=version_tuple,
+                    ),
+                    mock.patch.object(
+                        M.platform, "python_version", return_value=version
+                    ),
+                ):
+                    code, sortie = _principal(["qualifier"], self.racine)
+                self.assertNotEqual(code, 0)
+                self.assertIn("HARNESS_ERROR", sortie)
+                # F-08 : jamais pris pour un échec candidat
+                self.assertNotIn("FAIL", sortie)
+                self.assertIn("CPython 3.12", sortie)
+                self.assertIn(version, sortie)
+                self.assertFalse(self.recu.exists())
 
     def test_forme_cli_hors_contrat_rend_deux(self):
         for arguments in (["qualifier", "extra"], ["qualifier", "--force"]):
@@ -236,9 +333,15 @@ class RestitutionQualificationTests(BaseXS05):
         self.assertEqual(code, 0, sortie)
         return self.page.read_text(encoding="utf-8")
 
-    def test_page_affiche_date_verdict_et_commande_exacte_sources(self):
-        import hashlib
+    def _muter_recu(self, transformer) -> None:
+        recu = self._lire_recu()
+        transformer(recu)
+        self.recu.write_text(
+            json.dumps(recu, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
+    def test_page_affiche_date_verdict_et_commande_exacte_sources(self):
         self.assertEqual(self._qualifier()[0], 0)
         recu = self._lire_recu()
         page = self._restituer()
@@ -300,6 +403,60 @@ class RestitutionQualificationTests(BaseXS05):
         )
         code, sortie = _principal(["verifier-restitution"], self.racine)
         self.assertEqual(code, 1, sortie)
+
+    def test_decisions_figees_mutees_levent_erreur_restitution(self):
+        self.assertEqual(self._qualifier()[0], 0)
+        self._restituer()
+        self._muter_recu(
+            lambda recu: recu["decisions_figees"].update(
+                {"route_evaluation_v0": "USE_AUTO"}
+            )
+        )
+        with self.assertRaises(M.ErreurRestitution):
+            M.verifier_restitution(self.racine)
+        code, sortie = _principal(["verifier-restitution"], self.racine)
+        self.assertEqual(code, 1, sortie)
+        self.assertIn("decisions_figees", sortie)
+
+    def test_champs_imbriques_invalides_levent_erreur_restitution(self):
+        mutations = {
+            "interpreteur-observe-vide": lambda recu: recu["interpreteur"].update(
+                {"observe": ""}
+            ),
+            "interpreteur-pin-affaibli": lambda recu: recu["interpreteur"].update(
+                {"pin": ">=3.10"}
+            ),
+            "validateur-hash-divergent": lambda recu: recu["validateur"].update(
+                {"sha256": "0" * 64}
+            ),
+            "validateur-chemin-deplace": lambda recu: recu["validateur"].update(
+                {"chemin": "tools/autre_validateur.py"}
+            ),
+            "temoins-hash-divergent": lambda recu: recu["temoins"].update(
+                {"sha256": "f" * 64}
+            ),
+            "temoins-cardinalite-fausse": lambda recu: recu["temoins"].update(
+                {"cardinalite": 15}
+            ),
+            "temoins-noms-tronques": lambda recu: recu["temoins"].update(
+                {"noms": recu["temoins"]["noms"][:-1]}
+            ),
+            "temoins-table-vide": lambda recu: recu.update({"temoins": {}}),
+            "interpreteur-non-table": lambda recu: recu.update(
+                {"interpreteur": "CPython"}
+            ),
+        }
+        for nom, transformer in mutations.items():
+            with self.subTest(mutation=nom):
+                if self.recu.exists():
+                    self.recu.unlink()
+                self.assertEqual(self._qualifier()[0], 0)
+                self._restituer()
+                self._muter_recu(transformer)
+                with self.assertRaises(M.ErreurRestitution):
+                    M.verifier_restitution(self.racine)
+                code, _ = _principal(["verifier-restitution"], self.racine)
+                self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":
