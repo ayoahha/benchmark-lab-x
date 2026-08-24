@@ -616,6 +616,7 @@ class RestitutionLocaleTests(BaseXS04):
 
     def test_page_avec_recu_local_qualifie_la_portee_officielle(self):
         self.assertEqual(self._acquerir()[0], 0)
+        chemin_recu, _ = self._lire_seul_recu()
         page = self._restituer()
         # Plus d'affirmation littérale d'absence sans portée qualifiée
         for interdit in (
@@ -626,6 +627,23 @@ class RestitutionLocaleTests(BaseXS04):
         ):
             with self.subTest(interdit=interdit):
                 self.assertNotIn(interdit, page)
+        # La section vocabulaire remplace l'affirmation non qualifiée par un
+        # fait MSW classé : exécution OBSERVED prouvée par le reçu local
+        # versionné, hors panel officiel, panel officiel non mesuré
+        vocabulaire = page.split('<section id="vocabulaire">', 1)[1].split(
+            "</section>", 1
+        )[0]
+        self.assertNotIn("la V1 n'a rien observé", vocabulaire)
+        self.assertIn("OBSERVED", vocabulaire)
+        self.assertIn("hors panel officiel", vocabulaire)
+        self.assertIn("non mesuré", vocabulaire)
+        self.assertIn('data-classe="fait"', vocabulaire)
+        relatif = chemin_recu.relative_to(self.racine).as_posix()
+        empreinte_fichier = hashlib.sha256(chemin_recu.read_bytes()).hexdigest()
+        self.assertIn(
+            f'data-chemin="{relatif}" data-sha256="{empreinte_fichier}"',
+            vocabulaire,
+        )
         # Le reçu local est distingué de l'absence rattachée au panel officiel
         self.assertIn("aucune acquisition officielle", page)
         self.assertIn("aucun reçu rattaché au panel officiel", page)

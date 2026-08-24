@@ -1483,10 +1483,33 @@ def _rendre_page(racine: Path) -> bytes:
         "prouvé.</p>" + lignes_etapes + "</section>"
     )
 
+    recus_observes = [
+        relatif
+        for relatif, enveloppe, _ in recus_locaux
+        if enveloppe["payload"]["execution"]["etat"] == "OBSERVED"
+    ]
+    if recus_observes:
+        article_observation_v1 = _article(
+            "fait",
+            "<p>Le reçu V1 local versionné cité en source prouve une exécution "
+            "<code>OBSERVED</code> sans incident. Ce reçu reste hors panel "
+            "officiel : le panel officiel demeure non mesuré.</p>"
+            + "".join(
+                src(relatif, SECTION_RECU_LOCAL) for relatif in recus_observes
+            ),
+        )
+    else:
+        article_observation_v1 = _article(
+            "fait",
+            "<p>Aucune exécution V1 <code>OBSERVED</code> n'est enregistrée dans "
+            "le répertoire de reçus V1 : le panel officiel demeure non "
+            "mesuré.</p>" + src(etat_relatif, "état V1 versionné"),
+        )
+
     sections.append(
         "<section id=\"vocabulaire\"><h2>Vocabulaire normatif</h2>"
-        "<p>Ces jetons appartiennent au vocabulaire normatif du dépôt. Aucun d'eux ne "
-        "décrit un incident V1 observé : la V1 n'a rien observé.</p>"
+        "<p>Ces jetons appartiennent au vocabulaire normatif du dépôt.</p>"
+        + article_observation_v1
         + _article(
             "fait",
             "<p><code>INCONNU</code> : valeur littérale d'une observation absente. "
