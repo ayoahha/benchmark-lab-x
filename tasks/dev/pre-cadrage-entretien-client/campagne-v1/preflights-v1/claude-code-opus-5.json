@@ -1,0 +1,43 @@
+{
+  "adaptateur": "claude",
+  "authentification": {
+    "observee": "INCONNU"
+  },
+  "autorite_preflight": "D-V1-03",
+  "cause": "MISSING_OBSERVATION",
+  "commande_publique": "uv run tools/campagne_v1.py preflight --configuration claude-code-opus-5",
+  "configuration_id": "claude-code-opus-5",
+  "date_preflight": "2026-08-25T13:57:05Z",
+  "effort": {
+    "demande": "high",
+    "expose": "INCONNU"
+  },
+  "fait": "client et version observés par la sonde non générative ; authentification, plan servi, exposition du modèle, exposition de l'effort et quota restent inobservables sans commande générative : la route n'est pas prouvée prête",
+  "interface": {
+    "client": "claude",
+    "type": "cli",
+    "version_observee": "2.1.245 (Claude Code)"
+  },
+  "modele": {
+    "demande": "claude-opus-5",
+    "expose": "INCONNU"
+  },
+  "plan": {
+    "declare": "Claude Code",
+    "observe": "INCONNU"
+  },
+  "quota": {
+    "consommation_preflight": "INCONNU",
+    "observe": "INCONNU"
+  },
+  "schema_version": "campagne-v1-preflight/v1",
+  "sondes": [
+    {
+      "code_sortie": 0,
+      "commande": "claude --version",
+      "stderr_expurge": "",
+      "stdout_expurge": "2.1.245 (Claude Code)\n"
+    }
+  ],
+  "verdict": "HOLD"
+}

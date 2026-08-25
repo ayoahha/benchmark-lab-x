@@ -8,6 +8,7 @@ Interface figée :
 - uv run tools/campagne_v1.py panel [--registre <chemin>]
 - uv run tools/campagne_v1.py autorisations [--configuration <id>]
 - uv run tools/campagne_v1.py acquerir --local --configuration <id>
+- uv run tools/campagne_v1.py preflight --configuration <id>
 - uv run tools/campagne_v1.py restituer
 - uv run tools/campagne_v1.py verifier-restitution
 """
@@ -19,6 +20,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -1040,6 +1042,173 @@ def qualifier_harnais(racine: Path) -> int:
     return 0
 
 
+SCHEMA_RECU_PREFLIGHT = "campagne-v1-preflight/v1"
+REPERTOIRE_PREFLIGHTS = _RACINE_CAMPAGNE_V1 / "preflights-v1"
+# Autorité groupée unique des préflights XS-06A à XS-06F, référencée une seule
+# fois par reçu ; aucun GO distinct par modèle (RG-03)
+AUTORITE_PREFLIGHT = "D-V1-03"
+ADAPTATEUR_CLAUDE = "claude"
+# Délai propre au préflight : le delai_secondes du TOML borne le harnais
+# génératif, jamais une sonde non générative
+DELAI_SONDE_PREFLIGHT = 120
+# Le code de sortie suit le verdict, à l'identique dans XS-06A à XS-06F
+CODES_SORTIE_PREFLIGHT = {"READY": 0, "UNAVAILABLE": 1, "HOLD": 2}
+CAUSES_PREFLIGHT_HOLD = ("HARNESS_ERROR", "IDENTITY_MISMATCH", "MISSING_OBSERVATION")
+CAUSES_PREFLIGHT_UNAVAILABLE = (
+    "INTERFACE_UNAVAILABLE",
+    "AUTHENTICATION_UNAVAILABLE",
+    "MODEL_UNAVAILABLE",
+    "PLAN_UNAVAILABLE",
+    "PROVIDER_FAILURE",
+    "QUOTA_EXHAUSTED",
+)
+# D-V1-01 : effort high quand exposé ; l'exposition reste à observer
+EFFORT_DEMANDE_CLAUDE = "high"
+# Unique sonde autorisée : non générative, sans -p, --print, prompt ni session
+SONDE_VERSION_CLAUDE = ("claude", "--version")
+
+
+def _expurger(texte: str) -> str:
+    """Expurgation des captures : le chemin du compte local ne sort jamais"""
+    return texte.replace(str(Path.home()), "~")
+
+
+def _observer_route_claude() -> tuple[list[dict], str, str, str | None, str]:
+    """Sonde la route claude sans génération : (sondes, version, verdict, cause, fait).
+
+    MSW : la version est le seul champ observable sans commande générative ;
+    authentification, plan servi, exposition du modèle, effort exposé et quota
+    restent INCONNU, donc READY n'est jamais prouvable dans cette tranche.
+    """
+    sondes: list[dict] = []
+    commande = " ".join(SONDE_VERSION_CLAUDE)
+    if shutil.which(ADAPTATEUR_CLAUDE) is None:
+        return (
+            sondes,
+            INCONNU,
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"client '{ADAPTATEUR_CLAUDE}' introuvable sur le PATH local ; "
+            "aucune sonde lancée",
+        )
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution = _executer_borne(
+            list(SONDE_VERSION_CLAUDE),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution["etat"] == "INCIDENT":
+        return (
+            sondes,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande}' : {_expurger(execution['fait'])}",
+        )
+    sondes.append(
+        {
+            "commande": commande,
+            "code_sortie": execution["code_sortie"],
+            "stdout_expurge": _expurger(execution["sortie"]["stdout"]),
+            "stderr_expurge": _expurger(execution["sortie"]["stderr"]),
+        }
+    )
+    if execution["code_sortie"] != 0:
+        return (
+            sondes,
+            INCONNU,
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"sonde '{commande}' en échec : code de sortie "
+            f"{execution['code_sortie']}, le client n'est pas utilisable",
+        )
+    texte_version = _expurger(execution["sortie"]["stdout"].strip())
+    version = texte_version if texte_version else INCONNU
+    return (
+        sondes,
+        version,
+        "HOLD",
+        "MISSING_OBSERVATION",
+        "client et version observés par la sonde non générative ; "
+        "authentification, plan servi, exposition du modèle, exposition de "
+        "l'effort et quota restent inobservables sans commande générative : "
+        "la route n'est pas prouvée prête",
+    )
+
+
+def preflight_configuration(racine: Path, identifiant: str) -> int:
+    registre = racine / REGISTRE_OFFICIEL
+    try:
+        entrees = _charger_registre(registre) if registre.is_dir() else []
+    except ErreurConfiguration as erreur:
+        print(f"ECHEC {erreur}")
+        return 1
+    correspondances = [
+        donnees
+        for _, donnees in entrees
+        if donnees["configuration_id"] == identifiant
+    ]
+    if not correspondances:
+        print(
+            f"ECHEC option '--configuration' : '{identifiant}' absent du "
+            f"registre officiel {REGISTRE_OFFICIEL.as_posix()}"
+        )
+        return 1
+    configuration = correspondances[0]
+    argv = configuration["harnais"]["argv"]
+    if configuration["interface"]["type"] != "cli" or argv[0] != ADAPTATEUR_CLAUDE:
+        print(
+            f"ECHEC adaptateur non couvert : '{argv[0]}' ; V1-XS-06A couvre le "
+            f"seul adaptateur '{ADAPTATEUR_CLAUDE}', les autres configurations "
+            "relèvent des tranches V1-XS-06B à V1-XS-06F"
+        )
+        return 1
+    sondes, version, verdict, cause, fait = _observer_route_claude()
+    recu = {
+        "schema_version": SCHEMA_RECU_PREFLIGHT,
+        "configuration_id": identifiant,
+        "date_preflight": datetime.now(timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
+        "autorite_preflight": AUTORITE_PREFLIGHT,
+        "adaptateur": ADAPTATEUR_CLAUDE,
+        "commande_publique": (
+            f"uv run tools/campagne_v1.py preflight --configuration {identifiant}"
+        ),
+        "sondes": sondes,
+        "interface": {
+            "type": configuration["interface"]["type"],
+            "client": ADAPTATEUR_CLAUDE,
+            "version_observee": version,
+        },
+        "authentification": {"observee": INCONNU},
+        "plan": {"declare": configuration["plan"]["nom"], "observe": INCONNU},
+        "modele": {
+            "demande": configuration["modele"]["demande"],
+            "expose": INCONNU,
+        },
+        "effort": {"demande": EFFORT_DEMANDE_CLAUDE, "expose": INCONNU},
+        "quota": {"observe": INCONNU, "consommation_preflight": INCONNU},
+        "verdict": verdict,
+        "cause": cause,
+        "fait": fait,
+    }
+    destination = racine / REPERTOIRE_PREFLIGHTS / f"{identifiant}.json"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(recu, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    print(f"préflight '{identifiant}' : verdict {verdict} · cause {cause}")
+    print(f"fait : {fait}")
+    print(
+        "reçu écrit : "
+        f"{(REPERTOIRE_PREFLIGHTS / (identifiant + '.json')).as_posix()}"
+    )
+    return CODES_SORTIE_PREFLIGHT[verdict]
+
+
 def _libelle_registre(registre: Path | None, cible: Path) -> str:
     if registre is None:
         return f"registre officiel {REGISTRE_OFFICIEL.as_posix()}"
@@ -1635,6 +1804,226 @@ def _article_qualification(relatif: str, sha_fichier: str, recu: dict) -> str:
     )
 
 
+SECTION_PREFLIGHT = "reçu de préflight V1 versionné"
+_MOTIF_DATE_PREFLIGHT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+_CLES_RECU_PREFLIGHT = {
+    "schema_version",
+    "configuration_id",
+    "date_preflight",
+    "autorite_preflight",
+    "adaptateur",
+    "commande_publique",
+    "sondes",
+    "interface",
+    "authentification",
+    "plan",
+    "modele",
+    "effort",
+    "quota",
+    "verdict",
+    "cause",
+    "fait",
+}
+_CLES_TABLES_PREFLIGHT = {
+    "interface": {"type", "client", "version_observee"},
+    "authentification": {"observee"},
+    "plan": {"declare", "observe"},
+    "modele": {"demande", "expose"},
+    "effort": {"demande", "expose"},
+    "quota": {"observe", "consommation_preflight"},
+}
+# Causes admises par verdict de route ; READY ne porte aucune cause
+_CAUSES_PAR_VERDICT_PREFLIGHT = {
+    "READY": (None,),
+    "HOLD": CAUSES_PREFLIGHT_HOLD,
+    "UNAVAILABLE": CAUSES_PREFLIGHT_UNAVAILABLE,
+}
+# Formes génératives interdites : jamais de prompt positionnel, -p, --print
+# ni session de modèle dans une sonde consignée
+_DRAPEAUX_SONDE_INTERDITS = {"--print", "--model"}
+
+
+def _exiger_sonde_non_generative(nom: str, commande: object) -> None:
+    if not isinstance(commande, str) or not commande.strip():
+        raise ErreurRestitution(f"champ '{nom}' : commande non vide attendue")
+    jetons = commande.split()
+    if jetons[0] != ADAPTATEUR_CLAUDE or any(
+        not jeton.startswith("--") or jeton in _DRAPEAUX_SONDE_INTERDITS
+        for jeton in jetons[1:]
+    ):
+        raise ErreurRestitution(
+            f"champ '{nom}' : sonde générative ou hors contrat refusée "
+            f"({commande!r})"
+        )
+
+
+def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
+    if not isinstance(recu, dict) or set(recu) != _CLES_RECU_PREFLIGHT:
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : clés exactes "
+            f"{sorted(_CLES_RECU_PREFLIGHT)} attendues"
+        )
+    if recu["schema_version"] != SCHEMA_RECU_PREFLIGHT:
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : schema_version "
+            f"'{SCHEMA_RECU_PREFLIGHT}' attendu"
+        )
+    identifiant = recu["configuration_id"]
+    if not isinstance(identifiant, str) or not _MOTIF_SLUG.match(identifiant):
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : configuration_id slug attendu"
+        )
+    if nom_fichier != f"{identifiant}.json":
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : nom de fichier divergent de "
+            f"la configuration '{identifiant}'"
+        )
+    if not isinstance(recu["date_preflight"], str) or not _MOTIF_DATE_PREFLIGHT.match(
+        recu["date_preflight"]
+    ):
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : date UTC 'AAAA-MM-JJTHH:MM:SSZ' "
+            "attendue"
+        )
+    if recu["autorite_preflight"] != AUTORITE_PREFLIGHT:
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : autorité unique "
+            f"'{AUTORITE_PREFLIGHT}' attendue"
+        )
+    if recu["adaptateur"] != ADAPTATEUR_CLAUDE:
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : adaptateur "
+            f"'{ADAPTATEUR_CLAUDE}' attendu"
+        )
+    for champ in ("commande_publique", "fait"):
+        if not isinstance(recu[champ], str) or not recu[champ].strip():
+            raise ErreurRestitution(
+                f"reçu de préflight '{nom_fichier}' : champ '{champ}' non vide "
+                "attendu"
+            )
+    verdict = recu["verdict"]
+    if verdict not in _CAUSES_PAR_VERDICT_PREFLIGHT:
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : verdict '{verdict}' hors "
+            "vocabulaire (READY | HOLD | UNAVAILABLE)"
+        )
+    if recu["cause"] not in _CAUSES_PAR_VERDICT_PREFLIGHT[verdict]:
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : cause '{recu['cause']}' "
+            f"incohérente avec le verdict '{verdict}'"
+        )
+    if not isinstance(recu["sondes"], list):
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : liste de sondes attendue"
+        )
+    for rang, sonde in enumerate(recu["sondes"], start=1):
+        if not isinstance(sonde, dict) or set(sonde) != {
+            "commande",
+            "code_sortie",
+            "stdout_expurge",
+            "stderr_expurge",
+        }:
+            raise ErreurRestitution(
+                f"reçu de préflight '{nom_fichier}' : sonde {rang} aux clés "
+                "exactes commande, code_sortie, stdout_expurge, stderr_expurge "
+                "attendue"
+            )
+        _exiger_sonde_non_generative(
+            f"sondes[{rang}].commande", sonde["commande"]
+        )
+        if isinstance(sonde["code_sortie"], bool) or not isinstance(
+            sonde["code_sortie"], int
+        ):
+            raise ErreurRestitution(
+                f"reçu de préflight '{nom_fichier}' : sonde {rang} sans code de "
+                "sortie entier"
+            )
+        for champ in ("stdout_expurge", "stderr_expurge"):
+            if not isinstance(sonde[champ], str):
+                raise ErreurRestitution(
+                    f"reçu de préflight '{nom_fichier}' : sonde {rang} sans "
+                    f"champ '{champ}' textuel"
+                )
+    for table, cles in _CLES_TABLES_PREFLIGHT.items():
+        if not isinstance(recu[table], dict) or set(recu[table]) != cles:
+            raise ErreurRestitution(
+                f"reçu de préflight '{nom_fichier}' : table '{table}' aux clés "
+                f"exactes {sorted(cles)} attendue"
+            )
+    return recu
+
+
+def _charger_recus_preflight(racine: Path) -> list[tuple[str, dict, str]]:
+    """Reçus de préflight validés : (chemin relatif, reçu, SHA-256 du fichier)."""
+    repertoire = racine / REPERTOIRE_PREFLIGHTS
+    if not repertoire.is_dir():
+        return []
+    charges: list[tuple[str, dict, str]] = []
+    for chemin in sorted(repertoire.iterdir()):
+        try:
+            recu = json.loads(chemin.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+            raise ErreurRestitution(
+                f"reçu de préflight illisible : {chemin.name} ({erreur})"
+            ) from erreur
+        _valider_recu_preflight(chemin.name, recu)
+        charges.append(
+            (
+                (REPERTOIRE_PREFLIGHTS / chemin.name).as_posix(),
+                recu,
+                _sha256_fichier(chemin),
+            )
+        )
+    return charges
+
+
+def _article_preflight(relatif: str, sha_fichier: str, recu: dict) -> str:
+    """Article régénérable à l'identique depuis le reçu de préflight."""
+    sondes = "".join(
+        f"<li>sonde <code>{_echapper(sonde['commande'])}</code> · code de sortie "
+        f"<code>{_echapper(sonde['code_sortie'])}</code> · sortie expurgée "
+        f"<code>{_echapper(sonde['stdout_expurge'].strip())}</code></li>"
+        for sonde in recu["sondes"]
+    )
+    liste_sondes = (
+        f"<ul>{sondes}</ul>"
+        if sondes
+        else "<p>aucune sonde lancée</p>"
+    )
+    cause = recu["cause"] if recu["cause"] is not None else "aucune"
+    contenu = (
+        f"<p><strong>{_echapper(recu['configuration_id'])}</strong> — préflight "
+        "de disponibilité, sans génération, sans acquisition et sans score.</p>"
+        f"<p>date <code>{_echapper(recu['date_preflight'])}</code> · autorité "
+        f"unique <code>{_echapper(recu['autorite_preflight'])}</code></p>"
+        f"<p>verdict de route <code>{_echapper(recu['verdict'])}</code> · cause "
+        f"<code>{_echapper(cause)}</code></p>"
+        f"<p>fait : {_echapper(recu['fait'])}</p>"
+        f"<p>commande exacte <code>{_echapper(recu['commande_publique'])}</code></p>"
+        + liste_sondes
+        + f"<p>interface <code>{_echapper(recu['interface']['type'])}</code> · "
+        f"client <code>{_echapper(recu['interface']['client'])}</code> · version "
+        f"observée <code>{_echapper(recu['interface']['version_observee'])}</code></p>"
+        f"<p>authentification observée : "
+        f"<code>{_echapper(recu['authentification']['observee'])}</code></p>"
+        f"<p>plan déclaré <code>{_echapper(recu['plan']['declare'])}</code> · plan "
+        f"observé <code>{_echapper(recu['plan']['observe'])}</code></p>"
+        f"<p>modèle demandé <code>{_echapper(recu['modele']['demande'])}</code> · "
+        f"modèle exposé <code>{_echapper(recu['modele']['expose'])}</code></p>"
+        f"<p>effort demandé <code>{_echapper(recu['effort']['demande'])}</code> · "
+        f"effort exposé <code>{_echapper(recu['effort']['expose'])}</code></p>"
+        f"<p>quota observé <code>{_echapper(recu['quota']['observe'])}</code> · "
+        "consommation du préflight "
+        f"<code>{_echapper(recu['quota']['consommation_preflight'])}</code></p>"
+        + _span_source(relatif, sha_fichier, SECTION_PREFLIGHT)
+    )
+    return _article(
+        "fait",
+        contenu,
+        f' data-preflight="{recu["configuration_id"]}"',
+    )
+
+
 def _span_source(chemin: str, sha256: str, section: str) -> str:
     return (
         f'<span class="source" data-chemin="{chemin}" data-sha256="{sha256}">'
@@ -1655,6 +2044,7 @@ def _rendre_page(racine: Path) -> bytes:
     recus_locaux = _recus_locaux(racine, etat)
     configurations = _configurations_officielles(racine)
     qualification = _charger_recu_qualification(racine)
+    preflights = _charger_recus_preflight(racine)
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
         etat, 0, len(configurations)
     )
@@ -1663,6 +2053,7 @@ def _rendre_page(racine: Path) -> bytes:
         racine, etat_relatif, tuple(chemin for chemin, _ in configurations)
     )
     empreintes.update({relatif: sha for relatif, _, sha in recus_locaux})
+    empreintes.update({relatif: sha for relatif, _, sha in preflights})
     if qualification is not None:
         empreintes[qualification[0]] = qualification[2]
 
@@ -1806,11 +2197,18 @@ def _rendre_page(racine: Path) -> bytes:
             "et aucune activité de compte, aucune authentification et aucune "
             "disponibilité n'en est déduite. "
             + (
-                "Aucun préflight, aucune acquisition officielle et aucune mesure "
-                "du panel n'existe ; le reçu de démonstration locale reste hors "
-                "panel officiel."
+                f"{len(preflights)} reçu(s) de préflight de disponibilité "
+                "existent, restitués plus bas : ils sondent une route sans "
+                "générer, sans acquérir et sans mesurer. "
+                if preflights
+                else "Aucun préflight n'existe. "
+            )
+            + (
+                "Aucune acquisition officielle et aucune mesure du panel "
+                "n'existe ; le reçu de démonstration locale reste hors panel "
+                "officiel."
                 if recus_locaux
-                else "Aucun préflight, aucune acquisition et aucune mesure n'existe."
+                else "Aucune acquisition et aucune mesure n'existe."
             )
             + "</p>"
             + "".join(
@@ -1865,6 +2263,23 @@ def _rendre_page(racine: Path) -> bytes:
             "outillage.</p>"
             + _article_qualification(
                 relatif_qualification, sha_qualification, recu_qualification
+            )
+            + "</section>"
+        )
+
+    if preflights:
+        sections.append(
+            "<section id=\"preflights\"><h2>Préflights de disponibilité</h2>"
+            "<p>Chaque entrée reprend un reçu de préflight versionné, sous "
+            "l'autorité groupée unique des préflights abonnement. Un préflight "
+            "sonde la disponibilité d'une route par des commandes non "
+            "génératives : il n'acquiert rien, ne mesure rien, ne note rien et "
+            "ne consomme aucun créneau d'acquisition. Tout champ non observé "
+            "reste <code>INCONNU</code> ; une aide de syntaxe ne prouve ni le "
+            "plan ni l'exposition d'un modèle.</p>"
+            + "".join(
+                _article_preflight(relatif, sha, recu)
+                for relatif, recu, sha in preflights
             )
             + "</section>"
         )
@@ -2040,6 +2455,7 @@ def _rendre_page(racine: Path) -> bytes:
                 if qualification is not None
                 else ()
             ),
+            *((relatif, SECTION_PREFLIGHT) for relatif, _, _ in preflights),
             (etat_relatif, "état V1 versionné"),
         )
     )
@@ -2134,14 +2550,30 @@ def verifier_restitution(racine: Path) -> int:
     recus_locaux = _recus_locaux(racine, etat)
     configurations = _configurations_officielles(racine)
     qualification = _charger_recu_qualification(racine)
+    preflights = _charger_recus_preflight(racine)
     jetons_factuels = _jetons_attendus(etat, 0, len(configurations))
     etat_relatif = CHEMIN_ETAT.as_posix()
     empreintes = _empreintes_sources(
         racine, etat_relatif, tuple(chemin for chemin, _ in configurations)
     )
     empreintes.update({relatif: sha for relatif, _, sha in recus_locaux})
+    empreintes.update({relatif: sha for relatif, _, sha in preflights})
     if qualification is not None:
         empreintes[qualification[0]] = qualification[2]
+
+    for relatif, recu, sha in preflights:
+        attendu = _article_preflight(relatif, sha, recu)
+        if attendu not in page:
+            echecs.append(
+                "entrée de préflight infidèle ou absente : "
+                f"{recu['configuration_id']}"
+            )
+    nombre_preflights = page.count(' data-preflight="')
+    if nombre_preflights != len(preflights):
+        echecs.append(
+            f"{len(preflights)} entrées de préflight attendues dans la page, "
+            f"{nombre_preflights} trouvées"
+        )
 
     if qualification is not None:
         attendu = _article_qualification(
@@ -2281,6 +2713,7 @@ _USAGE = (
     "usage : campagne_v1.py enregistrer [--registre <chemin>] --fichier <chemin> "
     "| panel [--registre <chemin>] | autorisations [--configuration <id>] "
     "| acquerir --local --configuration <id> "
+    "| preflight --configuration <id> "
     "| qualifier | restituer | verifier-restitution"
 )
 
@@ -2325,6 +2758,21 @@ def principal(arguments: list[str], racine: Path | None = None) -> int:
             print(_USAGE)
             return 2
         return acquerir_local(racine, arguments[3])
+    if arguments[:1] == ["preflight"]:
+        options = _analyser_options(arguments[1:], ("--configuration",))
+        if options is None:
+            print(_USAGE)
+            return 2
+        if "--configuration" not in options:
+            # Refus fail-closed : le préflight de panel entier exige les
+            # adaptateurs des tranches V1-XS-06B à V1-XS-06F, non couvertes ici
+            print(
+                "ECHEC option '--configuration' requise : V1-XS-06A couvre le "
+                f"seul adaptateur '{ADAPTATEUR_CLAUDE}' ; le préflight sans "
+                "option relève des tranches V1-XS-06B à V1-XS-06F"
+            )
+            return 1
+        return preflight_configuration(racine, options["--configuration"])
     if arguments[:1] == ["panel"]:
         options = _analyser_options(arguments[1:], ("--registre",))
         if options is None:
