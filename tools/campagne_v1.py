@@ -1064,8 +1064,16 @@ CAUSES_PREFLIGHT_UNAVAILABLE = (
 )
 # D-V1-01 : effort high quand exposé ; l'exposition reste à observer
 EFFORT_DEMANDE_CLAUDE = "high"
-# Unique sonde autorisée : non générative, sans -p, --print, prompt ni session
+# Sondes non génératives : jamais de -p, --print, --model, prompt positionnel,
+# session interactive, --continue, --resume, --fork-session ni
+# --dangerously-skip-permissions ; la liste blanche est exacte et fermée
 SONDE_VERSION_CLAUDE = ("claude", "--version")
+SONDE_AUTH_CLAUDE = ("claude", "auth", "status", "--json")
+SONDES_AUTORISEES_PREFLIGHT = (SONDE_VERSION_CLAUDE, SONDE_AUTH_CLAUDE)
+# Projection déterministe du statut d'authentification : seuls ces quatre
+# champs sortent de la mémoire locale ; email, orgId et orgName ne sont
+# jamais lus, affichés, écrits ni conservés, la sortie brute non plus
+CHAMPS_PROJECTION_AUTH = ("loggedIn", "authMethod", "apiProvider", "subscriptionType")
 
 
 def _expurger(texte: str) -> str:
@@ -1073,18 +1081,54 @@ def _expurger(texte: str) -> str:
     return texte.replace(str(Path.home()), "~")
 
 
-def _observer_route_claude() -> tuple[list[dict], str, str, str | None, str]:
-    """Sonde la route claude sans génération : (sondes, version, verdict, cause, fait).
+def _projeter_statut_auth(stdout: str) -> dict | None:
+    """Projection en mémoire du statut d'authentification, jamais la sortie brute.
 
-    MSW : la version est le seul champ observable sans commande générative ;
-    authentification, plan servi, exposition du modèle, effort exposé et quota
-    restent INCONNU, donc READY n'est jamais prouvable dans cette tranche.
+    Seuls loggedIn, authMethod, apiProvider et subscriptionType sortent d'ici ;
+    tout autre champ servi par le client est ignoré sans être conservé. None
+    signale un JSON illisible ou une structure attendue absente : le préflight
+    reste fail-closed sans inventer de fait.
+    """
+    try:
+        donnees = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(donnees, dict) or not isinstance(donnees.get("loggedIn"), bool):
+        return None
+    projection: dict = {"loggedIn": donnees["loggedIn"]}
+    for champ in CHAMPS_PROJECTION_AUTH[1:]:
+        valeur = donnees.get(champ)
+        if valeur is None:
+            projection[champ] = INCONNU
+        elif isinstance(valeur, str) and valeur.strip():
+            projection[champ] = valeur
+        else:
+            return None
+    if projection["loggedIn"] and any(
+        projection[champ] == INCONNU for champ in CHAMPS_PROJECTION_AUTH[1:]
+    ):
+        # Connecté mais structure attendue absente : observation refusée
+        return None
+    return projection
+
+
+def _observer_route_claude() -> tuple[list[dict], str, object, str, str, str | None, str]:
+    """Sonde la route claude sans génération.
+
+    Rend (sondes, version, authentification observée, plan observé, verdict,
+    cause, fait). MSW : version, authentification et plan sont observables par
+    les deux sondes de la liste blanche ; l'identité du modèle servi, l'effort
+    exposé et le quota restent INCONNU sans commande générative, donc READY
+    n'est jamais prouvable dans cette tranche.
     """
     sondes: list[dict] = []
-    commande = " ".join(SONDE_VERSION_CLAUDE)
+    commande_version = " ".join(SONDE_VERSION_CLAUDE)
+    commande_auth = " ".join(SONDE_AUTH_CLAUDE)
     if shutil.which(ADAPTATEUR_CLAUDE) is None:
         return (
             sondes,
+            INCONNU,
+            INCONNU,
             INCONNU,
             "UNAVAILABLE",
             "INTERFACE_UNAVAILABLE",
@@ -1102,13 +1146,15 @@ def _observer_route_claude() -> tuple[list[dict], str, str, str | None, str]:
         return (
             sondes,
             INCONNU,
+            INCONNU,
+            INCONNU,
             "HOLD",
             "HARNESS_ERROR",
-            f"sonde '{commande}' : {_expurger(execution['fait'])}",
+            f"sonde '{commande_version}' : {_expurger(execution['fait'])}",
         )
     sondes.append(
         {
-            "commande": commande,
+            "commande": commande_version,
             "code_sortie": execution["code_sortie"],
             "stdout_expurge": _expurger(execution["sortie"]["stdout"]),
             "stderr_expurge": _expurger(execution["sortie"]["stderr"]),
@@ -1118,22 +1164,107 @@ def _observer_route_claude() -> tuple[list[dict], str, str, str | None, str]:
         return (
             sondes,
             INCONNU,
+            INCONNU,
+            INCONNU,
             "UNAVAILABLE",
             "INTERFACE_UNAVAILABLE",
-            f"sonde '{commande}' en échec : code de sortie "
-            f"{execution['code_sortie']}, le client n'est pas utilisable",
+            f"sonde '{commande_version}' en échec : code de sortie "
+            f"{execution['code_sortie']}, le client n'est pas utilisable ; la "
+            "sonde d'authentification n'est pas lancée",
         )
     texte_version = _expurger(execution["sortie"]["stdout"].strip())
     version = texte_version if texte_version else INCONNU
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution_auth = _executer_borne(
+            list(SONDE_AUTH_CLAUDE),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution_auth["etat"] == "INCIDENT":
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_auth}' : {_expurger(execution_auth['fait'])}",
+        )
+    if execution_auth["code_sortie"] != 0:
+        # La sortie brute d'une sonde auth n'est jamais consignée
+        sondes.append(
+            {
+                "commande": commande_auth,
+                "code_sortie": execution_auth["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_auth}' en échec : code de sortie "
+            f"{execution_auth['code_sortie']}, statut d'authentification "
+            "inobservé ; la sortie brute n'est pas consignée",
+        )
+    projection = _projeter_statut_auth(execution_auth["sortie"]["stdout"])
+    if projection is None:
+        sondes.append(
+            {
+                "commande": commande_auth,
+                "code_sortie": 0,
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_auth}' : JSON illisible ou structure attendue "
+            "absente, statut d'authentification inobservé ; la sortie brute "
+            "n'est pas consignée",
+        )
+    sondes.append(
+        {
+            "commande": commande_auth,
+            "code_sortie": 0,
+            "projection": projection,
+        }
+    )
+    authentification = {
+        "loggedIn": projection["loggedIn"],
+        "authMethod": projection["authMethod"],
+        "apiProvider": projection["apiProvider"],
+    }
+    if not projection["loggedIn"]:
+        return (
+            sondes,
+            version,
+            authentification,
+            INCONNU,
+            "UNAVAILABLE",
+            "AUTHENTICATION_UNAVAILABLE",
+            "statut observé loggedIn=false : aucune authentification active, "
+            "la route n'est pas utilisable",
+        )
     return (
         sondes,
         version,
+        authentification,
+        projection["subscriptionType"],
         "HOLD",
         "MISSING_OBSERVATION",
-        "client et version observés par la sonde non générative ; "
-        "authentification, plan servi, exposition du modèle, exposition de "
-        "l'effort et quota restent inobservables sans commande générative : "
-        "la route n'est pas prouvée prête",
+        "client, version, authentification et plan observés par les sondes "
+        "non génératives ; identité du modèle servi, exposition de l'effort "
+        "et quota restent inobservables sans commande générative : la route "
+        "n'est pas prouvée prête",
     )
 
 
@@ -1164,7 +1295,15 @@ def preflight_configuration(racine: Path, identifiant: str) -> int:
             "relèvent des tranches V1-XS-06B à V1-XS-06F"
         )
         return 1
-    sondes, version, verdict, cause, fait = _observer_route_claude()
+    (
+        sondes,
+        version,
+        authentification,
+        plan_observe,
+        verdict,
+        cause,
+        fait,
+    ) = _observer_route_claude()
     recu = {
         "schema_version": SCHEMA_RECU_PREFLIGHT,
         "configuration_id": identifiant,
@@ -1182,8 +1321,11 @@ def preflight_configuration(racine: Path, identifiant: str) -> int:
             "client": ADAPTATEUR_CLAUDE,
             "version_observee": version,
         },
-        "authentification": {"observee": INCONNU},
-        "plan": {"declare": configuration["plan"]["nom"], "observe": INCONNU},
+        "authentification": {"observee": authentification},
+        "plan": {
+            "declare": configuration["plan"]["nom"],
+            "observe": plan_observe,
+        },
         "modele": {
             "demande": configuration["modele"]["demande"],
             "expose": INCONNU,
@@ -1838,22 +1980,26 @@ _CAUSES_PAR_VERDICT_PREFLIGHT = {
     "HOLD": CAUSES_PREFLIGHT_HOLD,
     "UNAVAILABLE": CAUSES_PREFLIGHT_UNAVAILABLE,
 }
-# Formes génératives interdites : jamais de prompt positionnel, -p, --print
-# ni session de modèle dans une sonde consignée
-_DRAPEAUX_SONDE_INTERDITS = {"--print", "--model"}
+# Champs dont READY exige l'observation : aucun ne peut rester INCONNU ni
+# NON_DEFINI quand le verdict affirme une route prête
+_CHAMPS_OBSERVES_READY = (
+    ("authentification.observee", "authentification", "observee"),
+    ("plan.observe", "plan", "observe"),
+    ("modele.expose", "modele", "expose"),
+    ("effort.expose", "effort", "expose"),
+    ("quota.observe", "quota", "observe"),
+)
 
 
-def _exiger_sonde_non_generative(nom: str, commande: object) -> None:
-    if not isinstance(commande, str) or not commande.strip():
-        raise ErreurRestitution(f"champ '{nom}' : commande non vide attendue")
-    jetons = commande.split()
-    if jetons[0] != ADAPTATEUR_CLAUDE or any(
-        not jeton.startswith("--") or jeton in _DRAPEAUX_SONDE_INTERDITS
-        for jeton in jetons[1:]
+def _exiger_sonde_autorisee(nom: str, commande: object) -> None:
+    """Liste blanche exacte : toute autre forme est refusée, notamment
+    -p, --print, --model, prompt positionnel, --continue, --resume,
+    --fork-session et --dangerously-skip-permissions"""
+    if not isinstance(commande, str) or tuple(commande.split()) not in (
+        SONDES_AUTORISEES_PREFLIGHT
     ):
         raise ErreurRestitution(
-            f"champ '{nom}' : sonde générative ou hors contrat refusée "
-            f"({commande!r})"
+            f"champ '{nom}' : sonde hors liste blanche refusée ({commande!r})"
         )
 
 
@@ -1917,39 +2063,90 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
             f"reçu de préflight '{nom_fichier}' : liste de sondes attendue"
         )
     for rang, sonde in enumerate(recu["sondes"], start=1):
-        if not isinstance(sonde, dict) or set(sonde) != {
-            "commande",
-            "code_sortie",
-            "stdout_expurge",
-            "stderr_expurge",
-        }:
+        if not isinstance(sonde, dict):
             raise ErreurRestitution(
-                f"reçu de préflight '{nom_fichier}' : sonde {rang} aux clés "
-                "exactes commande, code_sortie, stdout_expurge, stderr_expurge "
+                f"reçu de préflight '{nom_fichier}' : sonde {rang} : table "
                 "attendue"
             )
-        _exiger_sonde_non_generative(
-            f"sondes[{rang}].commande", sonde["commande"]
-        )
-        if isinstance(sonde["code_sortie"], bool) or not isinstance(
-            sonde["code_sortie"], int
+        _exiger_sonde_autorisee(f"sondes[{rang}].commande", sonde.get("commande"))
+        if isinstance(sonde.get("code_sortie"), bool) or not isinstance(
+            sonde.get("code_sortie"), int
         ):
             raise ErreurRestitution(
                 f"reçu de préflight '{nom_fichier}' : sonde {rang} sans code de "
                 "sortie entier"
             )
-        for champ in ("stdout_expurge", "stderr_expurge"):
-            if not isinstance(sonde[champ], str):
+        if sonde["commande"] == " ".join(SONDE_AUTH_CLAUDE):
+            # La sonde auth ne porte qu'une projection, jamais la sortie brute
+            if set(sonde) != {"commande", "code_sortie", "projection"}:
                 raise ErreurRestitution(
-                    f"reçu de préflight '{nom_fichier}' : sonde {rang} sans "
-                    f"champ '{champ}' textuel"
+                    f"reçu de préflight '{nom_fichier}' : sonde {rang} aux clés "
+                    "exactes commande, code_sortie, projection attendue"
                 )
+            projection = sonde["projection"]
+            if projection != INCONNU and (
+                not isinstance(projection, dict)
+                or set(projection) != set(CHAMPS_PROJECTION_AUTH)
+                or not isinstance(projection["loggedIn"], bool)
+                or any(
+                    not isinstance(projection[champ], str)
+                    or not projection[champ].strip()
+                    for champ in CHAMPS_PROJECTION_AUTH[1:]
+                )
+            ):
+                raise ErreurRestitution(
+                    f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                    "projection 'INCONNU' ou aux quatre champs exacts "
+                    f"{sorted(CHAMPS_PROJECTION_AUTH)} attendue"
+                )
+        else:
+            if set(sonde) != {
+                "commande",
+                "code_sortie",
+                "stdout_expurge",
+                "stderr_expurge",
+            }:
+                raise ErreurRestitution(
+                    f"reçu de préflight '{nom_fichier}' : sonde {rang} aux clés "
+                    "exactes commande, code_sortie, stdout_expurge, "
+                    "stderr_expurge attendue"
+                )
+            for champ in ("stdout_expurge", "stderr_expurge"):
+                if not isinstance(sonde[champ], str):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} sans "
+                        f"champ '{champ}' textuel"
+                    )
     for table, cles in _CLES_TABLES_PREFLIGHT.items():
         if not isinstance(recu[table], dict) or set(recu[table]) != cles:
             raise ErreurRestitution(
                 f"reçu de préflight '{nom_fichier}' : table '{table}' aux clés "
                 f"exactes {sorted(cles)} attendue"
             )
+    observee = recu["authentification"]["observee"]
+    if observee != INCONNU and (
+        not isinstance(observee, dict)
+        or set(observee) != {"loggedIn", "authMethod", "apiProvider"}
+        or not isinstance(observee["loggedIn"], bool)
+        or any(
+            not isinstance(observee[champ], str) or not observee[champ].strip()
+            for champ in ("authMethod", "apiProvider")
+        )
+    ):
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : authentification.observee "
+            "'INCONNU' ou aux clés exactes loggedIn, authMethod, apiProvider "
+            "attendue"
+        )
+    if verdict == "READY":
+        # READY exige les cinq contrôles établis : aucun champ observé ne
+        # peut rester INCONNU ni NON_DEFINI
+        for nom_champ, table, cle in _CHAMPS_OBSERVES_READY:
+            if recu[table][cle] in (INCONNU, "NON_DEFINI"):
+                raise ErreurRestitution(
+                    f"reçu de préflight '{nom_fichier}' : verdict READY refusé, "
+                    f"champ '{nom_champ}' non observé ({recu[table][cle]!r})"
+                )
     return recu
 
 
@@ -1977,13 +2174,40 @@ def _charger_recus_preflight(racine: Path) -> list[tuple[str, dict, str]]:
     return charges
 
 
+def _texte_sonde_preflight(sonde: dict) -> str:
+    if "projection" in sonde:
+        projection = sonde["projection"]
+        if projection == INCONNU:
+            texte = f"projection <code>{INCONNU}</code>"
+        else:
+            texte = "projection " + " · ".join(
+                f"{champ} <code>{_echapper(projection[champ])}</code>"
+                for champ in CHAMPS_PROJECTION_AUTH
+            )
+    else:
+        texte = (
+            "sortie expurgée "
+            f"<code>{_echapper(sonde['stdout_expurge'].strip())}</code>"
+        )
+    return (
+        f"<li>sonde <code>{_echapper(sonde['commande'])}</code> · code de sortie "
+        f"<code>{_echapper(sonde['code_sortie'])}</code> · {texte}</li>"
+    )
+
+
+def _texte_auth_preflight(observee: object) -> str:
+    if observee == INCONNU:
+        return f"<code>{INCONNU}</code>"
+    return " · ".join(
+        f"{champ} <code>{_echapper(observee[champ])}</code>"
+        for champ in ("loggedIn", "authMethod", "apiProvider")
+    )
+
+
 def _article_preflight(relatif: str, sha_fichier: str, recu: dict) -> str:
     """Article régénérable à l'identique depuis le reçu de préflight."""
     sondes = "".join(
-        f"<li>sonde <code>{_echapper(sonde['commande'])}</code> · code de sortie "
-        f"<code>{_echapper(sonde['code_sortie'])}</code> · sortie expurgée "
-        f"<code>{_echapper(sonde['stdout_expurge'].strip())}</code></li>"
-        for sonde in recu["sondes"]
+        _texte_sonde_preflight(sonde) for sonde in recu["sondes"]
     )
     liste_sondes = (
         f"<ul>{sondes}</ul>"
@@ -2004,8 +2228,8 @@ def _article_preflight(relatif: str, sha_fichier: str, recu: dict) -> str:
         + f"<p>interface <code>{_echapper(recu['interface']['type'])}</code> · "
         f"client <code>{_echapper(recu['interface']['client'])}</code> · version "
         f"observée <code>{_echapper(recu['interface']['version_observee'])}</code></p>"
-        f"<p>authentification observée : "
-        f"<code>{_echapper(recu['authentification']['observee'])}</code></p>"
+        "<p>authentification observée : "
+        f"{_texte_auth_preflight(recu['authentification']['observee'])}</p>"
         f"<p>plan déclaré <code>{_echapper(recu['plan']['declare'])}</code> · plan "
         f"observé <code>{_echapper(recu['plan']['observe'])}</code></p>"
         f"<p>modèle demandé <code>{_echapper(recu['modele']['demande'])}</code> · "
