@@ -1,18 +1,22 @@
 {
   "adaptateur": "claude",
   "authentification": {
-    "observee": "INCONNU"
+    "observee": {
+      "apiProvider": "firstParty",
+      "authMethod": "claude.ai",
+      "loggedIn": true
+    }
   },
   "autorite_preflight": "D-V1-03",
   "cause": "MISSING_OBSERVATION",
   "commande_publique": "uv run tools/campagne_v1.py preflight --configuration claude-code-opus-5",
   "configuration_id": "claude-code-opus-5",
-  "date_preflight": "2026-08-25T13:57:05Z",
+  "date_preflight": "2026-08-25T14:26:24Z",
   "effort": {
     "demande": "high",
     "expose": "INCONNU"
   },
-  "fait": "client et version observés par la sonde non générative ; authentification, plan servi, exposition du modèle, exposition de l'effort et quota restent inobservables sans commande générative : la route n'est pas prouvée prête",
+  "fait": "client, version, authentification et plan observés par les sondes non génératives ; identité du modèle servi, exposition de l'effort et quota restent inobservables sans commande générative : la route n'est pas prouvée prête",
   "interface": {
     "client": "claude",
     "type": "cli",
@@ -24,7 +28,7 @@
   },
   "plan": {
     "declare": "Claude Code",
-    "observe": "INCONNU"
+    "observe": "max"
   },
   "quota": {
     "consommation_preflight": "INCONNU",
@@ -37,6 +41,16 @@
       "commande": "claude --version",
       "stderr_expurge": "",
       "stdout_expurge": "2.1.245 (Claude Code)\n"
+    },
+    {
+      "code_sortie": 0,
+      "commande": "claude auth status --json",
+      "projection": {
+        "apiProvider": "firstParty",
+        "authMethod": "claude.ai",
+        "loggedIn": true,
+        "subscriptionType": "max"
+      }
     }
   ],
   "verdict": "HOLD"

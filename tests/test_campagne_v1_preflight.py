@@ -31,6 +31,13 @@ CHEMIN_PREFLIGHTS = (
     "tasks/dev/pre-cadrage-entretien-client/campagne-v1/preflights-v1"
 )
 VERSION_SIMULEE = "2.1.245 (Claude Code)"
+# Statut simulé : les champs privés email et orgName prouvent par leur
+# présence à la frontière que la projection ne les consigne jamais
+AUTH_SIMULE = (
+    '{"loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty",'
+    ' "subscriptionType": "max", "email": "prive@example.com",'
+    ' "orgId": "org-prive-123", "orgName": "Org Privee"}'
+)
 
 
 def _principal(arguments: list[str], racine: Path) -> tuple[int, str]:
@@ -60,16 +67,7 @@ class BaseXS06A(unittest.TestCase):
         self.bin = self.racine / "bin-simule"
         self.bin.mkdir()
         self.journal = self.racine / "journal-claude.txt"
-        self._installer_claude(
-            "#!/bin/sh\n"
-            f"printf '%s\\n' \"$@\" >> '{self.journal}'\n"
-            'if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then\n'
-            f"  echo '{VERSION_SIMULEE}'\n"
-            "  exit 0\n"
-            "fi\n"
-            "echo 'invocation hors contrat' >&2\n"
-            "exit 64\n"
-        )
+        self._installer_claude(self._script_claude())
         patch = mock.patch.dict(os.environ, {"PATH": str(self.bin)})
         patch.start()
         self.addCleanup(patch.stop)
@@ -78,6 +76,23 @@ class BaseXS06A(unittest.TestCase):
         )
         self.recu_opus = (
             self.racine / CHEMIN_PREFLIGHTS / "claude-code-opus-5.json"
+        )
+
+    def _script_claude(self, auth_json: str = AUTH_SIMULE) -> str:
+        """Client simulé : une ligne de journal par invocation, args joints"""
+        return (
+            "#!/bin/sh\n"
+            f"echo \"$*\" >> '{self.journal}'\n"
+            'if [ "$*" = "--version" ]; then\n'
+            f"  echo '{VERSION_SIMULEE}'\n"
+            "  exit 0\n"
+            "fi\n"
+            'if [ "$*" = "auth status --json" ]; then\n'
+            f"  printf '%s\\n' '{auth_json}'\n"
+            "  exit 0\n"
+            "fi\n"
+            "echo 'invocation hors contrat' >&2\n"
+            "exit 64\n"
         )
 
     def _installer_claude(self, script: str) -> None:
@@ -97,8 +112,8 @@ class BaseXS06A(unittest.TestCase):
 class PreflightClaudeDisponibleTests(BaseXS06A):
     def test_claude_disponible_rend_hold_missing_observation_et_ecrit_recu(self):
         code, sortie = self._preflight("claude-code-fable-5")
-        # HOLD rend 2 : la version seule est observable sans génération,
-        # l'exposition du modèle et l'authentification restent inobservées
+        # HOLD rend 2 : version, authentification et plan sont observables
+        # sans génération, l'identité du modèle servi reste non prouvée
         self.assertEqual(code, 2, sortie)
         self.assertIn("HOLD", sortie)
         self.assertIn("MISSING_OBSERVATION", sortie)
@@ -110,13 +125,97 @@ class PreflightClaudeDisponibleTests(BaseXS06A):
         self.assertEqual(recu["modele"]["demande"], "claude-fable-5")
         self.assertEqual(recu["modele"]["expose"], "INCONNU")
         self.assertEqual(recu["interface"]["version_observee"], VERSION_SIMULEE)
-        self.assertEqual(recu["authentification"]["observee"], "INCONNU")
+        self.assertEqual(
+            recu["authentification"]["observee"],
+            {
+                "loggedIn": True,
+                "authMethod": "claude.ai",
+                "apiProvider": "firstParty",
+            },
+        )
         self.assertEqual(recu["plan"]["declare"], "Claude Code")
-        self.assertEqual(recu["plan"]["observe"], "INCONNU")
+        self.assertEqual(recu["plan"]["observe"], "max")
         self.assertEqual(recu["effort"]["demande"], "high")
         self.assertEqual(recu["effort"]["expose"], "INCONNU")
         self.assertEqual(recu["quota"]["observe"], "INCONNU")
         self.assertEqual(recu["quota"]["consommation_preflight"], "INCONNU")
+        # Le fait MSW ne prétend plus inobservé ce qui a été observé
+        self.assertIn("authentification et plan observés", recu["fait"])
+        self.assertNotIn("authentification, plan servi", recu["fait"])
+        self.assertIn("modèle", recu["fait"])
+
+    def test_sonde_auth_projetee_sans_sortie_brute_ni_champ_prive(self):
+        self.assertEqual(self._preflight("claude-code-fable-5")[0], 2)
+        texte = self.recu_fable.read_text(encoding="utf-8")
+        # Les champs privés servis par la frontière ne sont jamais consignés
+        for prive in ("email", "prive@example.com", "orgId", "org-prive-123",
+                      "orgName", "Org Privee"):
+            self.assertNotIn(prive, texte)
+        recu = self._lire_recu(self.recu_fable)
+        sonde_auth = recu["sondes"][1]
+        self.assertEqual(sonde_auth["commande"], "claude auth status --json")
+        self.assertEqual(sonde_auth["code_sortie"], 0)
+        # Projection déterministe des quatre seuls champs, pas de stdout
+        self.assertEqual(
+            sonde_auth["projection"],
+            {
+                "loggedIn": True,
+                "authMethod": "claude.ai",
+                "apiProvider": "firstParty",
+                "subscriptionType": "max",
+            },
+        )
+        self.assertNotIn("stdout_expurge", sonde_auth)
+        self.assertNotIn("stderr_expurge", sonde_auth)
+
+    def test_deconnecte_rend_un_unavailable_authentication(self):
+        self._installer_claude(
+            self._script_claude('{"loggedIn": false}')
+        )
+        code, sortie = self._preflight("claude-code-fable-5")
+        self.assertEqual(code, 1, sortie)
+        self.assertIn("AUTHENTICATION_UNAVAILABLE", sortie)
+        recu = self._lire_recu(self.recu_fable)
+        self.assertEqual(recu["verdict"], "UNAVAILABLE")
+        self.assertEqual(recu["cause"], "AUTHENTICATION_UNAVAILABLE")
+        self.assertEqual(
+            recu["authentification"]["observee"]["loggedIn"], False
+        )
+        self.assertEqual(recu["plan"]["observe"], "INCONNU")
+
+    def test_json_auth_illisible_reste_fail_closed_sans_sortie_brute(self):
+        self._installer_claude(
+            self._script_claude("statut illisible hors JSON")
+        )
+        code, sortie = self._preflight("claude-code-fable-5")
+        self.assertEqual(code, 2, sortie)
+        recu = self._lire_recu(self.recu_fable)
+        self.assertEqual(recu["verdict"], "HOLD")
+        self.assertEqual(recu["cause"], "HARNESS_ERROR")
+        self.assertEqual(recu["authentification"]["observee"], "INCONNU")
+        self.assertEqual(recu["plan"]["observe"], "INCONNU")
+        self.assertEqual(recu["sondes"][1]["projection"], "INCONNU")
+        # La sortie brute inexploitable n'est jamais consignée
+        self.assertNotIn(
+            "statut illisible hors JSON",
+            self.recu_fable.read_text(encoding="utf-8"),
+        )
+
+    def test_structure_auth_attendue_absente_reste_fail_closed(self):
+        # loggedIn vrai sans subscriptionType : structure attendue absente
+        self._installer_claude(
+            self._script_claude(
+                '{"loggedIn": true, "authMethod": "claude.ai",'
+                ' "apiProvider": "firstParty"}'
+            )
+        )
+        code, _ = self._preflight("claude-code-fable-5")
+        self.assertEqual(code, 2)
+        recu = self._lire_recu(self.recu_fable)
+        self.assertEqual(recu["verdict"], "HOLD")
+        self.assertEqual(recu["cause"], "HARNESS_ERROR")
+        self.assertEqual(recu["authentification"]["observee"], "INCONNU")
+        self.assertEqual(recu["plan"]["observe"], "INCONNU")
 
 
 class PreflightRecuContratTests(BaseXS06A):
@@ -168,13 +267,19 @@ class PreflightRecuContratTests(BaseXS06A):
         recu = json.loads(texte)
         self.assertIn("~/.claude", recu["sondes"][0]["stdout_expurge"])
 
-    def test_seule_la_sonde_version_est_invoquee_jamais_une_forme_generative(self):
+    def test_seules_les_deux_sondes_autorisees_sont_invoquees(self):
         self.assertEqual(self._preflight("claude-code-fable-5")[0], 2)
         self.assertEqual(self._preflight("claude-code-opus-5")[0], 2)
         invocations = self.journal.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(invocations, ["--version", "--version"])
-        for interdit in ("-p", "--print", "--model"):
-            self.assertNotIn(interdit, invocations)
+        # Exactement les deux sondes de la liste blanche, dans l'ordre,
+        # jamais une forme générative ni une session
+        self.assertEqual(
+            invocations,
+            ["--version", "auth status --json"] * 2,
+        )
+        for interdit in ("-p", "--print", "--model", "--continue", "--resume"):
+            for invocation in invocations:
+                self.assertNotIn(interdit, invocation.split())
 
     def test_aucun_recu_d_acquisition_ecrit_repertoire_intact(self):
         repertoire = self.racine / M._RACINE_CAMPAGNE_V1 / "recus-v1"
@@ -209,7 +314,9 @@ class PreflightIndisponibleTests(BaseXS06A):
 
     def test_sonde_version_en_echec_rend_un_unavailable_interface(self):
         self._installer_claude(
-            "#!/bin/sh\necho 'client défaillant' >&2\nexit 7\n"
+            "#!/bin/sh\n"
+            f"echo \"$*\" >> '{self.journal}'\n"
+            "echo 'client défaillant' >&2\nexit 7\n"
         )
         code, sortie = self._preflight("claude-code-fable-5")
         self.assertEqual(code, 1, sortie)
@@ -218,6 +325,11 @@ class PreflightIndisponibleTests(BaseXS06A):
         self.assertEqual(recu["cause"], "INTERFACE_UNAVAILABLE")
         self.assertEqual(recu["sondes"][0]["code_sortie"], 7)
         self.assertEqual(recu["interface"]["version_observee"], "INCONNU")
+        # Interface non établie : la sonde auth n'est jamais lancée
+        self.assertEqual(
+            self.journal.read_text(encoding="utf-8").splitlines(),
+            ["--version"],
+        )
 
     def test_delai_de_sonde_depasse_rend_deux_hold_harness_error(self):
         # Incident du dispositif, jamais imputé à la configuration : HOLD
@@ -384,6 +496,35 @@ class RestitutionPreflightTests(BaseXS06A):
                         }
                     ]
                 }
+            ),
+            "sonde-continue-injectee": lambda recu: recu.update(
+                {
+                    "sondes": [
+                        {
+                            "commande": "claude --continue",
+                            "code_sortie": 0,
+                            "stdout_expurge": "",
+                            "stderr_expurge": "",
+                        }
+                    ]
+                }
+            ),
+            "sonde-skip-permissions-injectee": lambda recu: recu.update(
+                {
+                    "sondes": [
+                        {
+                            "commande": "claude --dangerously-skip-permissions",
+                            "code_sortie": 0,
+                            "stdout_expurge": "",
+                            "stderr_expurge": "",
+                        }
+                    ]
+                }
+            ),
+            # READY exige les cinq observations : auth, plan, modèle exposé,
+            # effort exposé et quota ne peuvent rester INCONNU
+            "ready-sans-observation-complete": lambda recu: recu.update(
+                {"verdict": "READY", "cause": None}
             ),
         }
         for nom, transformer in mutations.items():
