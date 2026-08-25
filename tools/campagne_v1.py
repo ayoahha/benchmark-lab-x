@@ -1075,6 +1075,375 @@ SONDES_AUTORISEES_PREFLIGHT = (SONDE_VERSION_CLAUDE, SONDE_AUTH_CLAUDE)
 # jamais lus, affichés, écrits ni conservés, la sortie brute non plus
 CHAMPS_PROJECTION_AUTH = ("loggedIn", "authMethod", "apiProvider", "subscriptionType")
 
+ADAPTATEUR_CODEX = "codex"
+# D-V1-01 : politique d'effort ferme de la configuration codex-gpt-5-6-sol
+EFFORT_DEMANDE_CODEX = "high"
+# Sondes non génératives Codex : jamais de exec, review, apply, resume,
+# fork, prompt positionnel ni session interactive ; liste exacte et fermée
+SONDE_VERSION_CODEX = ("codex", "--version")
+SONDE_LOGIN_CODEX = ("codex", "login", "status")
+SONDE_CATALOGUE_CODEX = ("codex", "debug", "models")
+SONDES_AUTORISEES_PREFLIGHT_CODEX = (
+    SONDE_VERSION_CODEX,
+    SONDE_LOGIN_CODEX,
+    SONDE_CATALOGUE_CODEX,
+)
+# Lignes de statut reconnues de 'codex login status', liste fermée : la
+# sortie brute n'est jamais consignée, seule la méthode projetée sort
+LIGNES_LOGIN_CODEX = {
+    "Logged in using ChatGPT": "ChatGPT",
+    "Logged in using an API key": "API key",
+}
+LIGNE_DECONNECTE_CODEX = "Not logged in"
+CHAMPS_PROJECTION_LOGIN_CODEX = ("connecte", "methode")
+CHAMPS_PROJECTION_CATALOGUE_CODEX = ("modele_demande_present", "efforts_annonces")
+
+
+def _projeter_login_codex(stdout: str, stderr: str) -> dict | None:
+    """Projection en mémoire du statut de connexion, jamais la sortie brute.
+
+    Le client réel écrit son statut sur stderr : les deux flux sont lus.
+    Seule une ligne de la liste fermée est reconnue ; toute autre forme rend
+    None et le préflight reste fail-closed sans inventer de fait.
+    """
+    lignes = [
+        ligne.strip()
+        for ligne in (stdout.splitlines() + stderr.splitlines())
+        if ligne.strip()
+    ]
+    connectees = [
+        LIGNES_LOGIN_CODEX[ligne] for ligne in lignes if ligne in LIGNES_LOGIN_CODEX
+    ]
+    deconnectees = [
+        ligne for ligne in lignes if ligne.startswith(LIGNE_DECONNECTE_CODEX)
+    ]
+    if len(connectees) == 1 and not deconnectees:
+        return {"connecte": True, "methode": connectees[0]}
+    if deconnectees and not connectees:
+        return {"connecte": False, "methode": INCONNU}
+    return None
+
+
+def _projeter_catalogue_codex(
+    stdout: str, stderr: str, modele_demande: str
+) -> dict | None:
+    """Projection du catalogue : présence du modèle demandé et efforts annoncés.
+
+    Le catalogue complet, ses autres modèles et tout autre champ servi ne
+    sont jamais conservés. None signale un JSON illisible ou une structure
+    models absente : le préflight reste fail-closed sans inventer de fait.
+    """
+    modeles = None
+    for flux in (stdout, stderr):
+        try:
+            donnees = json.loads(flux)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(donnees, dict) and isinstance(donnees.get("models"), list):
+            modeles = donnees["models"]
+            break
+        if isinstance(donnees, list):
+            modeles = donnees
+            break
+    if modeles is None:
+        return None
+    correspondances = [
+        entree
+        for entree in modeles
+        if isinstance(entree, dict) and entree.get("slug") == modele_demande
+    ]
+    if not correspondances:
+        return {"modele_demande_present": False, "efforts_annonces": []}
+    niveaux = correspondances[0].get("supported_reasoning_levels")
+    efforts = [
+        niveau["effort"]
+        for niveau in (niveaux if isinstance(niveaux, list) else [])
+        if isinstance(niveau, dict)
+        and isinstance(niveau.get("effort"), str)
+        and niveau["effort"].strip()
+    ]
+    return {"modele_demande_present": True, "efforts_annonces": efforts}
+
+
+def _observer_route_codex(
+    modele_demande: str,
+) -> tuple[list[dict], str, object, str, str, str, str, str | None, str]:
+    """Sonde la route codex sans génération.
+
+    Rend (sondes, version, authentification observée, plan observé, modèle
+    exposé, effort exposé, verdict, cause, fait). MSW : version,
+    authentification et catalogue sont observables par les trois sondes de
+    la liste blanche ; une correspondance de catalogue exacte prouve le
+    modèle exposé et les efforts explicitement annoncés, jamais le modèle
+    réellement servi ; le plan du compte, le quota et l'identité servie
+    restent INCONNU sans commande générative, donc READY n'est jamais
+    prouvable dans cette tranche.
+    """
+    sondes: list[dict] = []
+    commande_version = " ".join(SONDE_VERSION_CODEX)
+    commande_login = " ".join(SONDE_LOGIN_CODEX)
+    commande_catalogue = " ".join(SONDE_CATALOGUE_CODEX)
+    if shutil.which(ADAPTATEUR_CODEX) is None:
+        return (
+            sondes,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"client '{ADAPTATEUR_CODEX}' introuvable sur le PATH local ; "
+            "aucune sonde lancée",
+        )
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution = _executer_borne(
+            list(SONDE_VERSION_CODEX),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution["etat"] == "INCIDENT":
+        return (
+            sondes,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_version}' : {_expurger(execution['fait'])}",
+        )
+    sondes.append(
+        {
+            "commande": commande_version,
+            "code_sortie": execution["code_sortie"],
+            "stdout_expurge": _expurger(execution["sortie"]["stdout"]),
+            "stderr_expurge": _expurger(execution["sortie"]["stderr"]),
+        }
+    )
+    if execution["code_sortie"] != 0:
+        return (
+            sondes,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"sonde '{commande_version}' en échec : code de sortie "
+            f"{execution['code_sortie']}, le client n'est pas utilisable ; "
+            "les sondes de connexion et de catalogue ne sont pas lancées",
+        )
+    texte_version = _expurger(execution["sortie"]["stdout"].strip())
+    version = texte_version if texte_version else INCONNU
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution_login = _executer_borne(
+            list(SONDE_LOGIN_CODEX),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution_login["etat"] == "INCIDENT":
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_login}' : {_expurger(execution_login['fait'])}",
+        )
+    projection_login = _projeter_login_codex(
+        execution_login["sortie"]["stdout"], execution_login["sortie"]["stderr"]
+    )
+    if projection_login is None:
+        # La sortie brute d'une sonde de connexion n'est jamais consignée
+        sondes.append(
+            {
+                "commande": commande_login,
+                "code_sortie": execution_login["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_login}' : statut hors liste fermée reconnue "
+            f"(code de sortie {execution_login['code_sortie']}), statut de "
+            "connexion inobservé ; la sortie brute n'est pas consignée",
+        )
+    sondes.append(
+        {
+            "commande": commande_login,
+            "code_sortie": execution_login["code_sortie"],
+            "projection": projection_login,
+        }
+    )
+    if not projection_login["connecte"]:
+        return (
+            sondes,
+            version,
+            projection_login,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "AUTHENTICATION_UNAVAILABLE",
+            "statut observé 'Not logged in' : aucune authentification "
+            "active, la route n'est pas utilisable ; la sonde de catalogue "
+            "n'est pas lancée",
+        )
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution_catalogue = _executer_borne(
+            list(SONDE_CATALOGUE_CODEX),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution_catalogue["etat"] == "INCIDENT":
+        return (
+            sondes,
+            version,
+            projection_login,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_catalogue}' : "
+            f"{_expurger(execution_catalogue['fait'])}",
+        )
+    if execution_catalogue["code_sortie"] != 0:
+        # Le catalogue complet n'est jamais consigné, même en échec
+        sondes.append(
+            {
+                "commande": commande_catalogue,
+                "code_sortie": execution_catalogue["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            projection_login,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_catalogue}' en échec : code de sortie "
+            f"{execution_catalogue['code_sortie']}, catalogue inobservé ; "
+            "la sortie brute n'est pas consignée",
+        )
+    projection_catalogue = _projeter_catalogue_codex(
+        execution_catalogue["sortie"]["stdout"],
+        execution_catalogue["sortie"]["stderr"],
+        modele_demande,
+    )
+    if projection_catalogue is None:
+        sondes.append(
+            {
+                "commande": commande_catalogue,
+                "code_sortie": 0,
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            projection_login,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_catalogue}' : JSON illisible ou structure "
+            "models absente, catalogue inobservé ; la sortie brute n'est "
+            "pas consignée",
+        )
+    sondes.append(
+        {
+            "commande": commande_catalogue,
+            "code_sortie": 0,
+            "projection": projection_catalogue,
+        }
+    )
+    if not projection_catalogue["modele_demande_present"]:
+        return (
+            sondes,
+            version,
+            projection_login,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "MODEL_UNAVAILABLE",
+            f"catalogue observé sans correspondance exacte pour "
+            f"'{modele_demande}' : le modèle demandé n'est pas exposé par "
+            "le client",
+        )
+    efforts = projection_catalogue["efforts_annonces"]
+    if efforts and EFFORT_DEMANDE_CODEX not in efforts:
+        return (
+            sondes,
+            version,
+            projection_login,
+            INCONNU,
+            modele_demande,
+            INCONNU,
+            "UNAVAILABLE",
+            "MODEL_UNAVAILABLE",
+            f"catalogue observé : '{modele_demande}' est exposé mais "
+            f"l'effort demandé '{EFFORT_DEMANDE_CODEX}' est absent des "
+            f"efforts explicitement annoncés {efforts} ; aucune "
+            "substitution d'effort n'est admise",
+        )
+    if not efforts:
+        return (
+            sondes,
+            version,
+            projection_login,
+            INCONNU,
+            modele_demande,
+            INCONNU,
+            "HOLD",
+            "MISSING_OBSERVATION",
+            "client, version, authentification et catalogue observés par "
+            f"les sondes non génératives ; '{modele_demande}' est exposé "
+            "mais le catalogue n'annonce explicitement aucun effort ; plan "
+            "du compte, quota et identité réellement servie restent "
+            "inobservables sans commande générative : la route n'est pas "
+            "prouvée prête",
+        )
+    return (
+        sondes,
+        version,
+        projection_login,
+        INCONNU,
+        modele_demande,
+        EFFORT_DEMANDE_CODEX,
+        "HOLD",
+        "MISSING_OBSERVATION",
+        "client, version, authentification et catalogue observés par les "
+        f"sondes non génératives ; '{modele_demande}' et l'effort "
+        f"'{EFFORT_DEMANDE_CODEX}' sont explicitement annoncés par la "
+        "correspondance de catalogue exacte, qui ne prouve jamais le "
+        "modèle réellement servi ; plan du compte, quota et identité "
+        "réellement servie restent inobservables sans commande "
+        "générative : la route n'est pas prouvée prête",
+    )
+
 
 def _expurger(texte: str) -> str:
     """Expurgation des captures : le chemin du compte local ne sort jamais"""
@@ -1288,22 +1657,42 @@ def preflight_configuration(racine: Path, identifiant: str) -> int:
         return 1
     configuration = correspondances[0]
     argv = configuration["harnais"]["argv"]
-    if configuration["interface"]["type"] != "cli" or argv[0] != ADAPTATEUR_CLAUDE:
+    adaptateurs_couverts = (ADAPTATEUR_CLAUDE, ADAPTATEUR_CODEX)
+    if configuration["interface"]["type"] != "cli" or argv[0] not in adaptateurs_couverts:
         print(
-            f"ECHEC adaptateur non couvert : '{argv[0]}' ; V1-XS-06A couvre le "
-            f"seul adaptateur '{ADAPTATEUR_CLAUDE}', les autres configurations "
-            "relèvent des tranches V1-XS-06B à V1-XS-06F"
+            f"ECHEC adaptateur non couvert : '{argv[0]}' ; V1-XS-06A et "
+            f"V1-XS-06B couvrent les seuls adaptateurs '{ADAPTATEUR_CLAUDE}' "
+            f"et '{ADAPTATEUR_CODEX}', les autres configurations relèvent "
+            "des tranches V1-XS-06C à V1-XS-06F"
         )
         return 1
-    (
-        sondes,
-        version,
-        authentification,
-        plan_observe,
-        verdict,
-        cause,
-        fait,
-    ) = _observer_route_claude()
+    adaptateur = argv[0]
+    if adaptateur == ADAPTATEUR_CODEX:
+        (
+            sondes,
+            version,
+            authentification,
+            plan_observe,
+            modele_expose,
+            effort_expose,
+            verdict,
+            cause,
+            fait,
+        ) = _observer_route_codex(configuration["modele"]["demande"])
+        effort_demande = EFFORT_DEMANDE_CODEX
+    else:
+        (
+            sondes,
+            version,
+            authentification,
+            plan_observe,
+            verdict,
+            cause,
+            fait,
+        ) = _observer_route_claude()
+        modele_expose = INCONNU
+        effort_expose = INCONNU
+        effort_demande = EFFORT_DEMANDE_CLAUDE
     recu = {
         "schema_version": SCHEMA_RECU_PREFLIGHT,
         "configuration_id": identifiant,
@@ -1311,14 +1700,14 @@ def preflight_configuration(racine: Path, identifiant: str) -> int:
             "%Y-%m-%dT%H:%M:%SZ"
         ),
         "autorite_preflight": AUTORITE_PREFLIGHT,
-        "adaptateur": ADAPTATEUR_CLAUDE,
+        "adaptateur": adaptateur,
         "commande_publique": (
             f"uv run tools/campagne_v1.py preflight --configuration {identifiant}"
         ),
         "sondes": sondes,
         "interface": {
             "type": configuration["interface"]["type"],
-            "client": ADAPTATEUR_CLAUDE,
+            "client": adaptateur,
             "version_observee": version,
         },
         "authentification": {"observee": authentification},
@@ -1328,9 +1717,9 @@ def preflight_configuration(racine: Path, identifiant: str) -> int:
         },
         "modele": {
             "demande": configuration["modele"]["demande"],
-            "expose": INCONNU,
+            "expose": modele_expose,
         },
-        "effort": {"demande": EFFORT_DEMANDE_CLAUDE, "expose": INCONNU},
+        "effort": {"demande": effort_demande, "expose": effort_expose},
         "quota": {"observe": INCONNU, "consommation_preflight": INCONNU},
         "verdict": verdict,
         "cause": cause,
@@ -1991,15 +2380,36 @@ _CHAMPS_OBSERVES_READY = (
 )
 
 
-def _exiger_sonde_autorisee(nom: str, commande: object) -> None:
-    """Liste blanche exacte : toute autre forme est refusée, notamment
-    -p, --print, --model, prompt positionnel, --continue, --resume,
-    --fork-session et --dangerously-skip-permissions"""
+def _projection_login_codex_valide(projection: object) -> bool:
+    """Forme exacte de la projection de connexion codex : connecte, methode"""
+    return (
+        isinstance(projection, dict)
+        and set(projection) == set(CHAMPS_PROJECTION_LOGIN_CODEX)
+        and isinstance(projection["connecte"], bool)
+        and isinstance(projection["methode"], str)
+        and bool(projection["methode"].strip())
+    )
+
+
+# Liste blanche des sondes par adaptateur : une sonde d'un adaptateur ne
+# vaut jamais pour l'autre
+_SONDES_PAR_ADAPTATEUR = {
+    ADAPTATEUR_CLAUDE: SONDES_AUTORISEES_PREFLIGHT,
+    ADAPTATEUR_CODEX: SONDES_AUTORISEES_PREFLIGHT_CODEX,
+}
+
+
+def _exiger_sonde_autorisee(nom: str, commande: object, adaptateur: str) -> None:
+    """Liste blanche exacte par adaptateur : toute autre forme est refusée,
+    notamment -p, --print, --model, prompt positionnel, --continue,
+    --resume, --fork-session, --dangerously-skip-permissions, exec, review,
+    apply et resume"""
     if not isinstance(commande, str) or tuple(commande.split()) not in (
-        SONDES_AUTORISEES_PREFLIGHT
+        _SONDES_PAR_ADAPTATEUR[adaptateur]
     ):
         raise ErreurRestitution(
-            f"champ '{nom}' : sonde hors liste blanche refusée ({commande!r})"
+            f"champ '{nom}' : sonde hors liste blanche de l'adaptateur "
+            f"'{adaptateur}' refusée ({commande!r})"
         )
 
 
@@ -2036,10 +2446,11 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
             f"reçu de préflight '{nom_fichier}' : autorité unique "
             f"'{AUTORITE_PREFLIGHT}' attendue"
         )
-    if recu["adaptateur"] != ADAPTATEUR_CLAUDE:
+    adaptateur = recu["adaptateur"]
+    if adaptateur not in _SONDES_PAR_ADAPTATEUR:
         raise ErreurRestitution(
             f"reçu de préflight '{nom_fichier}' : adaptateur "
-            f"'{ADAPTATEUR_CLAUDE}' attendu"
+            f"'{ADAPTATEUR_CLAUDE}' ou '{ADAPTATEUR_CODEX}' attendu"
         )
     for champ in ("commande_publique", "fait"):
         if not isinstance(recu[champ], str) or not recu[champ].strip():
@@ -2068,7 +2479,9 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                 f"reçu de préflight '{nom_fichier}' : sonde {rang} : table "
                 "attendue"
             )
-        _exiger_sonde_autorisee(f"sondes[{rang}].commande", sonde.get("commande"))
+        _exiger_sonde_autorisee(
+            f"sondes[{rang}].commande", sonde.get("commande"), adaptateur
+        )
         if isinstance(sonde.get("code_sortie"), bool) or not isinstance(
             sonde.get("code_sortie"), int
         ):
@@ -2076,29 +2489,60 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                 f"reçu de préflight '{nom_fichier}' : sonde {rang} sans code de "
                 "sortie entier"
             )
-        if sonde["commande"] == " ".join(SONDE_AUTH_CLAUDE):
-            # La sonde auth ne porte qu'une projection, jamais la sortie brute
+        commande_sonde = tuple(sonde["commande"].split())
+        if commande_sonde in (
+            SONDE_AUTH_CLAUDE,
+            SONDE_LOGIN_CODEX,
+            SONDE_CATALOGUE_CODEX,
+        ):
+            # Ces sondes ne portent qu'une projection, jamais la sortie brute
             if set(sonde) != {"commande", "code_sortie", "projection"}:
                 raise ErreurRestitution(
                     f"reçu de préflight '{nom_fichier}' : sonde {rang} aux clés "
                     "exactes commande, code_sortie, projection attendue"
                 )
             projection = sonde["projection"]
-            if projection != INCONNU and (
-                not isinstance(projection, dict)
-                or set(projection) != set(CHAMPS_PROJECTION_AUTH)
-                or not isinstance(projection["loggedIn"], bool)
-                or any(
-                    not isinstance(projection[champ], str)
-                    or not projection[champ].strip()
-                    for champ in CHAMPS_PROJECTION_AUTH[1:]
-                )
-            ):
-                raise ErreurRestitution(
-                    f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
-                    "projection 'INCONNU' ou aux quatre champs exacts "
-                    f"{sorted(CHAMPS_PROJECTION_AUTH)} attendue"
-                )
+            if commande_sonde == SONDE_AUTH_CLAUDE:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_AUTH)
+                    or not isinstance(projection["loggedIn"], bool)
+                    or any(
+                        not isinstance(projection[champ], str)
+                        or not projection[champ].strip()
+                        for champ in CHAMPS_PROJECTION_AUTH[1:]
+                    )
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux quatre champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_AUTH)} attendue"
+                    )
+            elif commande_sonde == SONDE_LOGIN_CODEX:
+                if projection != INCONNU and not _projection_login_codex_valide(
+                    projection
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux deux champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_LOGIN_CODEX)} attendue"
+                    )
+            else:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_CATALOGUE_CODEX)
+                    or not isinstance(projection["modele_demande_present"], bool)
+                    or not isinstance(projection["efforts_annonces"], list)
+                    or any(
+                        not isinstance(effort, str) or not effort.strip()
+                        for effort in projection["efforts_annonces"]
+                    )
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux deux champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_CATALOGUE_CODEX)} attendue"
+                    )
         else:
             if set(sonde) != {
                 "commande",
@@ -2124,20 +2568,27 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                 f"exactes {sorted(cles)} attendue"
             )
     observee = recu["authentification"]["observee"]
-    if observee != INCONNU and (
-        not isinstance(observee, dict)
-        or set(observee) != {"loggedIn", "authMethod", "apiProvider"}
-        or not isinstance(observee["loggedIn"], bool)
-        or any(
-            not isinstance(observee[champ], str) or not observee[champ].strip()
-            for champ in ("authMethod", "apiProvider")
-        )
-    ):
-        raise ErreurRestitution(
-            f"reçu de préflight '{nom_fichier}' : authentification.observee "
-            "'INCONNU' ou aux clés exactes loggedIn, authMethod, apiProvider "
-            "attendue"
-        )
+    if adaptateur == ADAPTATEUR_CLAUDE:
+        if observee != INCONNU and (
+            not isinstance(observee, dict)
+            or set(observee) != {"loggedIn", "authMethod", "apiProvider"}
+            or not isinstance(observee["loggedIn"], bool)
+            or any(
+                not isinstance(observee[champ], str) or not observee[champ].strip()
+                for champ in ("authMethod", "apiProvider")
+            )
+        ):
+            raise ErreurRestitution(
+                f"reçu de préflight '{nom_fichier}' : authentification.observee "
+                "'INCONNU' ou aux clés exactes loggedIn, authMethod, apiProvider "
+                "attendue"
+            )
+    else:
+        if observee != INCONNU and not _projection_login_codex_valide(observee):
+            raise ErreurRestitution(
+                f"reçu de préflight '{nom_fichier}' : authentification.observee "
+                "'INCONNU' ou aux clés exactes connecte, methode attendue"
+            )
     if verdict == "READY":
         # READY exige les cinq contrôles établis : aucun champ observé ne
         # peut rester INCONNU ni NON_DEFINI
@@ -2180,9 +2631,16 @@ def _texte_sonde_preflight(sonde: dict) -> str:
         if projection == INCONNU:
             texte = f"projection <code>{INCONNU}</code>"
         else:
+            commande_sonde = tuple(sonde["commande"].split())
+            if commande_sonde == SONDE_LOGIN_CODEX:
+                champs = CHAMPS_PROJECTION_LOGIN_CODEX
+            elif commande_sonde == SONDE_CATALOGUE_CODEX:
+                champs = CHAMPS_PROJECTION_CATALOGUE_CODEX
+            else:
+                champs = CHAMPS_PROJECTION_AUTH
             texte = "projection " + " · ".join(
                 f"{champ} <code>{_echapper(projection[champ])}</code>"
-                for champ in CHAMPS_PROJECTION_AUTH
+                for champ in champs
             )
     else:
         texte = (
@@ -2198,9 +2656,12 @@ def _texte_sonde_preflight(sonde: dict) -> str:
 def _texte_auth_preflight(observee: object) -> str:
     if observee == INCONNU:
         return f"<code>{INCONNU}</code>"
+    if set(observee) == set(CHAMPS_PROJECTION_LOGIN_CODEX):
+        champs = CHAMPS_PROJECTION_LOGIN_CODEX
+    else:
+        champs = ("loggedIn", "authMethod", "apiProvider")
     return " · ".join(
-        f"{champ} <code>{_echapper(observee[champ])}</code>"
-        for champ in ("loggedIn", "authMethod", "apiProvider")
+        f"{champ} <code>{_echapper(observee[champ])}</code>" for champ in champs
     )
 
 
@@ -2989,11 +3450,13 @@ def principal(arguments: list[str], racine: Path | None = None) -> int:
             return 2
         if "--configuration" not in options:
             # Refus fail-closed : le préflight de panel entier exige les
-            # adaptateurs des tranches V1-XS-06B à V1-XS-06F, non couvertes ici
+            # adaptateurs des tranches V1-XS-06C à V1-XS-06F, non couvertes ici
             print(
-                "ECHEC option '--configuration' requise : V1-XS-06A couvre le "
-                f"seul adaptateur '{ADAPTATEUR_CLAUDE}' ; le préflight sans "
-                "option relève des tranches V1-XS-06B à V1-XS-06F"
+                "ECHEC option '--configuration' requise : V1-XS-06A et "
+                f"V1-XS-06B couvrent les seuls adaptateurs "
+                f"'{ADAPTATEUR_CLAUDE}' et '{ADAPTATEUR_CODEX}' ; le "
+                "préflight sans option relève des tranches V1-XS-06C à "
+                "V1-XS-06F"
             )
             return 1
         return preflight_configuration(racine, options["--configuration"])

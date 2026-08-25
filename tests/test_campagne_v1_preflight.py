@@ -351,11 +351,12 @@ class PreflightRefusTests(BaseXS06A):
         self.assertIn("configuration-fantome", sortie)
         self.assertFalse((self.racine / CHEMIN_PREFLIGHTS).exists())
 
-    def test_adaptateur_non_claude_rend_un_sans_recu(self):
-        code, sortie = self._preflight("codex-gpt-5-6-sol")
+    def test_adaptateur_non_couvert_rend_un_sans_recu(self):
+        # Depuis XS-06B, codex est couvert ; grok reste hors périmètre
+        code, sortie = self._preflight("grok-build-grok-4-6")
         self.assertEqual(code, 1)
         self.assertIn("ECHEC", sortie)
-        self.assertIn("V1-XS-06B", sortie)
+        self.assertIn("V1-XS-06C", sortie)
         self.assertFalse((self.racine / CHEMIN_PREFLIGHTS).exists())
         self.assertFalse(self.journal.exists())
 
