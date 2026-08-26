@@ -2548,6 +2548,712 @@ def _observer_route_cursor() -> tuple[
     )
 
 
+ADAPTATEUR_OPENCODEX = "opencodex"
+FOURNISSEUR_ZAI = "zai"
+# Contrat de récupération scellé du 23 août 2026 : identité exacte de la
+# route, toute divergence est un HOLD / IDENTITY_MISMATCH
+ADAPTATEUR_FOURNISSEUR_ZAI = "openai-chat"
+ENDPOINT_DECLARE_ZAI = "https://api.z.ai/api/coding/paas/v4"
+SOURCE_QUOTA_ZAI = "zai:quota-limit"
+# D-V1-01 : politique d'effort ferme de la configuration zai-glm-5-3
+EFFORT_DEMANDE_ZAI = "high"
+# Sondes non génératives OpenCodex : jamais codex exec, provider test,
+# --refresh, sync, start, stop, login, logout, account use, account
+# refresh, config set, config unset, models add, models edit, OpenCode,
+# OpenCode Go, Zen, un prompt ni une commande générative ; liste exacte,
+# fermée et ordonnée
+SONDE_VERSION_OPENCODEX = ("opencodex", "--version")
+SONDE_READY_OPENCODEX = ("opencodex", "ready", "--json")
+SONDE_FOURNISSEUR_OPENCODEX = ("opencodex", "provider", "show", "zai", "--json")
+SONDE_CATALOGUE_OPENCODEX = (
+    "opencodex",
+    "models",
+    "live",
+    "--provider",
+    "zai",
+    "--json",
+)
+SONDE_COMPTE_OPENCODEX = ("opencodex", "account", "current", "zai", "--json")
+SONDE_QUOTA_OPENCODEX = ("opencodex", "provider", "quota", "--json")
+SONDES_AUTORISEES_PREFLIGHT_OPENCODEX = (
+    SONDE_VERSION_OPENCODEX,
+    SONDE_READY_OPENCODEX,
+    SONDE_FOURNISSEUR_OPENCODEX,
+    SONDE_CATALOGUE_OPENCODEX,
+    SONDE_COMPTE_OPENCODEX,
+    SONDE_QUOTA_OPENCODEX,
+)
+CHAMPS_PROJECTION_VERSION_OPENCODEX = ("version",)
+# Projection fermée de readiness : seuls ready et status sortent de la
+# mémoire locale ; pid, port, uptime et identité HTTP brute ne sont jamais
+# conservés
+CHAMPS_PROJECTION_READY_OPENCODEX = ("ready", "status")
+STATUTS_READY_OPENCODEX = ("ready", "pending", "failed", "unreachable")
+# Projection fermée du fournisseur : apiKey, apiKeyPool, en-têtes, notes et
+# document brut ne sont jamais lus ni conservés
+CHAMPS_PROJECTION_FOURNISSEUR_OPENCODEX = (
+    "nom",
+    "adaptateur",
+    "endpoint",
+    "modele_defaut",
+    "desactive",
+    "modele_demande_present",
+)
+# Projection fermée du catalogue courant : le catalogue complet, les autres
+# modèles, l'effort par défaut et les autres efforts ne sont jamais
+# conservés
+CHAMPS_PROJECTION_CATALOGUE_OPENCODEX = (
+    "entree_presente",
+    "desactivee",
+    "effort_high_present",
+)
+# Projection fermée du compte : activeId, id, masked, label, priorité,
+# fragments de clé et document brut ne sont jamais lus ni conservés
+CHAMPS_PROJECTION_COMPTE_OPENCODEX = ("fournisseur", "type", "cle_active")
+# Projection fermée du quota : les rapports des autres fournisseurs, le
+# libellé du rapport et la réponse brute ne sont jamais conservés
+CHAMPS_PROJECTION_QUOTA_OPENCODEX = (
+    "rapport_zai_present",
+    "source",
+    "fenetres_reconnues",
+)
+# Fenêtres de quota reconnues du rapport zai:quota-limit, dans cet ordre :
+# (nom projeté, champ pourcentage, champ reset)
+FENETRES_QUOTA_ZAI = (
+    ("cinq_heures", "fiveHourPercent", "fiveHourResetAt"),
+    ("hebdomadaire", "weeklyPercent", "weeklyResetAt"),
+    ("mensuelle", "monthlyPercent", "monthlyResetAt"),
+)
+NOMS_FENETRES_QUOTA_ZAI = tuple(nom for nom, _, _ in FENETRES_QUOTA_ZAI)
+
+
+def _premier_json_opencodex(stdout: str, stderr: str) -> object:
+    """Premier flux entièrement JSON, ou None si aucun ne l'est"""
+    for flux in (stdout, stderr):
+        try:
+            return json.loads(flux)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _projeter_version_opencodex(stdout: str, stderr: str) -> dict | None:
+    """Projection de la seule version non vide de 'opencodex --version'.
+
+    None signale une sortie vide donc inobservée : le préflight reste
+    fail-closed sans inventer de fait.
+    """
+    for flux in (stdout, stderr):
+        for ligne in _MOTIF_ANSI.sub("", flux).splitlines():
+            texte = ligne.strip()
+            if texte:
+                return {"version": texte}
+    return None
+
+
+def _projeter_ready_opencodex(stdout: str, stderr: str) -> dict | None:
+    """Projection en mémoire de la readiness : seuls ready et status.
+
+    pid, port et tout autre champ servi sont ignorés sans être conservés.
+    None signale un JSON illisible ou un statut hors vocabulaire fermé :
+    fail-closed sans inventer de fait.
+    """
+    donnees = _premier_json_opencodex(stdout, stderr)
+    if not isinstance(donnees, dict):
+        return None
+    pret = donnees.get("ready")
+    statut = donnees.get("status")
+    if not isinstance(pret, bool) or statut not in STATUTS_READY_OPENCODEX:
+        return None
+    return {"ready": pret, "status": statut}
+
+
+def _projeter_fournisseur_opencodex(
+    stdout: str, stderr: str, modele_demande: str
+) -> dict | None:
+    """Projection en mémoire du fournisseur configuré : nom, adaptateur,
+    endpoint, modèle par défaut, état désactivé et présence du modèle
+    demandé.
+
+    apiKey, apiKeyPool, en-têtes et notes ne sont jamais lus ni conservés.
+    None signale un JSON illisible ou une structure hors forme : fail-closed
+    sans inventer de fait.
+    """
+    donnees = _premier_json_opencodex(stdout, stderr)
+    if not isinstance(donnees, dict):
+        return None
+    nom = donnees.get("name")
+    adaptateur = donnees.get("adapter")
+    endpoint = donnees.get("baseUrl")
+    if any(
+        not isinstance(valeur, str) or not valeur.strip()
+        for valeur in (nom, adaptateur, endpoint)
+    ):
+        return None
+    modele_defaut = donnees.get("defaultModel")
+    if modele_defaut is None:
+        modele_defaut = INCONNU
+    elif not isinstance(modele_defaut, str) or not modele_defaut.strip():
+        return None
+    desactive = donnees.get("disabled", False)
+    if not isinstance(desactive, bool):
+        return None
+    modeles = donnees.get("models", [])
+    if not isinstance(modeles, list) or any(
+        not isinstance(entree, str) for entree in modeles
+    ):
+        return None
+    return {
+        "nom": nom.strip(),
+        "adaptateur": adaptateur.strip(),
+        "endpoint": endpoint.strip(),
+        "modele_defaut": modele_defaut,
+        "desactive": desactive,
+        "modele_demande_present": (
+            modele_defaut == modele_demande or modele_demande in modeles
+        ),
+    }
+
+
+def _projeter_catalogue_opencodex(
+    stdout: str, stderr: str, cible: str
+) -> dict | None:
+    """Projection du catalogue courant : présence de l'entrée exacte, son
+    état désactivé et la présence de l'effort high, rien d'autre.
+
+    Le catalogue complet, les autres modèles, l'effort par défaut et les
+    autres efforts ne sont jamais conservés. None signale un JSON illisible,
+    une ligne hors forme ou une entrée dupliquée donc ambiguë : fail-closed
+    sans inventer de fait.
+    """
+    donnees = _premier_json_opencodex(stdout, stderr)
+    if not isinstance(donnees, list):
+        return None
+    correspondances = []
+    for ligne in donnees:
+        if not isinstance(ligne, dict):
+            return None
+        if ligne.get("namespaced") == cible:
+            correspondances.append(ligne)
+    if not correspondances:
+        return {
+            "entree_presente": False,
+            "desactivee": INCONNU,
+            "effort_high_present": INCONNU,
+        }
+    if len(correspondances) > 1:
+        return None
+    entree = correspondances[0]
+    desactivee = entree.get("disabled")
+    if not isinstance(desactivee, bool):
+        return None
+    efforts = entree.get("reasoningEfforts", [])
+    if not isinstance(efforts, list) or any(
+        not isinstance(effort, str) for effort in efforts
+    ):
+        return None
+    return {
+        "entree_presente": True,
+        "desactivee": desactivee,
+        "effort_high_present": EFFORT_DEMANDE_ZAI in efforts,
+    }
+
+
+def _projeter_compte_opencodex(stdout: str, stderr: str) -> dict | None:
+    """Projection en mémoire du compte : fournisseur, type et présence
+    d'une clé active.
+
+    activeId, id, masked, label, priorité et tout fragment de clé sont
+    ignorés sans être conservés. None signale un JSON illisible, un
+    fournisseur divergent ou une structure hors forme : fail-closed sans
+    inventer de fait.
+    """
+    donnees = _premier_json_opencodex(stdout, stderr)
+    if not isinstance(donnees, dict) or "account" not in donnees:
+        return None
+    fournisseur = donnees.get("provider")
+    type_compte = donnees.get("type")
+    if (
+        fournisseur != FOURNISSEUR_ZAI
+        or not isinstance(type_compte, str)
+        or not type_compte.strip()
+    ):
+        return None
+    return {
+        "fournisseur": fournisseur,
+        "type": type_compte.strip(),
+        "cle_active": donnees["account"] is not None,
+    }
+
+
+def _projeter_quota_opencodex(
+    stdout: str, stderr: str
+) -> tuple[dict, object] | None:
+    """Projection du quota : présence du rapport exact provider = zai, sa
+    source et les fenêtres reconnues, plus le détail observé par fenêtre.
+
+    Les rapports des autres fournisseurs, le libellé et la réponse brute ne
+    sont jamais conservés. Les pourcentages et resets absents restent
+    INCONNU, aucune valeur n'est reconstruite. None signale un JSON
+    illisible, un rapport dupliqué donc ambigu ou une valeur hors forme :
+    fail-closed sans inventer de fait.
+    """
+    donnees = _premier_json_opencodex(stdout, stderr)
+    if not isinstance(donnees, dict) or not isinstance(
+        donnees.get("reports"), list
+    ):
+        return None
+    rapports = [
+        rapport
+        for rapport in donnees["reports"]
+        if isinstance(rapport, dict)
+        and rapport.get("provider") == FOURNISSEUR_ZAI
+    ]
+    if not rapports:
+        return (
+            {
+                "rapport_zai_present": False,
+                "source": INCONNU,
+                "fenetres_reconnues": [],
+            },
+            INCONNU,
+        )
+    if len(rapports) > 1:
+        return None
+    rapport = rapports[0]
+    source = rapport.get("source")
+    if not isinstance(source, str) or not source.strip():
+        return None
+    quota = rapport.get("quota")
+    if not isinstance(quota, dict):
+        return None
+    fenetres: dict[str, dict] = {}
+    reconnues: list[str] = []
+    for nom, champ_pourcentage, champ_reset in FENETRES_QUOTA_ZAI:
+        pourcentage = quota.get(champ_pourcentage)
+        reset = quota.get(champ_reset)
+        if pourcentage is not None and (
+            isinstance(pourcentage, bool)
+            or not isinstance(pourcentage, (int, float))
+        ):
+            return None
+        if reset is not None and (
+            isinstance(reset, bool) or not isinstance(reset, (int, float))
+        ):
+            return None
+        if pourcentage is not None:
+            reconnues.append(nom)
+        fenetres[nom] = {
+            "pourcentage": pourcentage if pourcentage is not None else INCONNU,
+            "reset": reset if reset is not None else INCONNU,
+        }
+    projection = {
+        "rapport_zai_present": True,
+        "source": source.strip(),
+        "fenetres_reconnues": reconnues,
+    }
+    return projection, {"source": source.strip(), "fenetres": fenetres}
+
+
+def _observer_route_zai(modele_demande: str) -> dict:
+    """Sonde la route OpenCodex vers le Z.AI Coding Plan sans génération.
+
+    Rend un état d'observation complet : sondes, version, authentification,
+    plan observé, modèle exposé, effort exposé, quota observé, proxy
+    OpenCodex, catalogue déclaré, verdict, cause et fait. MSW : les cinq
+    contrôles de readiness (interface et proxy, authentification, activité
+    du plan, modèle et effort exposés, quota disponible) sont observables
+    par les six probes de la liste blanche, donc READY est prouvable dans
+    cette tranche ; l'identité réellement servie reste INCONNU sans
+    génération et ne devient jamais une conclusion.
+    """
+    cible = f"{FOURNISSEUR_ZAI}/{modele_demande}"
+    etat: dict = {
+        "sondes": [],
+        "version": INCONNU,
+        "authentification": INCONNU,
+        "plan_observe": INCONNU,
+        "modele_expose": INCONNU,
+        "effort_expose": INCONNU,
+        "quota_observe": INCONNU,
+        "proxy_opencodex": {
+            "version": INCONNU,
+            "ready": INCONNU,
+            "status": INCONNU,
+        },
+        "catalogue_declare": {
+            "fournisseur": INCONNU,
+            "adaptateur": INCONNU,
+            "endpoint": INCONNU,
+            "entree_exacte_presente": INCONNU,
+            "effort_high_present": INCONNU,
+        },
+    }
+
+    def stop(verdict: str, cause: str | None, fait: str) -> dict:
+        etat.update({"verdict": verdict, "cause": cause, "fait": fait})
+        return etat
+
+    def sonder(sonde: tuple[str, ...]) -> dict:
+        with tempfile.TemporaryDirectory() as espace_texte:
+            return _executer_borne(
+                list(sonde), b"", Path(espace_texte), DELAI_SONDE_PREFLIGHT
+            )
+
+    commande_version = " ".join(SONDE_VERSION_OPENCODEX)
+    commande_ready = " ".join(SONDE_READY_OPENCODEX)
+    commande_fournisseur = " ".join(SONDE_FOURNISSEUR_OPENCODEX)
+    commande_catalogue = " ".join(SONDE_CATALOGUE_OPENCODEX)
+    commande_compte = " ".join(SONDE_COMPTE_OPENCODEX)
+    commande_quota = " ".join(SONDE_QUOTA_OPENCODEX)
+    if shutil.which(ADAPTATEUR_OPENCODEX) is None:
+        return stop(
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"client '{ADAPTATEUR_OPENCODEX}' introuvable sur le PATH local ; "
+            "aucune probe lancée",
+        )
+    execution = sonder(SONDE_VERSION_OPENCODEX)
+    if execution["etat"] == "INCIDENT":
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_version}' : {_expurger(execution['fait'])}",
+        )
+    if execution["code_sortie"] != 0:
+        # La sortie brute d'une probe en échec n'est jamais consignée
+        etat["sondes"].append(
+            {
+                "commande": commande_version,
+                "code_sortie": execution["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return stop(
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"probe '{commande_version}' en échec : code de sortie "
+            f"{execution['code_sortie']}, le client n'est pas utilisable ; "
+            "les probes de readiness, de fournisseur, de catalogue, de "
+            "compte et de quota ne sont pas lancées",
+        )
+    projection_version = _projeter_version_opencodex(
+        execution["sortie"]["stdout"], execution["sortie"]["stderr"]
+    )
+    if projection_version is None:
+        etat["sondes"].append(
+            {"commande": commande_version, "code_sortie": 0, "projection": INCONNU}
+        )
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_version}' : sortie vide, version inobservée ; "
+            "aucune valeur n'est inventée",
+        )
+    etat["sondes"].append(
+        {
+            "commande": commande_version,
+            "code_sortie": 0,
+            "projection": projection_version,
+        }
+    )
+    etat["version"] = projection_version["version"]
+    etat["proxy_opencodex"]["version"] = projection_version["version"]
+    execution_ready = sonder(SONDE_READY_OPENCODEX)
+    if execution_ready["etat"] == "INCIDENT":
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_ready}' : {_expurger(execution_ready['fait'])}",
+        )
+    projection_ready = _projeter_ready_opencodex(
+        execution_ready["sortie"]["stdout"], execution_ready["sortie"]["stderr"]
+    )
+    if projection_ready is None:
+        # La sortie brute d'une probe de readiness n'est jamais consignée
+        etat["sondes"].append(
+            {
+                "commande": commande_ready,
+                "code_sortie": execution_ready["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_ready}' : JSON illisible ou statut hors "
+            f"vocabulaire fermé (code de sortie "
+            f"{execution_ready['code_sortie']}), readiness inobservée ; la "
+            "sortie brute n'est pas consignée",
+        )
+    etat["sondes"].append(
+        {
+            "commande": commande_ready,
+            "code_sortie": execution_ready["code_sortie"],
+            "projection": projection_ready,
+        }
+    )
+    etat["proxy_opencodex"]["ready"] = projection_ready["ready"]
+    etat["proxy_opencodex"]["status"] = projection_ready["status"]
+    if not projection_ready["ready"]:
+        return stop(
+            "UNAVAILABLE",
+            "PROVIDER_FAILURE",
+            f"proxy observé non prêt (status '{projection_ready['status']}') "
+            "alors que la probe est bien formée : la route n'est pas "
+            "utilisable ; les probes de fournisseur, de catalogue, de compte "
+            "et de quota ne sont pas lancées",
+        )
+    execution_fournisseur = sonder(SONDE_FOURNISSEUR_OPENCODEX)
+    if execution_fournisseur["etat"] == "INCIDENT":
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_fournisseur}' : "
+            f"{_expurger(execution_fournisseur['fait'])}",
+        )
+    projection_fournisseur = None
+    if execution_fournisseur["code_sortie"] == 0:
+        projection_fournisseur = _projeter_fournisseur_opencodex(
+            execution_fournisseur["sortie"]["stdout"],
+            execution_fournisseur["sortie"]["stderr"],
+            modele_demande,
+        )
+    if projection_fournisseur is None:
+        # Le document du fournisseur n'est jamais consigné, même en échec
+        etat["sondes"].append(
+            {
+                "commande": commande_fournisseur,
+                "code_sortie": execution_fournisseur["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_fournisseur}' : JSON illisible, structure "
+            f"hors forme ou probe en échec (code de sortie "
+            f"{execution_fournisseur['code_sortie']}), fournisseur "
+            "inobservé ; la sortie brute n'est pas consignée",
+        )
+    etat["sondes"].append(
+        {
+            "commande": commande_fournisseur,
+            "code_sortie": 0,
+            "projection": projection_fournisseur,
+        }
+    )
+    etat["catalogue_declare"]["fournisseur"] = projection_fournisseur["nom"]
+    etat["catalogue_declare"]["adaptateur"] = projection_fournisseur["adaptateur"]
+    etat["catalogue_declare"]["endpoint"] = projection_fournisseur["endpoint"]
+    if (
+        projection_fournisseur["nom"] != FOURNISSEUR_ZAI
+        or projection_fournisseur["adaptateur"] != ADAPTATEUR_FOURNISSEUR_ZAI
+        or projection_fournisseur["endpoint"] != ENDPOINT_DECLARE_ZAI
+    ):
+        return stop(
+            "HOLD",
+            "IDENTITY_MISMATCH",
+            "fournisseur, adaptateur ou endpoint observé divergent de "
+            f"l'identité scellée ('{FOURNISSEUR_ZAI}', "
+            f"'{ADAPTATEUR_FOURNISSEUR_ZAI}', endpoint déclaré du contrat de "
+            "récupération) : aucune substitution n'est admise ; les probes "
+            "de catalogue, de compte et de quota ne sont pas lancées",
+        )
+    execution_catalogue = sonder(SONDE_CATALOGUE_OPENCODEX)
+    if execution_catalogue["etat"] == "INCIDENT":
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_catalogue}' : "
+            f"{_expurger(execution_catalogue['fait'])}",
+        )
+    projection_catalogue = None
+    if execution_catalogue["code_sortie"] == 0:
+        projection_catalogue = _projeter_catalogue_opencodex(
+            execution_catalogue["sortie"]["stdout"],
+            execution_catalogue["sortie"]["stderr"],
+            cible,
+        )
+    if projection_catalogue is None:
+        # Le catalogue complet n'est jamais consigné, même en échec
+        etat["sondes"].append(
+            {
+                "commande": commande_catalogue,
+                "code_sortie": execution_catalogue["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_catalogue}' : JSON illisible, entrée ambiguë "
+            f"ou probe en échec (code de sortie "
+            f"{execution_catalogue['code_sortie']}), catalogue inobservé ; "
+            "la sortie brute n'est pas consignée",
+        )
+    etat["sondes"].append(
+        {
+            "commande": commande_catalogue,
+            "code_sortie": 0,
+            "projection": projection_catalogue,
+        }
+    )
+    etat["catalogue_declare"]["entree_exacte_presente"] = projection_catalogue[
+        "entree_presente"
+    ]
+    etat["catalogue_declare"]["effort_high_present"] = projection_catalogue[
+        "effort_high_present"
+    ]
+    if not projection_catalogue["entree_presente"] or projection_catalogue[
+        "desactivee"
+    ]:
+        return stop(
+            "UNAVAILABLE",
+            "MODEL_UNAVAILABLE",
+            f"catalogue courant lisible sans entrée exacte '{cible}' active : "
+            "la combinaison décidée n'est pas exposée ; aucun alias, préfixe "
+            "ou sous-chaîne n'est admis ; les probes de compte et de quota "
+            "ne sont pas lancées",
+        )
+    if not projection_catalogue["effort_high_present"]:
+        return stop(
+            "UNAVAILABLE",
+            "MODEL_UNAVAILABLE",
+            f"entrée exacte '{cible}' présente sans effort "
+            f"'{EFFORT_DEMANDE_ZAI}' annoncé : le harnais déclaré impose cet "
+            "effort, aucun effort par défaut n'est sélectionné ; les probes "
+            "de compte et de quota ne sont pas lancées",
+        )
+    etat["modele_expose"] = cible
+    etat["effort_expose"] = EFFORT_DEMANDE_ZAI
+    execution_compte = sonder(SONDE_COMPTE_OPENCODEX)
+    if execution_compte["etat"] == "INCIDENT":
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_compte}' : {_expurger(execution_compte['fait'])}",
+        )
+    projection_compte = _projeter_compte_opencodex(
+        execution_compte["sortie"]["stdout"],
+        execution_compte["sortie"]["stderr"],
+    )
+    if projection_compte is None:
+        # La sortie brute d'une probe de compte n'est jamais consignée
+        etat["sondes"].append(
+            {
+                "commande": commande_compte,
+                "code_sortie": execution_compte["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_compte}' : JSON illisible, fournisseur "
+            f"divergent ou structure hors forme (code de sortie "
+            f"{execution_compte['code_sortie']}), compte inobservé ; la "
+            "sortie brute n'est pas consignée",
+        )
+    etat["sondes"].append(
+        {
+            "commande": commande_compte,
+            "code_sortie": execution_compte["code_sortie"],
+            "projection": projection_compte,
+        }
+    )
+    etat["authentification"] = projection_compte
+    if not projection_compte["cle_active"]:
+        return stop(
+            "UNAVAILABLE",
+            "AUTHENTICATION_UNAVAILABLE",
+            "aucune clé active observée pour le fournisseur "
+            f"'{FOURNISSEUR_ZAI}' : la route n'est pas utilisable ; la probe "
+            "de quota n'est pas lancée",
+        )
+    execution_quota = sonder(SONDE_QUOTA_OPENCODEX)
+    if execution_quota["etat"] == "INCIDENT":
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_quota}' : {_expurger(execution_quota['fait'])}",
+        )
+    resultat_quota = None
+    if execution_quota["code_sortie"] == 0:
+        resultat_quota = _projeter_quota_opencodex(
+            execution_quota["sortie"]["stdout"],
+            execution_quota["sortie"]["stderr"],
+        )
+    if resultat_quota is None:
+        # Les rapports bruts de quota ne sont jamais consignés
+        etat["sondes"].append(
+            {
+                "commande": commande_quota,
+                "code_sortie": execution_quota["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_quota}' : JSON illisible, rapport ambigu ou "
+            f"probe en échec (code de sortie "
+            f"{execution_quota['code_sortie']}), quota inobservé ; la sortie "
+            "brute n'est pas consignée",
+        )
+    projection_quota, detail_quota = resultat_quota
+    etat["sondes"].append(
+        {
+            "commande": commande_quota,
+            "code_sortie": 0,
+            "projection": projection_quota,
+        }
+    )
+    if (
+        not projection_quota["rapport_zai_present"]
+        or projection_quota["source"] != SOURCE_QUOTA_ZAI
+        or not projection_quota["fenetres_reconnues"]
+    ):
+        # plan.observe ne devient observé que si la réponse zai:quota-limit
+        # est présente et exploitable ; aucune valeur n'est reconstruite
+        return stop(
+            "HOLD",
+            "MISSING_OBSERVATION",
+            "aucun rapport 'zai:quota-limit' exploitable : rapport absent, "
+            "source divergente ou aucune fenêtre reconnue ; l'activité du "
+            "plan reste inobservée, aucune valeur de remplacement n'est "
+            "créée",
+        )
+    etat["quota_observe"] = detail_quota
+    # Le libellé déclaré du plan reste distinct : seul le fait que
+    # l'endpoint de quota du Coding Plan a répondu est observé
+    etat["plan_observe"] = (
+        "endpoint de quota du Coding Plan a répondu (source zai:quota-limit)"
+    )
+    fenetres_bloquantes = [
+        nom
+        for nom, fenetre in detail_quota["fenetres"].items()
+        if fenetre["pourcentage"] != INCONNU and fenetre["pourcentage"] >= 100
+    ]
+    if fenetres_bloquantes:
+        return stop(
+            "UNAVAILABLE",
+            "QUOTA_EXHAUSTED",
+            "quota observé épuisé dans une fenêtre bloquante "
+            f"({', '.join(sorted(fenetres_bloquantes))}) : la route n'est "
+            "pas utilisable tant que la fenêtre n'est pas réinitialisée",
+        )
+    return stop(
+        "READY",
+        None,
+        "interface et proxy, authentification, activité du plan, modèle et "
+        "effort exposés et quota disponible observés par les six probes non "
+        f"génératives ; la présence exacte de '{cible}' projette le modèle "
+        f"exposé et l'effort '{EFFORT_DEMANDE_ZAI}', jamais l'identité "
+        "réellement servie, qui reste INCONNU sans génération",
+    )
+
+
 def _expurger(texte: str) -> str:
     """Expurgation des captures : le chemin du compte local ne sort jamais"""
     return texte.replace(str(Path.home()), "~")
@@ -2760,23 +3466,61 @@ def preflight_configuration(racine: Path, identifiant: str) -> int:
         return 1
     configuration = correspondances[0]
     argv = configuration["harnais"]["argv"]
+    # Le harnais génératif déclaré reste codex exec ; la route Z.AI est
+    # identifiée par le préfixe fournisseur du modèle : son plan de contrôle
+    # est le proxy OpenCodex, jamais l'agent codex lui-même
+    valeurs_modele = [
+        argv[indice + 1]
+        for indice, argument in enumerate(argv[:-1])
+        if argument == "--model"
+    ]
+    route_opencodex = any(
+        valeur.startswith(f"{FOURNISSEUR_ZAI}/") for valeur in valeurs_modele
+    )
     adaptateurs_couverts = (
         ADAPTATEUR_CLAUDE,
         ADAPTATEUR_CODEX,
         ADAPTATEUR_GROK,
         ADAPTATEUR_CURSOR,
     )
-    if configuration["interface"]["type"] != "cli" or argv[0] not in adaptateurs_couverts:
+    if configuration["interface"]["type"] != "cli" or (
+        argv[0] not in adaptateurs_couverts and not route_opencodex
+    ):
         print(
             f"ECHEC adaptateur non couvert : '{argv[0]}' ; V1-XS-06A à "
-            f"V1-XS-06D couvrent les seuls adaptateurs '{ADAPTATEUR_CLAUDE}', "
-            f"'{ADAPTATEUR_CODEX}', '{ADAPTATEUR_GROK}' et "
-            f"'{ADAPTATEUR_CURSOR}', les autres configurations relèvent des "
-            "tranches V1-XS-06E à V1-XS-06F"
+            f"V1-XS-06E couvrent les seuls adaptateurs '{ADAPTATEUR_CLAUDE}', "
+            f"'{ADAPTATEUR_CODEX}', '{ADAPTATEUR_GROK}', "
+            f"'{ADAPTATEUR_CURSOR}' et '{ADAPTATEUR_OPENCODEX}', les autres "
+            "configurations relèvent de la tranche V1-XS-06F"
         )
         return 1
-    adaptateur = argv[0]
-    if adaptateur == ADAPTATEUR_CURSOR:
+    supplement: dict = {}
+    adaptateur = ADAPTATEUR_OPENCODEX if route_opencodex else argv[0]
+    if adaptateur == ADAPTATEUR_OPENCODEX:
+        observation = _observer_route_zai(configuration["modele"]["demande"])
+        sondes = observation["sondes"]
+        version = observation["version"]
+        authentification = observation["authentification"]
+        plan_observe = observation["plan_observe"]
+        modele_expose = observation["modele_expose"]
+        effort_expose = observation["effort_expose"]
+        verdict = observation["verdict"]
+        cause = observation["cause"]
+        fait = observation["fait"]
+        effort_demande = EFFORT_DEMANDE_ZAI
+        # Quatre objets explicitement distincts : le catalogue déclaré ne
+        # prouve ni l'accès réel ni l'identité servie, l'authentification ne
+        # prouve pas le modèle, le quota ne prouve pas l'identité servie
+        supplement = {
+            "catalogue_declare": observation["catalogue_declare"],
+            "proxy_opencodex": observation["proxy_opencodex"],
+            "identite_reellement_servie": INCONNU,
+            "quota": {
+                "observe": observation["quota_observe"],
+                "consommation_preflight": INCONNU,
+            },
+        }
+    elif adaptateur == ADAPTATEUR_CURSOR:
         (
             sondes,
             version,
@@ -2860,6 +3604,9 @@ def preflight_configuration(racine: Path, identifiant: str) -> int:
         "cause": cause,
         "fait": fait,
     }
+    # Route OpenCodex : les quatre objets distincts et le quota observé
+    # remplacent les valeurs par défaut
+    recu.update(supplement)
     destination = racine / REPERTOIRE_PREFLIGHTS / f"{identifiant}.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(
@@ -3498,6 +4245,23 @@ _CLES_TABLES_PREFLIGHT = {
     "effort": {"demande", "expose"},
     "quota": {"observe", "consommation_preflight"},
 }
+# Reçu opencodex : les quatre objets distincts s'ajoutent aux clés communes
+# (authentification est déjà une table commune)
+_CLES_RECU_PREFLIGHT_OPENCODEX = _CLES_RECU_PREFLIGHT | {
+    "catalogue_declare",
+    "proxy_opencodex",
+    "identite_reellement_servie",
+}
+_CLES_CATALOGUE_DECLARE_OPENCODEX = {
+    "fournisseur",
+    "adaptateur",
+    "endpoint",
+    "entree_exacte_presente",
+    "effort_high_present",
+}
+_CLES_PROXY_OPENCODEX = {"version", "ready", "status"}
+_CLES_QUOTA_OBSERVE_OPENCODEX = {"source", "fenetres"}
+_CLES_FENETRE_QUOTA_OPENCODEX = {"pourcentage", "reset"}
 # Causes admises par verdict de route ; READY ne porte aucune cause
 _CAUSES_PAR_VERDICT_PREFLIGHT = {
     "READY": (None,),
@@ -3537,6 +4301,26 @@ def _projection_statut_cursor_valide(projection: object) -> bool:
     )
 
 
+def _projection_compte_opencodex_valide(projection: object) -> bool:
+    """Forme exacte de la projection de compte opencodex : fournisseur zai,
+    type non vide, présence de clé booléenne"""
+    return (
+        isinstance(projection, dict)
+        and set(projection) == set(CHAMPS_PROJECTION_COMPTE_OPENCODEX)
+        and projection["fournisseur"] == FOURNISSEUR_ZAI
+        and isinstance(projection["type"], str)
+        and bool(projection["type"].strip())
+        and isinstance(projection["cle_active"], bool)
+    )
+
+
+def _pourcentage_ou_reset_valide(valeur: object) -> bool:
+    """INCONNU ou nombre observé, jamais une valeur reconstruite"""
+    return valeur == INCONNU or (
+        not isinstance(valeur, bool) and isinstance(valeur, (int, float))
+    )
+
+
 # Liste blanche des sondes par adaptateur : une sonde d'un adaptateur ne
 # vaut jamais pour un autre
 _SONDES_PAR_ADAPTATEUR = {
@@ -3544,6 +4328,7 @@ _SONDES_PAR_ADAPTATEUR = {
     ADAPTATEUR_CODEX: SONDES_AUTORISEES_PREFLIGHT_CODEX,
     ADAPTATEUR_GROK: SONDES_AUTORISEES_PREFLIGHT_GROK,
     ADAPTATEUR_CURSOR: SONDES_AUTORISEES_PREFLIGHT_CURSOR,
+    ADAPTATEUR_OPENCODEX: SONDES_AUTORISEES_PREFLIGHT_OPENCODEX,
 }
 # Champs de projection par sonde à projection : la restitution ne rend que
 # ces champs fermés, jamais une sortie brute
@@ -3559,6 +4344,12 @@ _CHAMPS_PROJECTION_PAR_SONDE = {
     SONDE_STATUT_CURSOR: CHAMPS_PROJECTION_STATUT_CURSOR,
     SONDE_COMPTE_CURSOR: CHAMPS_PROJECTION_COMPTE_CURSOR,
     SONDE_CATALOGUE_CURSOR: CHAMPS_PROJECTION_CATALOGUE_CURSOR,
+    SONDE_VERSION_OPENCODEX: CHAMPS_PROJECTION_VERSION_OPENCODEX,
+    SONDE_READY_OPENCODEX: CHAMPS_PROJECTION_READY_OPENCODEX,
+    SONDE_FOURNISSEUR_OPENCODEX: CHAMPS_PROJECTION_FOURNISSEUR_OPENCODEX,
+    SONDE_CATALOGUE_OPENCODEX: CHAMPS_PROJECTION_CATALOGUE_OPENCODEX,
+    SONDE_COMPTE_OPENCODEX: CHAMPS_PROJECTION_COMPTE_OPENCODEX,
+    SONDE_QUOTA_OPENCODEX: CHAMPS_PROJECTION_QUOTA_OPENCODEX,
 }
 
 
@@ -3577,10 +4368,17 @@ def _exiger_sonde_autorisee(nom: str, commande: object, adaptateur: str) -> None
 
 
 def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
-    if not isinstance(recu, dict) or set(recu) != _CLES_RECU_PREFLIGHT:
+    # Le jeu de clés dépend de l'adaptateur : le reçu opencodex porte en
+    # plus les quatre objets distincts, jamais amputables
+    cles_attendues = (
+        _CLES_RECU_PREFLIGHT_OPENCODEX
+        if isinstance(recu, dict) and recu.get("adaptateur") == ADAPTATEUR_OPENCODEX
+        else _CLES_RECU_PREFLIGHT
+    )
+    if not isinstance(recu, dict) or set(recu) != cles_attendues:
         raise ErreurRestitution(
             f"reçu de préflight '{nom_fichier}' : clés exactes "
-            f"{sorted(_CLES_RECU_PREFLIGHT)} attendues"
+            f"{sorted(cles_attendues)} attendues"
         )
     if recu["schema_version"] != SCHEMA_RECU_PREFLIGHT:
         raise ErreurRestitution(
@@ -3614,7 +4412,8 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
         raise ErreurRestitution(
             f"reçu de préflight '{nom_fichier}' : adaptateur "
             f"'{ADAPTATEUR_CLAUDE}', '{ADAPTATEUR_CODEX}', "
-            f"'{ADAPTATEUR_GROK}' ou '{ADAPTATEUR_CURSOR}' attendu"
+            f"'{ADAPTATEUR_GROK}', '{ADAPTATEUR_CURSOR}' ou "
+            f"'{ADAPTATEUR_OPENCODEX}' attendu"
         )
     for champ in ("commande_publique", "fait"):
         if not isinstance(recu[champ], str) or not recu[champ].strip():
@@ -3790,6 +4589,101 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                         "projection 'INCONNU' ou au champ exact "
                         f"{sorted(CHAMPS_PROJECTION_CATALOGUE_CURSOR)} attendue"
                     )
+            elif commande_sonde == SONDE_VERSION_OPENCODEX:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_VERSION_OPENCODEX)
+                    or not isinstance(projection["version"], str)
+                    or not projection["version"].strip()
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou au champ exact "
+                        f"{sorted(CHAMPS_PROJECTION_VERSION_OPENCODEX)} attendue"
+                    )
+            elif commande_sonde == SONDE_READY_OPENCODEX:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_READY_OPENCODEX)
+                    or not isinstance(projection["ready"], bool)
+                    or projection["status"] not in STATUTS_READY_OPENCODEX
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux deux champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_READY_OPENCODEX)} attendue"
+                    )
+            elif commande_sonde == SONDE_FOURNISSEUR_OPENCODEX:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection)
+                    != set(CHAMPS_PROJECTION_FOURNISSEUR_OPENCODEX)
+                    or any(
+                        not isinstance(projection[champ], str)
+                        or not projection[champ].strip()
+                        for champ in ("nom", "adaptateur", "endpoint")
+                    )
+                    or not isinstance(projection["modele_defaut"], str)
+                    or not projection["modele_defaut"].strip()
+                    or not isinstance(projection["desactive"], bool)
+                    or not isinstance(projection["modele_demande_present"], bool)
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux six champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_FOURNISSEUR_OPENCODEX)} "
+                        "attendue"
+                    )
+            elif commande_sonde == SONDE_CATALOGUE_OPENCODEX:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection)
+                    != set(CHAMPS_PROJECTION_CATALOGUE_OPENCODEX)
+                    or not isinstance(projection["entree_presente"], bool)
+                    or not all(
+                        projection[champ] == INCONNU
+                        or isinstance(projection[champ], bool)
+                        for champ in ("desactivee", "effort_high_present")
+                    )
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux trois champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_CATALOGUE_OPENCODEX)} "
+                        "attendue"
+                    )
+            elif commande_sonde == SONDE_COMPTE_OPENCODEX:
+                if projection != INCONNU and not _projection_compte_opencodex_valide(
+                    projection
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux trois champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_COMPTE_OPENCODEX)} attendue"
+                    )
+            elif commande_sonde == SONDE_QUOTA_OPENCODEX:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_QUOTA_OPENCODEX)
+                    or not isinstance(projection["rapport_zai_present"], bool)
+                    or not (
+                        projection["source"] == INCONNU
+                        or (
+                            isinstance(projection["source"], str)
+                            and projection["source"].strip()
+                        )
+                    )
+                    or not isinstance(projection["fenetres_reconnues"], list)
+                    or any(
+                        fenetre not in NOMS_FENETRES_QUOTA_ZAI
+                        for fenetre in projection["fenetres_reconnues"]
+                    )
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux trois champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_QUOTA_OPENCODEX)} attendue"
+                    )
             else:
                 if projection != INCONNU and (
                     not isinstance(projection, dict)
@@ -3853,6 +4747,15 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                 f"reçu de préflight '{nom_fichier}' : authentification.observee "
                 "'INCONNU' ou aux clés exactes status, isAuthenticated attendue"
             )
+    elif adaptateur == ADAPTATEUR_OPENCODEX:
+        if observee != INCONNU and not _projection_compte_opencodex_valide(
+            observee
+        ):
+            raise ErreurRestitution(
+                f"reçu de préflight '{nom_fichier}' : authentification.observee "
+                "'INCONNU' ou aux clés exactes fournisseur, type, cle_active "
+                "attendue"
+            )
     else:
         if observee != INCONNU and (
             not isinstance(observee, dict)
@@ -3868,6 +4771,8 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                 "'INCONNU' ou aux clés exactes auth_mode, credential_present, "
                 "issuer attendue"
             )
+    if adaptateur == ADAPTATEUR_OPENCODEX:
+        _valider_objets_opencodex(nom_fichier, recu)
     if verdict == "READY":
         # READY exige les cinq contrôles établis : aucun champ observé ne
         # peut rester INCONNU ni NON_DEFINI
@@ -3878,6 +4783,81 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                     f"champ '{nom_champ}' non observé ({recu[table][cle]!r})"
                 )
     return recu
+
+
+def _valider_objets_opencodex(nom_fichier: str, recu: dict) -> None:
+    """Quatre objets distincts du reçu opencodex : formes fermées, sans
+    secret, et une identité réellement servie qui ne devient jamais une
+    conclusion."""
+    catalogue = recu["catalogue_declare"]
+    if (
+        not isinstance(catalogue, dict)
+        or set(catalogue) != _CLES_CATALOGUE_DECLARE_OPENCODEX
+        or any(
+            catalogue[champ] != INCONNU
+            and (
+                not isinstance(catalogue[champ], str)
+                or not catalogue[champ].strip()
+            )
+            for champ in ("fournisseur", "adaptateur", "endpoint")
+        )
+        or any(
+            catalogue[champ] != INCONNU
+            and not isinstance(catalogue[champ], bool)
+            for champ in ("entree_exacte_presente", "effort_high_present")
+        )
+    ):
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : catalogue_declare aux clés "
+            f"exactes {sorted(_CLES_CATALOGUE_DECLARE_OPENCODEX)} attendu"
+        )
+    proxy = recu["proxy_opencodex"]
+    if (
+        not isinstance(proxy, dict)
+        or set(proxy) != _CLES_PROXY_OPENCODEX
+        or (
+            proxy["version"] != INCONNU
+            and (
+                not isinstance(proxy["version"], str)
+                or not proxy["version"].strip()
+            )
+        )
+        or (proxy["ready"] != INCONNU and not isinstance(proxy["ready"], bool))
+        or (
+            proxy["status"] != INCONNU
+            and proxy["status"] not in STATUTS_READY_OPENCODEX
+        )
+    ):
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : proxy_opencodex aux clés "
+            f"exactes {sorted(_CLES_PROXY_OPENCODEX)} attendu"
+        )
+    if recu["identite_reellement_servie"] != INCONNU:
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : identite_reellement_servie "
+            f"'{INCONNU}' exigée dans cette tranche sans génération ; le "
+            "catalogue déclaré ne vaut jamais identité servie"
+        )
+    observe = recu["quota"]["observe"]
+    if observe != INCONNU and (
+        not isinstance(observe, dict)
+        or set(observe) != _CLES_QUOTA_OBSERVE_OPENCODEX
+        or observe["source"] != SOURCE_QUOTA_ZAI
+        or not isinstance(observe["fenetres"], dict)
+        or set(observe["fenetres"]) != set(NOMS_FENETRES_QUOTA_ZAI)
+        or any(
+            not isinstance(fenetre, dict)
+            or set(fenetre) != _CLES_FENETRE_QUOTA_OPENCODEX
+            or not _pourcentage_ou_reset_valide(fenetre["pourcentage"])
+            or not _pourcentage_ou_reset_valide(fenetre["reset"])
+            for fenetre in observe["fenetres"].values()
+        )
+    ):
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : quota.observe '{INCONNU}' "
+            f"ou table source '{SOURCE_QUOTA_ZAI}' et fenêtres "
+            f"{sorted(NOMS_FENETRES_QUOTA_ZAI)} attendue"
+        )
 
 
 def _charger_recus_preflight(racine: Path) -> list[tuple[str, dict, str]]:
@@ -3912,8 +4892,10 @@ def _texte_sonde_preflight(sonde: dict) -> str:
         else:
             commande_sonde = tuple(sonde["commande"].split())
             champs = _CHAMPS_PROJECTION_PAR_SONDE[commande_sonde]
+            # La page autonome ne porte jamais la séquence d'un schéma
+            # distant : un endpoint projeté est neutralisé, jamais omis
             texte = "projection " + " · ".join(
-                f"{champ} <code>{_echapper(projection[champ])}</code>"
+                f"{champ} <code>{_neutraliser_schema(_echapper(projection[champ]))}</code>"
                 for champ in champs
             )
     else:
@@ -3936,6 +4918,8 @@ def _texte_auth_preflight(observee: object) -> str:
         champs = CHAMPS_PROJECTION_AUTH_GROK
     elif set(observee) == set(CHAMPS_PROJECTION_STATUT_CURSOR):
         champs = CHAMPS_PROJECTION_STATUT_CURSOR
+    elif set(observee) == set(CHAMPS_PROJECTION_COMPTE_OPENCODEX):
+        champs = CHAMPS_PROJECTION_COMPTE_OPENCODEX
     else:
         champs = ("loggedIn", "authMethod", "apiProvider")
     return " · ".join(
@@ -3983,15 +4967,59 @@ def _article_preflight(relatif: str, sha_fichier: str, recu: dict) -> str:
         f"modèle exposé <code>{_echapper(recu['modele']['expose'])}</code></p>"
         f"<p>effort demandé <code>{_echapper(recu['effort']['demande'])}</code> · "
         f"effort exposé <code>{_echapper(recu['effort']['expose'])}</code></p>"
-        f"<p>quota observé <code>{_echapper(recu['quota']['observe'])}</code> · "
+        f"<p>quota observé {_texte_quota_preflight(recu['quota']['observe'])} · "
         "consommation du préflight "
         f"<code>{_echapper(recu['quota']['consommation_preflight'])}</code></p>"
+        + _objets_distincts_opencodex(recu)
         + _span_source(relatif, sha_fichier, SECTION_PREFLIGHT)
     )
     return _article(
         "fait",
         contenu,
         f' data-preflight="{recu["configuration_id"]}"',
+    )
+
+
+def _texte_quota_preflight(observe: object) -> str:
+    """Quota observé : INCONNU littéral ou détail des fenêtres reconnues,
+    sans reconstruction de valeur."""
+    if not isinstance(observe, dict):
+        return f"<code>{_echapper(observe)}</code>"
+    fenetres = " · ".join(
+        f"{nom} pourcentage <code>{_echapper(observe['fenetres'][nom]['pourcentage'])}</code> "
+        f"reset <code>{_echapper(observe['fenetres'][nom]['reset'])}</code>"
+        for nom in NOMS_FENETRES_QUOTA_ZAI
+    )
+    return f"source <code>{_echapper(observe['source'])}</code> · {fenetres}"
+
+
+def _objets_distincts_opencodex(recu: dict) -> str:
+    """Rendu séparé des objets propres au reçu opencodex : le catalogue
+    déclaré, le proxy et l'identité réellement servie ne se substituent
+    jamais l'un à l'autre ; l'authentification est déjà rendue plus haut."""
+    if "catalogue_declare" not in recu:
+        return ""
+    catalogue = recu["catalogue_declare"]
+    proxy = recu["proxy_opencodex"]
+    return (
+        "<p>catalogue déclaré : fournisseur "
+        f"<code>{_echapper(catalogue['fournisseur'])}</code> · adaptateur "
+        f"<code>{_echapper(catalogue['adaptateur'])}</code> · endpoint "
+        f"<code>{_neutraliser_schema(_echapper(catalogue['endpoint']))}</code> · "
+        "entrée exacte présente "
+        f"<code>{_echapper(catalogue['entree_exacte_presente'])}</code> · "
+        "effort high présent "
+        f"<code>{_echapper(catalogue['effort_high_present'])}</code> — le "
+        "catalogue déclaré ne prouve ni l'accès à une génération, ni le "
+        "modèle réellement servi.</p>"
+        "<p>proxy OpenCodex : version "
+        f"<code>{_echapper(proxy['version'])}</code> · ready "
+        f"<code>{_echapper(proxy['ready'])}</code> · status "
+        f"<code>{_echapper(proxy['status'])}</code></p>"
+        "<p>identité réellement servie : "
+        f"<code>{_echapper(recu['identite_reellement_servie'])}</code> — "
+        "jamais déduite du catalogue déclaré, de l'authentification ni du "
+        "rapport de quota.</p>"
     )
 
 
@@ -4788,15 +5816,15 @@ def principal(arguments: list[str], racine: Path | None = None) -> int:
             print(_USAGE)
             return 2
         if "--configuration" not in options:
-            # Refus fail-closed : le préflight de panel entier exige les
-            # adaptateurs des tranches V1-XS-06E à V1-XS-06F, non couvertes ici
+            # Refus fail-closed : le préflight de panel entier exige
+            # l'adaptateur de la tranche V1-XS-06F, non couverte ici
             print(
                 "ECHEC option '--configuration' requise : V1-XS-06A à "
-                f"V1-XS-06D couvrent les seuls adaptateurs "
+                f"V1-XS-06E couvrent les seuls adaptateurs "
                 f"'{ADAPTATEUR_CLAUDE}', '{ADAPTATEUR_CODEX}', "
-                f"'{ADAPTATEUR_GROK}' et '{ADAPTATEUR_CURSOR}' ; le "
-                "préflight sans option relève des tranches V1-XS-06E à "
-                "V1-XS-06F"
+                f"'{ADAPTATEUR_GROK}', '{ADAPTATEUR_CURSOR}' et "
+                f"'{ADAPTATEUR_OPENCODEX}' ; le préflight sans option "
+                "relève de la tranche V1-XS-06F"
             )
             return 1
         return preflight_configuration(racine, options["--configuration"])
