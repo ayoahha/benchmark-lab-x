@@ -352,11 +352,29 @@ class PreflightRefusTests(BaseXS06A):
         self.assertFalse((self.racine / CHEMIN_PREFLIGHTS).exists())
 
     def test_adaptateur_non_couvert_rend_un_sans_recu(self):
-        # Depuis XS-06D, agent est couvert ; agy reste hors périmètre
-        code, sortie = self._preflight("antigravity-gemini-3-7-flash")
+        # Depuis XS-06F, les six adaptateurs du panel sont couverts ; un
+        # client hors panel reste refusé fail-closed sans reçu ni sonde
+        source = (
+            self.racine / M.REGISTRE_OFFICIEL / "antigravity-gemini-3-7-flash.toml"
+        )
+        contenu = (
+            source.read_text(encoding="utf-8")
+            .replace(
+                'configuration_id = "antigravity-gemini-3-7-flash"',
+                'configuration_id = "temoin-hors-panel"',
+            )
+            .replace(
+                'argv = ["agy", "__PROMPT_FILE__"]',
+                'argv = ["temoin-client", "__PROMPT_FILE__"]',
+            )
+        )
+        (self.racine / M.REGISTRE_OFFICIEL / "temoin-hors-panel.toml").write_text(
+            contenu, encoding="utf-8"
+        )
+        code, sortie = self._preflight("temoin-hors-panel")
         self.assertEqual(code, 1)
         self.assertIn("ECHEC", sortie)
-        self.assertIn("V1-XS-06E", sortie)
+        self.assertIn("temoin-client", sortie)
         self.assertFalse((self.racine / CHEMIN_PREFLIGHTS).exists())
         self.assertFalse(self.journal.exists())
 

@@ -3254,6 +3254,575 @@ def _observer_route_zai(modele_demande: str) -> dict:
     )
 
 
+ADAPTATEUR_ANTIGRAVITY = "agy"
+# D-V1-01 : la variante d'effort est portée par le suffixe de l'identifiant
+# natif exact ; aucune variante fast, priority, max ou ultra, aucun alias,
+# préfixe ou sous-chaîne n'est admis
+EFFORT_DEMANDE_ANTIGRAVITY = "high"
+CIBLE_CATALOGUE_ANTIGRAVITY = "gemini-3.7-flash-high"
+LIBELLE_CIBLE_ANTIGRAVITY = "Gemini 3.7 Flash (High)"
+# Probes non génératives Antigravity : jamais agy en TUI, agy -i,
+# --prompt-interactive, -p avec un argument autre que le littéral /usage,
+# update, install, plugin, mcp, /model, /credits, /logout, une commande de
+# connexion, une génération, un prompt, --dangerously-skip-permissions,
+# --model, --effort, --agent, --continue, --conversation, --project,
+# --mode, --sandbox ni un format d'entrée modèle ; liste exacte, fermée et
+# ordonnée
+SONDE_VERSION_ANTIGRAVITY = ("agy", "--version")
+SONDE_CATALOGUE_ANTIGRAVITY = ("agy", "models")
+# /usage est la commande interne documentée qui rafraîchit le quota depuis
+# le backend, exécutée comme commande autonome : jamais un prompt candidat
+SONDE_USAGE_ANTIGRAVITY = ("agy", "-p", "/usage")
+SONDES_AUTORISEES_PREFLIGHT_ANTIGRAVITY = (
+    SONDE_VERSION_ANTIGRAVITY,
+    SONDE_CATALOGUE_ANTIGRAVITY,
+    SONDE_USAGE_ANTIGRAVITY,
+)
+CHAMPS_PROJECTION_VERSION_ANTIGRAVITY = ("version",)
+# Projection fermée du catalogue : présence de l'identifiant exact et
+# concordance de son libellé exact ; les autres modèles et la sortie brute
+# ne sont jamais conservés
+CHAMPS_PROJECTION_CATALOGUE_ANTIGRAVITY = (
+    "entree_exacte_presente",
+    "libelle_concordant",
+)
+# Projection fermée de /usage : catégorie Gemini Models et fenêtres Gemini
+# reconnues ; les lignes Claude/GPT et la sortie brute ne sont jamais
+# conservées
+CHAMPS_PROJECTION_USAGE_ANTIGRAVITY = (
+    "categorie_gemini_presente",
+    "fenetres_reconnues",
+)
+# Authentification de métadonnées : accessibilité observée du catalogue et
+# du quota ; compte, email, jeton de keyring, chemin de profil et
+# identifiant de conversation ne sont jamais lus ni conservés
+CHAMPS_AUTH_ANTIGRAVITY = (
+    "metadonnees_catalogue_accessibles",
+    "metadonnees_quota_accessibles",
+)
+CATEGORIE_USAGE_ANTIGRAVITY = "Gemini Models"
+SOURCE_QUOTA_ANTIGRAVITY = "agy:/usage"
+# Fenêtres Gemini reconnues de /usage, dans cet ordre : (nom projeté,
+# libellé exact de fenêtre) ; les fenêtres des autres familles ne
+# compensent jamais une fenêtre Gemini absente ou épuisée
+FENETRES_USAGE_ANTIGRAVITY = (
+    ("cinq_heures", "Five Hour Limit Remaining"),
+    ("hebdomadaire", "Weekly Limit Remaining"),
+)
+NOMS_FENETRES_USAGE_ANTIGRAVITY = tuple(
+    nom for nom, _ in FENETRES_USAGE_ANTIGRAVITY
+)
+# La catégorie active de /usage prouve une catégorie de quota, jamais un
+# palier tarifaire, un prix ou une facture
+PLAN_OBSERVE_ANTIGRAVITY = (
+    "catégorie 'Gemini Models' active dans /usage, palier commercial non "
+    "observé"
+)
+# Messages explicites reconnus, listes fermées : seule la classe d'échec
+# est projetée, la sortie brute n'est jamais consignée
+_MOTIF_AUTH_REQUISE_ANTIGRAVITY = re.compile(
+    r"(?i)\b(?:not (?:logged|signed) in|log ?in required|authentication "
+    r"required|please (?:log|sign) in|no active session|session expired)\b"
+)
+_MOTIF_ERREUR_FOURNISSEUR_ANTIGRAVITY = re.compile(
+    r"(?i)\b(?:server|backend|internal|api) error\b|\bservice unavailable\b"
+)
+_MOTIF_ENTREE_ANTIGRAVITY = re.compile(
+    r"(?<![\w.-])" + re.escape(CIBLE_CATALOGUE_ANTIGRAVITY) + r"(?![\w.-])"
+)
+_MOTIF_POURCENTAGE_ANTIGRAVITY = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+_MOTIF_RESET_ANTIGRAVITY = re.compile(r"(?i)\bresets?\b[\s:]*(.+?)\s*\)?\s*$")
+# Forme réelle observée au diagnostic de lancement : le reset ISO 8601 est
+# le dernier champ de la ligne de fenêtre, sans mot reset
+_MOTIF_RESET_ISO_ANTIGRAVITY = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
+)
+_SEPARATEURS_LIBELLE_ANTIGRAVITY = " \t-–—:·|*•()[]"
+
+
+def _projeter_version_antigravity(stdout: str, stderr: str) -> dict | None:
+    """Projection de la seule version non vide de 'agy --version'.
+
+    None signale une sortie vide donc inobservée : le préflight reste
+    fail-closed sans inventer de fait.
+    """
+    for flux in (stdout, stderr):
+        for ligne in _MOTIF_ANSI.sub("", flux).splitlines():
+            texte = ligne.strip()
+            if texte:
+                return {"version": texte}
+    return None
+
+
+def _classer_echec_antigravity(stdout: str, stderr: str) -> str | None:
+    """Classe d'un échec de probe : 'authentification' sur message explicite
+    d'authentification requise ou de session absente, 'fournisseur' sur
+    erreur explicite du backend ou du fournisseur, None sinon.
+
+    Seule la classe sort de la mémoire locale, jamais le message brut.
+    """
+    texte = _MOTIF_ANSI.sub("", stdout + "\n" + stderr)
+    if _MOTIF_AUTH_REQUISE_ANTIGRAVITY.search(texte):
+        return "authentification"
+    if _MOTIF_ERREUR_FOURNISSEUR_ANTIGRAVITY.search(texte):
+        return "fournisseur"
+    return None
+
+
+def _projeter_catalogue_antigravity(stdout: str, stderr: str) -> dict | None:
+    """Projection du catalogue : présence de l'identifiant exact et
+    concordance de son libellé exact, rien d'autre.
+
+    Le catalogue complet et les autres modèles ne sont jamais conservés.
+    None signale une sortie vide ou un identifiant présent dont le libellé
+    reste illisible : fail-closed sans inventer de fait.
+    """
+    for flux in (stdout, stderr):
+        lignes = [
+            ligne
+            for ligne in _MOTIF_ANSI.sub("", flux).splitlines()
+            if ligne.strip()
+        ]
+        if not lignes:
+            continue
+        lignes_cible = [
+            ligne
+            for ligne in lignes
+            if _MOTIF_ENTREE_ANTIGRAVITY.search(ligne)
+        ]
+        if not lignes_cible:
+            return {
+                "entree_exacte_presente": False,
+                "libelle_concordant": INCONNU,
+            }
+        if any(LIBELLE_CIBLE_ANTIGRAVITY in ligne for ligne in lignes_cible):
+            return {"entree_exacte_presente": True, "libelle_concordant": True}
+        restes = [
+            _MOTIF_ENTREE_ANTIGRAVITY.sub("", ligne).strip(
+                _SEPARATEURS_LIBELLE_ANTIGRAVITY
+            )
+            for ligne in lignes_cible
+        ]
+        if all(not reste for reste in restes):
+            # Identifiant présent sans libellé lisible : la concordance
+            # reste inobservée, aucune valeur n'est inventée
+            return None
+        return {"entree_exacte_presente": True, "libelle_concordant": False}
+    return None
+
+
+def _projeter_usage_antigravity(
+    stdout: str, stderr: str
+) -> tuple[dict, object] | None:
+    """Projection de /usage : catégorie 'Gemini Models', fenêtres Gemini
+    reconnues et leur détail pourcentage restant / reset.
+
+    Le reset est reconnu sous deux formes : un champ introduit par le mot
+    resets, ou la forme réelle du diagnostic de lancement où l'horodatage
+    ISO 8601 est le dernier champ de la même ligne, sans mot reset. Les
+    lignes Claude/GPT, les autres catégories et la sortie brute ne sont
+    jamais conservées. Les pourcentages et resets absents restent INCONNU,
+    aucune valeur n'est reconstruite. None signale une sortie sans forme
+    d'usage reconnaissable ou une fenêtre Gemini dupliquée donc ambiguë :
+    fail-closed sans inventer de fait.
+    """
+    for flux in (stdout, stderr):
+        lignes = [
+            ligne.strip()
+            for ligne in _MOTIF_ANSI.sub("", flux).splitlines()
+            if ligne.strip()
+        ]
+        if not lignes:
+            continue
+        if not any(
+            ligne.rstrip(" :·-").endswith("Models")
+            or "Limit Remaining" in ligne
+            for ligne in lignes
+        ):
+            return None
+        fenetres: dict[str, dict] = {
+            nom: {"pourcentage_restant": INCONNU, "reset": INCONNU}
+            for nom in NOMS_FENETRES_USAGE_ANTIGRAVITY
+        }
+        vues: set[str] = set()
+        categorie_presente = False
+        section_gemini = False
+        for ligne in lignes:
+            if ligne.rstrip(" :·-").endswith("Models"):
+                section_gemini = CATEGORIE_USAGE_ANTIGRAVITY in ligne
+                categorie_presente = categorie_presente or section_gemini
+                continue
+            gemini_inline = CATEGORIE_USAGE_ANTIGRAVITY in ligne
+            if not section_gemini and not gemini_inline:
+                continue
+            for nom, libelle in FENETRES_USAGE_ANTIGRAVITY:
+                if libelle not in ligne:
+                    continue
+                if gemini_inline:
+                    categorie_presente = True
+                if nom in vues:
+                    return None
+                vues.add(nom)
+                pourcentage = _MOTIF_POURCENTAGE_ANTIGRAVITY.search(ligne)
+                if pourcentage:
+                    nombre = float(pourcentage.group(1))
+                    fenetres[nom]["pourcentage_restant"] = (
+                        int(nombre) if nombre.is_integer() else nombre
+                    )
+                reset = _MOTIF_RESET_ANTIGRAVITY.search(ligne)
+                if reset and reset.group(1).strip():
+                    fenetres[nom]["reset"] = reset.group(1).strip()
+                else:
+                    # Forme réelle du diagnostic : reset ISO 8601 en dernier
+                    # champ de la même ligne, sans mot reset
+                    horodatages = _MOTIF_RESET_ISO_ANTIGRAVITY.findall(ligne)
+                    if horodatages:
+                        fenetres[nom]["reset"] = horodatages[-1]
+        if not categorie_presente:
+            return (
+                {"categorie_gemini_presente": False, "fenetres_reconnues": []},
+                INCONNU,
+            )
+        reconnues = [
+            nom
+            for nom in NOMS_FENETRES_USAGE_ANTIGRAVITY
+            if fenetres[nom]["pourcentage_restant"] != INCONNU
+        ]
+        return (
+            {
+                "categorie_gemini_presente": True,
+                "fenetres_reconnues": reconnues,
+            },
+            {"source": SOURCE_QUOTA_ANTIGRAVITY, "fenetres": fenetres},
+        )
+    return None
+
+
+def _observer_route_antigravity() -> dict:
+    """Sonde la route Antigravity vers Gemini 3.7 Flash (High) sans
+    génération.
+
+    Rend un état d'observation complet : sondes, version, authentification,
+    plan observé, modèle exposé, effort exposé, quota observé, verdict,
+    cause et fait. MSW : les cinq contrôles de readiness (interface,
+    authentification de métadonnées, activité de la catégorie Gemini du
+    plan, identifiant exact avec variante high, quota Gemini non épuisé)
+    sont couverts par les trois probes de la liste blanche ; que ces probes
+    suffisent à établir READY sur la route réelle reste une hypothèse non
+    vérifiée tant qu'une observation réelle ne l'a pas prouvé, jamais un
+    fait acquis d'avance. L'identité réellement servie reste INCONNU sans
+    génération et ne devient jamais une conclusion.
+    """
+    etat: dict = {
+        "sondes": [],
+        "version": INCONNU,
+        "authentification": INCONNU,
+        "plan_observe": INCONNU,
+        "modele_expose": INCONNU,
+        "effort_expose": INCONNU,
+        "quota_observe": INCONNU,
+    }
+
+    def stop(verdict: str, cause: str | None, fait: str) -> dict:
+        etat.update({"verdict": verdict, "cause": cause, "fait": fait})
+        return etat
+
+    def sonder(sonde: tuple[str, ...]) -> dict:
+        with tempfile.TemporaryDirectory() as espace_texte:
+            return _executer_borne(
+                list(sonde), b"", Path(espace_texte), DELAI_SONDE_PREFLIGHT
+            )
+
+    commande_version = " ".join(SONDE_VERSION_ANTIGRAVITY)
+    commande_catalogue = " ".join(SONDE_CATALOGUE_ANTIGRAVITY)
+    commande_usage = " ".join(SONDE_USAGE_ANTIGRAVITY)
+    if shutil.which(ADAPTATEUR_ANTIGRAVITY) is None:
+        return stop(
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"client '{ADAPTATEUR_ANTIGRAVITY}' introuvable sur le PATH "
+            "local ; aucune probe lancée",
+        )
+    execution = sonder(SONDE_VERSION_ANTIGRAVITY)
+    if execution["etat"] == "INCIDENT":
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_version}' : {_expurger(execution['fait'])}",
+        )
+    if execution["code_sortie"] != 0:
+        # La sortie brute d'une probe en échec n'est jamais consignée
+        etat["sondes"].append(
+            {
+                "commande": commande_version,
+                "code_sortie": execution["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return stop(
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"probe '{commande_version}' en échec : code de sortie "
+            f"{execution['code_sortie']}, le client n'est pas utilisable ; "
+            "les probes de catalogue et d'usage ne sont pas lancées",
+        )
+    projection_version = _projeter_version_antigravity(
+        execution["sortie"]["stdout"], execution["sortie"]["stderr"]
+    )
+    if projection_version is None:
+        etat["sondes"].append(
+            {"commande": commande_version, "code_sortie": 0, "projection": INCONNU}
+        )
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_version}' : sortie vide, version inobservée ; "
+            "aucune valeur n'est inventée",
+        )
+    etat["sondes"].append(
+        {
+            "commande": commande_version,
+            "code_sortie": 0,
+            "projection": projection_version,
+        }
+    )
+    etat["version"] = projection_version["version"]
+    execution_catalogue = sonder(SONDE_CATALOGUE_ANTIGRAVITY)
+    if execution_catalogue["etat"] == "INCIDENT":
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_catalogue}' : "
+            f"{_expurger(execution_catalogue['fait'])}",
+        )
+    classe_catalogue = _classer_echec_antigravity(
+        execution_catalogue["sortie"]["stdout"],
+        execution_catalogue["sortie"]["stderr"],
+    )
+    if classe_catalogue == "authentification":
+        etat["sondes"].append(
+            {
+                "commande": commande_catalogue,
+                "code_sortie": execution_catalogue["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        etat["authentification"] = {
+            "metadonnees_catalogue_accessibles": False,
+            "metadonnees_quota_accessibles": INCONNU,
+        }
+        return stop(
+            "UNAVAILABLE",
+            "AUTHENTICATION_UNAVAILABLE",
+            f"probe '{commande_catalogue}' : message explicite "
+            "d'authentification requise ou de session absente, aucune "
+            "session de métadonnées utilisable ; la sortie brute n'est pas "
+            "consignée ; la probe d'usage n'est pas lancée",
+        )
+    if execution_catalogue["code_sortie"] != 0:
+        # Le catalogue complet n'est jamais consigné, même en échec
+        etat["sondes"].append(
+            {
+                "commande": commande_catalogue,
+                "code_sortie": execution_catalogue["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        if classe_catalogue == "fournisseur":
+            return stop(
+                "UNAVAILABLE",
+                "PROVIDER_FAILURE",
+                f"probe '{commande_catalogue}' : erreur explicite du backend "
+                f"ou du fournisseur (code de sortie "
+                f"{execution_catalogue['code_sortie']}) ; la sortie brute "
+                "n'est pas consignée ; la probe d'usage n'est pas lancée",
+            )
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_catalogue}' en échec non attribuable : code "
+            f"de sortie {execution_catalogue['code_sortie']}, catalogue "
+            "inobservé ; la sortie brute n'est pas consignée",
+        )
+    projection_catalogue = _projeter_catalogue_antigravity(
+        execution_catalogue["sortie"]["stdout"],
+        execution_catalogue["sortie"]["stderr"],
+    )
+    if projection_catalogue is None:
+        etat["sondes"].append(
+            {
+                "commande": commande_catalogue,
+                "code_sortie": 0,
+                "projection": INCONNU,
+            }
+        )
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_catalogue}' : catalogue vide, illisible ou "
+            "au libellé inobservable, forme ambiguë ; la sortie brute n'est "
+            "pas consignée",
+        )
+    etat["sondes"].append(
+        {
+            "commande": commande_catalogue,
+            "code_sortie": 0,
+            "projection": projection_catalogue,
+        }
+    )
+    etat["authentification"] = {
+        "metadonnees_catalogue_accessibles": True,
+        "metadonnees_quota_accessibles": INCONNU,
+    }
+    if not projection_catalogue["entree_exacte_presente"]:
+        return stop(
+            "UNAVAILABLE",
+            "MODEL_UNAVAILABLE",
+            f"catalogue lisible sans entrée exacte "
+            f"'{CIBLE_CATALOGUE_ANTIGRAVITY}' : --model échoue sans fallback "
+            "quand l'identifiant n'est pas reconnu ; aucune variante fast, "
+            "priority, max ou ultra, aucun alias, préfixe ou sous-chaîne "
+            "n'est admis ; la probe d'usage n'est pas lancée",
+        )
+    if not projection_catalogue["libelle_concordant"]:
+        return stop(
+            "HOLD",
+            "IDENTITY_MISMATCH",
+            f"identifiant exact '{CIBLE_CATALOGUE_ANTIGRAVITY}' présent avec "
+            f"un libellé contradictoire du libellé exact "
+            f"'{LIBELLE_CIBLE_ANTIGRAVITY}' : l'identité du catalogue n'est "
+            "pas établie, aucune substitution n'est admise ; la probe "
+            "d'usage n'est pas lancée",
+        )
+    etat["modele_expose"] = CIBLE_CATALOGUE_ANTIGRAVITY
+    etat["effort_expose"] = EFFORT_DEMANDE_ANTIGRAVITY
+    execution_usage = sonder(SONDE_USAGE_ANTIGRAVITY)
+    if execution_usage["etat"] == "INCIDENT":
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_usage}' : {_expurger(execution_usage['fait'])}",
+        )
+    classe_usage = _classer_echec_antigravity(
+        execution_usage["sortie"]["stdout"],
+        execution_usage["sortie"]["stderr"],
+    )
+    if classe_usage == "authentification":
+        etat["sondes"].append(
+            {
+                "commande": commande_usage,
+                "code_sortie": execution_usage["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        etat["authentification"]["metadonnees_quota_accessibles"] = False
+        return stop(
+            "UNAVAILABLE",
+            "AUTHENTICATION_UNAVAILABLE",
+            f"probe '{commande_usage}' : message explicite "
+            "d'authentification requise ou de session absente, le quota "
+            "n'est pas accessible ; la sortie brute n'est pas consignée",
+        )
+    if execution_usage["code_sortie"] != 0:
+        # Le rapport d'usage n'est jamais consigné, même en échec
+        etat["sondes"].append(
+            {
+                "commande": commande_usage,
+                "code_sortie": execution_usage["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        if classe_usage == "fournisseur":
+            return stop(
+                "UNAVAILABLE",
+                "PROVIDER_FAILURE",
+                f"probe '{commande_usage}' : erreur explicite du backend ou "
+                f"du fournisseur (code de sortie "
+                f"{execution_usage['code_sortie']}) ; la sortie brute n'est "
+                "pas consignée",
+            )
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_usage}' en échec non attribuable : code de "
+            f"sortie {execution_usage['code_sortie']}, quota inobservé ; la "
+            "sortie brute n'est pas consignée",
+        )
+    resultat_usage = _projeter_usage_antigravity(
+        execution_usage["sortie"]["stdout"],
+        execution_usage["sortie"]["stderr"],
+    )
+    if resultat_usage is None:
+        etat["sondes"].append(
+            {"commande": commande_usage, "code_sortie": 0, "projection": INCONNU}
+        )
+        return stop(
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_usage}' : sortie illisible, sans forme "
+            "d'usage reconnaissable ou fenêtre Gemini ambiguë ; la sortie "
+            "brute n'est pas consignée",
+        )
+    projection_usage, detail_usage = resultat_usage
+    etat["sondes"].append(
+        {
+            "commande": commande_usage,
+            "code_sortie": 0,
+            "projection": projection_usage,
+        }
+    )
+    etat["authentification"]["metadonnees_quota_accessibles"] = True
+    if not projection_usage["categorie_gemini_presente"]:
+        # Les fenêtres des autres familles ne compensent jamais la
+        # catégorie Gemini absente
+        return stop(
+            "UNAVAILABLE",
+            "PLAN_UNAVAILABLE",
+            "sortie /usage valide sans catégorie 'Gemini Models' : "
+            "l'activité de la catégorie Gemini du plan n'est pas observée, "
+            "aucune valeur de remplacement n'est créée",
+        )
+    etat["quota_observe"] = detail_usage
+    etat["plan_observe"] = PLAN_OBSERVE_ANTIGRAVITY
+    manquantes = [
+        nom
+        for nom in NOMS_FENETRES_USAGE_ANTIGRAVITY
+        if detail_usage["fenetres"][nom]["pourcentage_restant"] == INCONNU
+        or detail_usage["fenetres"][nom]["reset"] == INCONNU
+    ]
+    if manquantes:
+        return stop(
+            "HOLD",
+            "MISSING_OBSERVATION",
+            "fenêtre, pourcentage restant ou reset requis absent "
+            f"({', '.join(sorted(manquantes))}) malgré une réponse /usage "
+            "autrement reconnue : aucune valeur n'est reconstruite",
+        )
+    bloquantes = [
+        nom
+        for nom in NOMS_FENETRES_USAGE_ANTIGRAVITY
+        if detail_usage["fenetres"][nom]["pourcentage_restant"] <= 0
+    ]
+    if bloquantes:
+        return stop(
+            "UNAVAILABLE",
+            "QUOTA_EXHAUSTED",
+            "pourcentage restant égal à zéro dans une fenêtre Gemini "
+            f"bloquante ({', '.join(sorted(bloquantes))}) : la route n'est "
+            "pas utilisable tant que la fenêtre n'est pas réinitialisée",
+        )
+    return stop(
+        "READY",
+        None,
+        "interface, authentification de métadonnées, catégorie Gemini du "
+        f"plan active, identifiant exact '{CIBLE_CATALOGUE_ANTIGRAVITY}' "
+        f"avec variante '{EFFORT_DEMANDE_ANTIGRAVITY}' et deux fenêtres "
+        "Gemini strictement positives observés par les trois probes non "
+        "génératives ; le catalogue ne prouve pas l'accès à une génération "
+        "et l'identité réellement servie reste INCONNU sans génération",
+    )
+
+
 def _expurger(texte: str) -> str:
     """Expurgation des captures : le chemin du compte local ne sort jamais"""
     return texte.replace(str(Path.home()), "~")
@@ -3482,16 +4051,17 @@ def preflight_configuration(racine: Path, identifiant: str) -> int:
         ADAPTATEUR_CODEX,
         ADAPTATEUR_GROK,
         ADAPTATEUR_CURSOR,
+        ADAPTATEUR_ANTIGRAVITY,
     )
     if configuration["interface"]["type"] != "cli" or (
         argv[0] not in adaptateurs_couverts and not route_opencodex
     ):
         print(
             f"ECHEC adaptateur non couvert : '{argv[0]}' ; V1-XS-06A à "
-            f"V1-XS-06E couvrent les seuls adaptateurs '{ADAPTATEUR_CLAUDE}', "
+            f"V1-XS-06F couvrent les seuls adaptateurs '{ADAPTATEUR_CLAUDE}', "
             f"'{ADAPTATEUR_CODEX}', '{ADAPTATEUR_GROK}', "
-            f"'{ADAPTATEUR_CURSOR}' et '{ADAPTATEUR_OPENCODEX}', les autres "
-            "configurations relèvent de la tranche V1-XS-06F"
+            f"'{ADAPTATEUR_CURSOR}', '{ADAPTATEUR_OPENCODEX}' et "
+            f"'{ADAPTATEUR_ANTIGRAVITY}' ; aucun autre client n'est sondé"
         )
         return 1
     supplement: dict = {}
@@ -3514,6 +4084,28 @@ def preflight_configuration(racine: Path, identifiant: str) -> int:
         supplement = {
             "catalogue_declare": observation["catalogue_declare"],
             "proxy_opencodex": observation["proxy_opencodex"],
+            "identite_reellement_servie": INCONNU,
+            "quota": {
+                "observe": observation["quota_observe"],
+                "consommation_preflight": INCONNU,
+            },
+        }
+    elif adaptateur == ADAPTATEUR_ANTIGRAVITY:
+        observation = _observer_route_antigravity()
+        sondes = observation["sondes"]
+        version = observation["version"]
+        authentification = observation["authentification"]
+        plan_observe = observation["plan_observe"]
+        modele_expose = observation["modele_expose"]
+        effort_expose = observation["effort_expose"]
+        verdict = observation["verdict"]
+        cause = observation["cause"]
+        fait = observation["fait"]
+        effort_demande = EFFORT_DEMANDE_ANTIGRAVITY
+        # Objets distincts : le catalogue ne prouve pas l'accès à une
+        # génération, le quota ne prouve pas le modèle, l'identité
+        # réellement servie reste INCONNU sans génération
+        supplement = {
             "identite_reellement_servie": INCONNU,
             "quota": {
                 "observe": observation["quota_observe"],
@@ -4252,6 +4844,13 @@ _CLES_RECU_PREFLIGHT_OPENCODEX = _CLES_RECU_PREFLIGHT | {
     "proxy_opencodex",
     "identite_reellement_servie",
 }
+# Reçu agy : l'identité réellement servie reste un objet distinct explicite,
+# jamais amputable ni déduit du catalogue ou du quota
+_CLES_RECU_PREFLIGHT_ANTIGRAVITY = _CLES_RECU_PREFLIGHT | {
+    "identite_reellement_servie",
+}
+_CLES_QUOTA_OBSERVE_ANTIGRAVITY = {"source", "fenetres"}
+_CLES_FENETRE_QUOTA_ANTIGRAVITY = {"pourcentage_restant", "reset"}
 _CLES_CATALOGUE_DECLARE_OPENCODEX = {
     "fournisseur",
     "adaptateur",
@@ -4329,6 +4928,7 @@ _SONDES_PAR_ADAPTATEUR = {
     ADAPTATEUR_GROK: SONDES_AUTORISEES_PREFLIGHT_GROK,
     ADAPTATEUR_CURSOR: SONDES_AUTORISEES_PREFLIGHT_CURSOR,
     ADAPTATEUR_OPENCODEX: SONDES_AUTORISEES_PREFLIGHT_OPENCODEX,
+    ADAPTATEUR_ANTIGRAVITY: SONDES_AUTORISEES_PREFLIGHT_ANTIGRAVITY,
 }
 # Champs de projection par sonde à projection : la restitution ne rend que
 # ces champs fermés, jamais une sortie brute
@@ -4350,6 +4950,9 @@ _CHAMPS_PROJECTION_PAR_SONDE = {
     SONDE_CATALOGUE_OPENCODEX: CHAMPS_PROJECTION_CATALOGUE_OPENCODEX,
     SONDE_COMPTE_OPENCODEX: CHAMPS_PROJECTION_COMPTE_OPENCODEX,
     SONDE_QUOTA_OPENCODEX: CHAMPS_PROJECTION_QUOTA_OPENCODEX,
+    SONDE_VERSION_ANTIGRAVITY: CHAMPS_PROJECTION_VERSION_ANTIGRAVITY,
+    SONDE_CATALOGUE_ANTIGRAVITY: CHAMPS_PROJECTION_CATALOGUE_ANTIGRAVITY,
+    SONDE_USAGE_ANTIGRAVITY: CHAMPS_PROJECTION_USAGE_ANTIGRAVITY,
 }
 
 
@@ -4368,13 +4971,15 @@ def _exiger_sonde_autorisee(nom: str, commande: object, adaptateur: str) -> None
 
 
 def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
-    # Le jeu de clés dépend de l'adaptateur : le reçu opencodex porte en
-    # plus les quatre objets distincts, jamais amputables
-    cles_attendues = (
-        _CLES_RECU_PREFLIGHT_OPENCODEX
-        if isinstance(recu, dict) and recu.get("adaptateur") == ADAPTATEUR_OPENCODEX
-        else _CLES_RECU_PREFLIGHT
-    )
+    # Le jeu de clés dépend de l'adaptateur : les reçus opencodex et agy
+    # portent en plus leurs objets distincts, jamais amputables
+    adaptateur_declare = recu.get("adaptateur") if isinstance(recu, dict) else None
+    if adaptateur_declare == ADAPTATEUR_OPENCODEX:
+        cles_attendues = _CLES_RECU_PREFLIGHT_OPENCODEX
+    elif adaptateur_declare == ADAPTATEUR_ANTIGRAVITY:
+        cles_attendues = _CLES_RECU_PREFLIGHT_ANTIGRAVITY
+    else:
+        cles_attendues = _CLES_RECU_PREFLIGHT
     if not isinstance(recu, dict) or set(recu) != cles_attendues:
         raise ErreurRestitution(
             f"reçu de préflight '{nom_fichier}' : clés exactes "
@@ -4412,8 +5017,8 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
         raise ErreurRestitution(
             f"reçu de préflight '{nom_fichier}' : adaptateur "
             f"'{ADAPTATEUR_CLAUDE}', '{ADAPTATEUR_CODEX}', "
-            f"'{ADAPTATEUR_GROK}', '{ADAPTATEUR_CURSOR}' ou "
-            f"'{ADAPTATEUR_OPENCODEX}' attendu"
+            f"'{ADAPTATEUR_GROK}', '{ADAPTATEUR_CURSOR}', "
+            f"'{ADAPTATEUR_OPENCODEX}' ou '{ADAPTATEUR_ANTIGRAVITY}' attendu"
         )
     for champ in ("commande_publique", "fait"):
         if not isinstance(recu[champ], str) or not recu[champ].strip():
@@ -4684,6 +5289,56 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                         "projection 'INCONNU' ou aux trois champs exacts "
                         f"{sorted(CHAMPS_PROJECTION_QUOTA_OPENCODEX)} attendue"
                     )
+            elif commande_sonde == SONDE_VERSION_ANTIGRAVITY:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection)
+                    != set(CHAMPS_PROJECTION_VERSION_ANTIGRAVITY)
+                    or not isinstance(projection["version"], str)
+                    or not projection["version"].strip()
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou au champ exact "
+                        f"{sorted(CHAMPS_PROJECTION_VERSION_ANTIGRAVITY)} "
+                        "attendue"
+                    )
+            elif commande_sonde == SONDE_CATALOGUE_ANTIGRAVITY:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection)
+                    != set(CHAMPS_PROJECTION_CATALOGUE_ANTIGRAVITY)
+                    or not isinstance(projection["entree_exacte_presente"], bool)
+                    or not (
+                        projection["libelle_concordant"] == INCONNU
+                        or isinstance(projection["libelle_concordant"], bool)
+                    )
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux deux champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_CATALOGUE_ANTIGRAVITY)} "
+                        "attendue"
+                    )
+            elif commande_sonde == SONDE_USAGE_ANTIGRAVITY:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_USAGE_ANTIGRAVITY)
+                    or not isinstance(
+                        projection["categorie_gemini_presente"], bool
+                    )
+                    or not isinstance(projection["fenetres_reconnues"], list)
+                    or any(
+                        fenetre not in NOMS_FENETRES_USAGE_ANTIGRAVITY
+                        for fenetre in projection["fenetres_reconnues"]
+                    )
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux deux champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_USAGE_ANTIGRAVITY)} "
+                        "attendue"
+                    )
             else:
                 if projection != INCONNU and (
                     not isinstance(projection, dict)
@@ -4756,6 +5411,22 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                 "'INCONNU' ou aux clés exactes fournisseur, type, cle_active "
                 "attendue"
             )
+    elif adaptateur == ADAPTATEUR_ANTIGRAVITY:
+        # Accessibilité des métadonnées, jamais une identité de compte
+        if observee != INCONNU and (
+            not isinstance(observee, dict)
+            or set(observee) != set(CHAMPS_AUTH_ANTIGRAVITY)
+            or any(
+                observee[champ] != INCONNU
+                and not isinstance(observee[champ], bool)
+                for champ in CHAMPS_AUTH_ANTIGRAVITY
+            )
+        ):
+            raise ErreurRestitution(
+                f"reçu de préflight '{nom_fichier}' : authentification.observee "
+                "'INCONNU' ou aux clés exactes "
+                f"{sorted(CHAMPS_AUTH_ANTIGRAVITY)} attendue"
+            )
     else:
         if observee != INCONNU and (
             not isinstance(observee, dict)
@@ -4773,6 +5444,8 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
             )
     if adaptateur == ADAPTATEUR_OPENCODEX:
         _valider_objets_opencodex(nom_fichier, recu)
+    if adaptateur == ADAPTATEUR_ANTIGRAVITY:
+        _valider_objets_antigravity(nom_fichier, recu)
     if verdict == "READY":
         # READY exige les cinq contrôles établis : aucun champ observé ne
         # peut rester INCONNU ni NON_DEFINI
@@ -4860,6 +5533,61 @@ def _valider_objets_opencodex(nom_fichier: str, recu: dict) -> None:
         )
 
 
+def _valider_objets_antigravity(nom_fichier: str, recu: dict) -> None:
+    """Objets distincts du reçu agy : une identité réellement servie qui ne
+    devient jamais une conclusion et des fenêtres Gemini fermées, sans
+    reconstruction de valeur."""
+    if recu["identite_reellement_servie"] != INCONNU:
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : identite_reellement_servie "
+            f"'{INCONNU}' exigée dans cette tranche sans génération ; le "
+            "catalogue ne vaut jamais identité servie"
+        )
+    observe = recu["quota"]["observe"]
+    if observe != INCONNU and (
+        not isinstance(observe, dict)
+        or set(observe) != _CLES_QUOTA_OBSERVE_ANTIGRAVITY
+        or observe["source"] != SOURCE_QUOTA_ANTIGRAVITY
+        or not isinstance(observe["fenetres"], dict)
+        or set(observe["fenetres"]) != set(NOMS_FENETRES_USAGE_ANTIGRAVITY)
+        or any(
+            not isinstance(fenetre, dict)
+            or set(fenetre) != _CLES_FENETRE_QUOTA_ANTIGRAVITY
+            or not _pourcentage_ou_reset_valide(fenetre["pourcentage_restant"])
+            or not (
+                fenetre["reset"] == INCONNU
+                or (
+                    isinstance(fenetre["reset"], str)
+                    and fenetre["reset"].strip()
+                )
+            )
+            for fenetre in observe["fenetres"].values()
+        )
+    ):
+        raise ErreurRestitution(
+            f"reçu de préflight '{nom_fichier}' : quota.observe '{INCONNU}' "
+            f"ou table source '{SOURCE_QUOTA_ANTIGRAVITY}' et fenêtres "
+            f"{sorted(NOMS_FENETRES_USAGE_ANTIGRAVITY)} attendue"
+        )
+    if recu["verdict"] == "READY":
+        # READY exige chaque fenêtre Gemini pleinement observée : un
+        # pourcentage ou un reset INCONNU ou NON_DEFINI est refusé
+        if not isinstance(observe, dict):
+            raise ErreurRestitution(
+                f"reçu de préflight '{nom_fichier}' : verdict READY refusé, "
+                "quota.observe sans fenêtres Gemini observées"
+            )
+        for nom, fenetre in observe["fenetres"].items():
+            if fenetre["pourcentage_restant"] in (INCONNU, "NON_DEFINI") or (
+                fenetre["reset"] in (INCONNU, "NON_DEFINI")
+            ):
+                raise ErreurRestitution(
+                    f"reçu de préflight '{nom_fichier}' : verdict READY "
+                    f"refusé, fenêtre Gemini '{nom}' au pourcentage ou au "
+                    "reset non observé"
+                )
+
+
 def _charger_recus_preflight(racine: Path) -> list[tuple[str, dict, str]]:
     """Reçus de préflight validés : (chemin relatif, reçu, SHA-256 du fichier)."""
     repertoire = racine / REPERTOIRE_PREFLIGHTS
@@ -4920,6 +5648,8 @@ def _texte_auth_preflight(observee: object) -> str:
         champs = CHAMPS_PROJECTION_STATUT_CURSOR
     elif set(observee) == set(CHAMPS_PROJECTION_COMPTE_OPENCODEX):
         champs = CHAMPS_PROJECTION_COMPTE_OPENCODEX
+    elif set(observee) == set(CHAMPS_AUTH_ANTIGRAVITY):
+        champs = CHAMPS_AUTH_ANTIGRAVITY
     else:
         champs = ("loggedIn", "authMethod", "apiProvider")
     return " · ".join(
@@ -4970,7 +5700,7 @@ def _article_preflight(relatif: str, sha_fichier: str, recu: dict) -> str:
         f"<p>quota observé {_texte_quota_preflight(recu['quota']['observe'])} · "
         "consommation du préflight "
         f"<code>{_echapper(recu['quota']['consommation_preflight'])}</code></p>"
-        + _objets_distincts_opencodex(recu)
+        + _objets_distincts_preflight(recu)
         + _span_source(relatif, sha_fichier, SECTION_PREFLIGHT)
     )
     return _article(
@@ -4982,40 +5712,48 @@ def _article_preflight(relatif: str, sha_fichier: str, recu: dict) -> str:
 
 def _texte_quota_preflight(observe: object) -> str:
     """Quota observé : INCONNU littéral ou détail des fenêtres reconnues,
-    sans reconstruction de valeur."""
+    sans reconstruction de valeur. Les fenêtres et leurs champs fermés
+    viennent du reçu validé, rendus en ordre déterministe."""
     if not isinstance(observe, dict):
         return f"<code>{_echapper(observe)}</code>"
     fenetres = " · ".join(
-        f"{nom} pourcentage <code>{_echapper(observe['fenetres'][nom]['pourcentage'])}</code> "
-        f"reset <code>{_echapper(observe['fenetres'][nom]['reset'])}</code>"
-        for nom in NOMS_FENETRES_QUOTA_ZAI
+        f"{nom} "
+        + " ".join(
+            f"{champ} <code>{_echapper(observe['fenetres'][nom][champ])}</code>"
+            for champ in sorted(observe["fenetres"][nom])
+        )
+        for nom in sorted(observe["fenetres"])
     )
     return f"source <code>{_echapper(observe['source'])}</code> · {fenetres}"
 
 
-def _objets_distincts_opencodex(recu: dict) -> str:
-    """Rendu séparé des objets propres au reçu opencodex : le catalogue
-    déclaré, le proxy et l'identité réellement servie ne se substituent
+def _objets_distincts_preflight(recu: dict) -> str:
+    """Rendu séparé des objets distincts des reçus opencodex et agy : le
+    catalogue, le proxy et l'identité réellement servie ne se substituent
     jamais l'un à l'autre ; l'authentification est déjà rendue plus haut."""
-    if "catalogue_declare" not in recu:
+    if "identite_reellement_servie" not in recu:
         return ""
-    catalogue = recu["catalogue_declare"]
-    proxy = recu["proxy_opencodex"]
-    return (
-        "<p>catalogue déclaré : fournisseur "
-        f"<code>{_echapper(catalogue['fournisseur'])}</code> · adaptateur "
-        f"<code>{_echapper(catalogue['adaptateur'])}</code> · endpoint "
-        f"<code>{_neutraliser_schema(_echapper(catalogue['endpoint']))}</code> · "
-        "entrée exacte présente "
-        f"<code>{_echapper(catalogue['entree_exacte_presente'])}</code> · "
-        "effort high présent "
-        f"<code>{_echapper(catalogue['effort_high_present'])}</code> — le "
-        "catalogue déclaré ne prouve ni l'accès à une génération, ni le "
-        "modèle réellement servi.</p>"
-        "<p>proxy OpenCodex : version "
-        f"<code>{_echapper(proxy['version'])}</code> · ready "
-        f"<code>{_echapper(proxy['ready'])}</code> · status "
-        f"<code>{_echapper(proxy['status'])}</code></p>"
+    contenu = ""
+    if "catalogue_declare" in recu:
+        catalogue = recu["catalogue_declare"]
+        proxy = recu["proxy_opencodex"]
+        contenu = (
+            "<p>catalogue déclaré : fournisseur "
+            f"<code>{_echapper(catalogue['fournisseur'])}</code> · adaptateur "
+            f"<code>{_echapper(catalogue['adaptateur'])}</code> · endpoint "
+            f"<code>{_neutraliser_schema(_echapper(catalogue['endpoint']))}</code> · "
+            "entrée exacte présente "
+            f"<code>{_echapper(catalogue['entree_exacte_presente'])}</code> · "
+            "effort high présent "
+            f"<code>{_echapper(catalogue['effort_high_present'])}</code> — le "
+            "catalogue déclaré ne prouve ni l'accès à une génération, ni le "
+            "modèle réellement servi.</p>"
+            "<p>proxy OpenCodex : version "
+            f"<code>{_echapper(proxy['version'])}</code> · ready "
+            f"<code>{_echapper(proxy['ready'])}</code> · status "
+            f"<code>{_echapper(proxy['status'])}</code></p>"
+        )
+    return contenu + (
         "<p>identité réellement servie : "
         f"<code>{_echapper(recu['identite_reellement_servie'])}</code> — "
         "jamais déduite du catalogue déclaré, de l'authentification ni du "
