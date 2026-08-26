@@ -1963,6 +1963,591 @@ def _observer_route_grok(
     )
 
 
+ADAPTATEUR_CURSOR = "agent"
+# D-V1-01 : politique d'effort demandée de la configuration cursor-kimi-k3
+EFFORT_DEMANDE_CURSOR = "high"
+# Identifiant Cursor exact attendu par la combinaison décidée
+# « Kimi K3 + high » ; kimi-k3-low, kimi-k3-max, kimi-k2.7-code, tout
+# alias, préfixe ou sous-chaîne sont des non-correspondances
+CIBLE_CATALOGUE_CURSOR = "kimi-k3-high"
+# Probes non génératives Cursor : jamais de -p, --print, agent, create-chat,
+# resume, prompt positionnel, session interactive, --model, --force, --yolo,
+# --auto-review, --approve-mcps, --api-key, --endpoint, login, logout,
+# worker ni commande portant un modèle ; liste exacte et fermée
+SONDE_VERSION_CURSOR = ("agent", "--version")
+SONDE_AIDE_CURSOR = ("agent", "--help")
+SONDE_STATUT_CURSOR = ("agent", "status", "--format", "json")
+SONDE_COMPTE_CURSOR = ("agent", "about", "--format", "json")
+SONDE_CATALOGUE_CURSOR = ("agent", "models")
+SONDES_AUTORISEES_PREFLIGHT_CURSOR = (
+    SONDE_VERSION_CURSOR,
+    SONDE_AIDE_CURSOR,
+    SONDE_STATUT_CURSOR,
+    SONDE_COMPTE_CURSOR,
+    SONDE_CATALOGUE_CURSOR,
+)
+CHAMPS_PROJECTION_VERSION_CURSOR = ("version",)
+CHAMPS_PROJECTION_AIDE_CURSOR = ("option_modele_native", "syntaxe_effort_high")
+# Projection fermée du statut : seuls status et isAuthenticated sortent de
+# la mémoire locale ; userInfo, e-mail, identifiant, prénom, nom, date de
+# création, access token et refresh token ne sont jamais lus ni conservés
+CHAMPS_PROJECTION_STATUT_CURSOR = ("status", "isAuthenticated")
+# Projection fermée du compte : seuls cliVersion et subscriptionTier sortent
+# de la mémoire locale ; userEmail, lastRequestId, modèle par défaut,
+# système, architecture, terminal et shell ne sont jamais lus ni conservés
+CHAMPS_PROJECTION_COMPTE_CURSOR = ("cliVersion", "subscriptionTier")
+CHAMPS_PROJECTION_CATALOGUE_CURSOR = ("cible_presente",)
+# Détection textuelle des seules formes natives dans l'aide : aucune
+# commande portant --model n'est jamais lancée
+_MOTIF_OPTION_MODELE_CURSOR = re.compile(r"(?<![\w-])--model(?![\w-])")
+_MOTIF_EFFORT_HIGH_CURSOR = re.compile(r"(?<![\w-])effort=high(?![\w-])")
+
+
+def _projeter_version_cursor(stdout: str, stderr: str) -> dict | None:
+    """Projection de la seule version non vide de 'agent --version'.
+
+    None signale une sortie vide donc inobservée : le préflight reste
+    fail-closed sans inventer de fait.
+    """
+    for flux in (stdout, stderr):
+        for ligne in _MOTIF_ANSI.sub("", flux).splitlines():
+            texte = ligne.strip()
+            if texte:
+                return {"version": texte}
+    return None
+
+
+def _projeter_aide_cursor(stdout: str, stderr: str) -> dict | None:
+    """Projection de l'aide : présence de la seule option native --model et
+    de la syntaxe d'override d'effort documentant effort=high.
+
+    Le texte d'aide complet n'est jamais conservé. None signale une aide
+    vide donc inobservée : fail-closed sans inventer de fait.
+    """
+    texte = _MOTIF_ANSI.sub("", stdout + "\n" + stderr)
+    if not texte.strip():
+        return None
+    return {
+        "option_modele_native": bool(_MOTIF_OPTION_MODELE_CURSOR.search(texte)),
+        "syntaxe_effort_high": bool(_MOTIF_EFFORT_HIGH_CURSOR.search(texte)),
+    }
+
+
+def _projeter_statut_cursor(stdout: str, stderr: str) -> dict | None:
+    """Projection en mémoire du statut : seuls status et isAuthenticated.
+
+    Tout autre champ servi, notamment userInfo et les jetons, est ignoré
+    sans être lu ni conservé. None signale un JSON illisible ou une
+    structure attendue absente : fail-closed sans inventer de fait.
+    """
+    for flux in (stdout, stderr):
+        try:
+            donnees = json.loads(flux)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(donnees, dict):
+            continue
+        statut = donnees.get("status")
+        authentifie = donnees.get("isAuthenticated")
+        if (
+            isinstance(statut, str)
+            and statut.strip()
+            and isinstance(authentifie, bool)
+        ):
+            return {"status": statut.strip(), "isAuthenticated": authentifie}
+    return None
+
+
+def _projeter_compte_cursor(stdout: str, stderr: str) -> dict | None:
+    """Projection en mémoire du compte : seuls cliVersion et subscriptionTier.
+
+    Un champ absent est projeté INCONNU, jamais inventé. None signale un
+    JSON illisible ou une valeur hors forme : fail-closed sans inventer de
+    fait.
+    """
+    for flux in (stdout, stderr):
+        try:
+            donnees = json.loads(flux)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(donnees, dict):
+            continue
+        projection: dict = {}
+        for champ in CHAMPS_PROJECTION_COMPTE_CURSOR:
+            valeur = donnees.get(champ)
+            if valeur is None or (isinstance(valeur, str) and not valeur.strip()):
+                projection[champ] = INCONNU
+            elif isinstance(valeur, str):
+                projection[champ] = valeur.strip()
+            else:
+                return None
+        return projection
+    return None
+
+
+def _projeter_catalogue_cursor(stdout: str, stderr: str, cible: str) -> dict | None:
+    """Projection du catalogue : présence ou absence de la cible exacte,
+    rien d'autre.
+
+    Le catalogue complet, les autres modèles et le modèle par défaut ne sont
+    jamais conservés. None signale une section illisible ou un catalogue
+    ambigu (cible dupliquée) : fail-closed sans inventer de fait.
+    """
+    for flux in (stdout, stderr):
+        identifiants: list[str] = []
+        for ligne in _MOTIF_ANSI.sub("", flux).splitlines():
+            depouillee = ligne.strip()
+            if depouillee[:2] in ("* ", "- ", "• "):
+                depouillee = depouillee[2:].strip()
+            if " - " not in depouillee:
+                continue
+            identifiant = depouillee.split(" - ", 1)[0].strip()
+            if identifiant and " " not in identifiant:
+                identifiants.append(identifiant)
+        if identifiants:
+            if identifiants.count(cible) > 1:
+                return None
+            return {"cible_presente": cible in identifiants}
+    return None
+
+
+def _observer_route_cursor() -> tuple[
+    list[dict], str, object, str, str, str, str, str | None, str
+]:
+    """Sonde la route agent (Cursor CLI) sans génération.
+
+    Rend (sondes, version, authentification observée, plan observé, modèle
+    exposé, effort exposé, verdict, cause, fait). MSW : version, sélection
+    native exacte, statut d'authentification, tier du compte et
+    correspondance de catalogue exacte sont observables par les cinq probes
+    de la liste blanche ; la présence exacte de la cible projette le modèle
+    exposé et l'effort high, jamais l'identité réellement servie ; le quota,
+    sa consommation et l'identité réellement servie restent INCONNU sans
+    commande générative, donc READY n'est jamais prouvable dans cette
+    tranche.
+    """
+    sondes: list[dict] = []
+    commande_version = " ".join(SONDE_VERSION_CURSOR)
+    commande_aide = " ".join(SONDE_AIDE_CURSOR)
+    commande_statut = " ".join(SONDE_STATUT_CURSOR)
+    commande_compte = " ".join(SONDE_COMPTE_CURSOR)
+    commande_catalogue = " ".join(SONDE_CATALOGUE_CURSOR)
+    if shutil.which(ADAPTATEUR_CURSOR) is None:
+        return (
+            sondes,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"client '{ADAPTATEUR_CURSOR}' introuvable sur le PATH local ; "
+            "aucune probe lancée",
+        )
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution = _executer_borne(
+            list(SONDE_VERSION_CURSOR),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution["etat"] == "INCIDENT":
+        return (
+            sondes,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_version}' : {_expurger(execution['fait'])}",
+        )
+    if execution["code_sortie"] != 0:
+        # La sortie brute d'une probe en échec n'est jamais consignée
+        sondes.append(
+            {
+                "commande": commande_version,
+                "code_sortie": execution["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"probe '{commande_version}' en échec : code de sortie "
+            f"{execution['code_sortie']}, le client n'est pas utilisable ; "
+            "les probes d'aide, de statut, de compte et de catalogue ne "
+            "sont pas lancées",
+        )
+    projection_version = _projeter_version_cursor(
+        execution["sortie"]["stdout"], execution["sortie"]["stderr"]
+    )
+    if projection_version is None:
+        sondes.append(
+            {
+                "commande": commande_version,
+                "code_sortie": 0,
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_version}' : sortie vide, version inobservée ; "
+            "aucune valeur n'est inventée",
+        )
+    sondes.append(
+        {
+            "commande": commande_version,
+            "code_sortie": 0,
+            "projection": projection_version,
+        }
+    )
+    version = projection_version["version"]
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution_aide = _executer_borne(
+            list(SONDE_AIDE_CURSOR),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution_aide["etat"] == "INCIDENT":
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_aide}' : {_expurger(execution_aide['fait'])}",
+        )
+    if execution_aide["code_sortie"] != 0:
+        sondes.append(
+            {
+                "commande": commande_aide,
+                "code_sortie": execution_aide["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_aide}' en échec : code de sortie "
+            f"{execution_aide['code_sortie']}, sélection native inobservée ; "
+            "la sortie brute n'est pas consignée",
+        )
+    projection_aide = _projeter_aide_cursor(
+        execution_aide["sortie"]["stdout"], execution_aide["sortie"]["stderr"]
+    )
+    if projection_aide is None:
+        sondes.append(
+            {
+                "commande": commande_aide,
+                "code_sortie": 0,
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_aide}' : aide vide, sélection native "
+            "inobservée ; la sortie brute n'est pas consignée",
+        )
+    sondes.append(
+        {
+            "commande": commande_aide,
+            "code_sortie": 0,
+            "projection": projection_aide,
+        }
+    )
+    if not projection_aide["option_modele_native"] or not projection_aide[
+        "syntaxe_effort_high"
+    ]:
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            "aide observée sans sélection native exacte : l'option native "
+            "--model et la syntaxe d'override effort=high sont exigées "
+            "ensemble ; les probes de statut, de compte et de catalogue ne "
+            "sont pas lancées",
+        )
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution_statut = _executer_borne(
+            list(SONDE_STATUT_CURSOR),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution_statut["etat"] == "INCIDENT":
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_statut}' : {_expurger(execution_statut['fait'])}",
+        )
+    projection_statut = _projeter_statut_cursor(
+        execution_statut["sortie"]["stdout"], execution_statut["sortie"]["stderr"]
+    )
+    if projection_statut is None:
+        # La sortie brute d'une probe de statut n'est jamais consignée
+        sondes.append(
+            {
+                "commande": commande_statut,
+                "code_sortie": execution_statut["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_statut}' : JSON illisible ou structure "
+            f"attendue absente (code de sortie "
+            f"{execution_statut['code_sortie']}), statut d'authentification "
+            "inobservé ; la sortie brute n'est pas consignée",
+        )
+    sondes.append(
+        {
+            "commande": commande_statut,
+            "code_sortie": execution_statut["code_sortie"],
+            "projection": projection_statut,
+        }
+    )
+    if not projection_statut["isAuthenticated"]:
+        return (
+            sondes,
+            version,
+            projection_statut,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "AUTHENTICATION_UNAVAILABLE",
+            "statut observé isAuthenticated=false : aucune authentification "
+            "active, la route n'est pas utilisable ; les probes de compte "
+            "et de catalogue ne sont pas lancées",
+        )
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution_compte = _executer_borne(
+            list(SONDE_COMPTE_CURSOR),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution_compte["etat"] == "INCIDENT":
+        return (
+            sondes,
+            version,
+            projection_statut,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_compte}' : {_expurger(execution_compte['fait'])}",
+        )
+    projection_compte = _projeter_compte_cursor(
+        execution_compte["sortie"]["stdout"], execution_compte["sortie"]["stderr"]
+    )
+    if projection_compte is None:
+        # La sortie brute d'une probe de compte n'est jamais consignée
+        sondes.append(
+            {
+                "commande": commande_compte,
+                "code_sortie": execution_compte["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            projection_statut,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_compte}' : JSON illisible ou valeur hors "
+            f"forme (code de sortie {execution_compte['code_sortie']}), "
+            "compte inobservé ; la sortie brute n'est pas consignée",
+        )
+    sondes.append(
+        {
+            "commande": commande_compte,
+            "code_sortie": execution_compte["code_sortie"],
+            "projection": projection_compte,
+        }
+    )
+    if projection_compte["subscriptionTier"] == INCONNU:
+        return (
+            sondes,
+            version,
+            projection_statut,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "MISSING_OBSERVATION",
+            "compte authentifié dont subscriptionTier est absent ou vide : "
+            "le tier actif du compte reste inobservé, aucune valeur de "
+            "remplacement n'est créée ; la probe de catalogue n'est pas "
+            "lancée",
+        )
+    plan_observe = projection_compte["subscriptionTier"]
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution_catalogue = _executer_borne(
+            list(SONDE_CATALOGUE_CURSOR),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution_catalogue["etat"] == "INCIDENT":
+        return (
+            sondes,
+            version,
+            projection_statut,
+            plan_observe,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_catalogue}' : "
+            f"{_expurger(execution_catalogue['fait'])}",
+        )
+    if execution_catalogue["code_sortie"] != 0:
+        # Le catalogue complet n'est jamais consigné, même en échec
+        sondes.append(
+            {
+                "commande": commande_catalogue,
+                "code_sortie": execution_catalogue["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            projection_statut,
+            plan_observe,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_catalogue}' en échec : code de sortie "
+            f"{execution_catalogue['code_sortie']}, catalogue inobservé ; "
+            "la sortie brute n'est pas consignée",
+        )
+    projection_catalogue = _projeter_catalogue_cursor(
+        execution_catalogue["sortie"]["stdout"],
+        execution_catalogue["sortie"]["stderr"],
+        CIBLE_CATALOGUE_CURSOR,
+    )
+    if projection_catalogue is None:
+        sondes.append(
+            {
+                "commande": commande_catalogue,
+                "code_sortie": 0,
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            projection_statut,
+            plan_observe,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"probe '{commande_catalogue}' : catalogue illisible ou ambigu, "
+            "correspondance inobservée ; la sortie brute n'est pas "
+            "consignée",
+        )
+    sondes.append(
+        {
+            "commande": commande_catalogue,
+            "code_sortie": 0,
+            "projection": projection_catalogue,
+        }
+    )
+    if not projection_catalogue["cible_presente"]:
+        return (
+            sondes,
+            version,
+            projection_statut,
+            plan_observe,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "MODEL_UNAVAILABLE",
+            f"catalogue lisible sans correspondance exacte pour "
+            f"'{CIBLE_CATALOGUE_CURSOR}' : la combinaison décidée n'est pas "
+            "exposée par le client ; aucune variante low, max ou k2.7, "
+            "aucun alias, préfixe ou sous-chaîne n'est admis",
+        )
+    return (
+        sondes,
+        version,
+        projection_statut,
+        plan_observe,
+        CIBLE_CATALOGUE_CURSOR,
+        EFFORT_DEMANDE_CURSOR,
+        "HOLD",
+        "MISSING_OBSERVATION",
+        "client, version, sélection native exacte, authentification, tier "
+        "du compte et correspondance de catalogue exacte observés par les "
+        f"cinq probes non génératives ; la présence exacte de "
+        f"'{CIBLE_CATALOGUE_CURSOR}' projette le modèle exposé et l'effort "
+        f"'{EFFORT_DEMANDE_CURSOR}', jamais l'identité réellement servie ; "
+        "quota, consommation de quota et identité réellement servie "
+        "restent inobservables sans commande générative : la route n'est "
+        "pas prouvée prête",
+    )
+
+
 def _expurger(texte: str) -> str:
     """Expurgation des captures : le chemin du compte local ne sort jamais"""
     return texte.replace(str(Path.home()), "~")
@@ -2175,17 +2760,36 @@ def preflight_configuration(racine: Path, identifiant: str) -> int:
         return 1
     configuration = correspondances[0]
     argv = configuration["harnais"]["argv"]
-    adaptateurs_couverts = (ADAPTATEUR_CLAUDE, ADAPTATEUR_CODEX, ADAPTATEUR_GROK)
+    adaptateurs_couverts = (
+        ADAPTATEUR_CLAUDE,
+        ADAPTATEUR_CODEX,
+        ADAPTATEUR_GROK,
+        ADAPTATEUR_CURSOR,
+    )
     if configuration["interface"]["type"] != "cli" or argv[0] not in adaptateurs_couverts:
         print(
             f"ECHEC adaptateur non couvert : '{argv[0]}' ; V1-XS-06A à "
-            f"V1-XS-06C couvrent les seuls adaptateurs '{ADAPTATEUR_CLAUDE}', "
-            f"'{ADAPTATEUR_CODEX}' et '{ADAPTATEUR_GROK}', les autres "
-            "configurations relèvent des tranches V1-XS-06D à V1-XS-06F"
+            f"V1-XS-06D couvrent les seuls adaptateurs '{ADAPTATEUR_CLAUDE}', "
+            f"'{ADAPTATEUR_CODEX}', '{ADAPTATEUR_GROK}' et "
+            f"'{ADAPTATEUR_CURSOR}', les autres configurations relèvent des "
+            "tranches V1-XS-06E à V1-XS-06F"
         )
         return 1
     adaptateur = argv[0]
-    if adaptateur == ADAPTATEUR_GROK:
+    if adaptateur == ADAPTATEUR_CURSOR:
+        (
+            sondes,
+            version,
+            authentification,
+            plan_observe,
+            modele_expose,
+            effort_expose,
+            verdict,
+            cause,
+            fait,
+        ) = _observer_route_cursor()
+        effort_demande = EFFORT_DEMANDE_CURSOR
+    elif adaptateur == ADAPTATEUR_GROK:
         (
             sondes,
             version,
@@ -2922,12 +3526,24 @@ def _projection_login_codex_valide(projection: object) -> bool:
     )
 
 
+def _projection_statut_cursor_valide(projection: object) -> bool:
+    """Forme exacte de la projection de statut agent : status, isAuthenticated"""
+    return (
+        isinstance(projection, dict)
+        and set(projection) == set(CHAMPS_PROJECTION_STATUT_CURSOR)
+        and isinstance(projection["status"], str)
+        and bool(projection["status"].strip())
+        and isinstance(projection["isAuthenticated"], bool)
+    )
+
+
 # Liste blanche des sondes par adaptateur : une sonde d'un adaptateur ne
 # vaut jamais pour un autre
 _SONDES_PAR_ADAPTATEUR = {
     ADAPTATEUR_CLAUDE: SONDES_AUTORISEES_PREFLIGHT,
     ADAPTATEUR_CODEX: SONDES_AUTORISEES_PREFLIGHT_CODEX,
     ADAPTATEUR_GROK: SONDES_AUTORISEES_PREFLIGHT_GROK,
+    ADAPTATEUR_CURSOR: SONDES_AUTORISEES_PREFLIGHT_CURSOR,
 }
 # Champs de projection par sonde à projection : la restitution ne rend que
 # ces champs fermés, jamais une sortie brute
@@ -2938,6 +3554,11 @@ _CHAMPS_PROJECTION_PAR_SONDE = {
     SONDE_VERSION_GROK: CHAMPS_PROJECTION_VERSION_GROK,
     SONDE_AIDE_GROK: CHAMPS_PROJECTION_AIDE_GROK,
     SONDE_CATALOGUE_GROK: CHAMPS_PROJECTION_CATALOGUE_GROK,
+    SONDE_VERSION_CURSOR: CHAMPS_PROJECTION_VERSION_CURSOR,
+    SONDE_AIDE_CURSOR: CHAMPS_PROJECTION_AIDE_CURSOR,
+    SONDE_STATUT_CURSOR: CHAMPS_PROJECTION_STATUT_CURSOR,
+    SONDE_COMPTE_CURSOR: CHAMPS_PROJECTION_COMPTE_CURSOR,
+    SONDE_CATALOGUE_CURSOR: CHAMPS_PROJECTION_CATALOGUE_CURSOR,
 }
 
 
@@ -2992,8 +3613,8 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
     if adaptateur not in _SONDES_PAR_ADAPTATEUR:
         raise ErreurRestitution(
             f"reçu de préflight '{nom_fichier}' : adaptateur "
-            f"'{ADAPTATEUR_CLAUDE}', '{ADAPTATEUR_CODEX}' ou "
-            f"'{ADAPTATEUR_GROK}' attendu"
+            f"'{ADAPTATEUR_CLAUDE}', '{ADAPTATEUR_CODEX}', "
+            f"'{ADAPTATEUR_GROK}' ou '{ADAPTATEUR_CURSOR}' attendu"
         )
     for champ in ("commande_publique", "fait"):
         if not isinstance(recu[champ], str) or not recu[champ].strip():
@@ -3108,6 +3729,67 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                         "projection 'INCONNU' ou aux deux champs exacts "
                         f"{sorted(CHAMPS_PROJECTION_AIDE_GROK)} attendue"
                     )
+            elif commande_sonde == SONDE_VERSION_CURSOR:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_VERSION_CURSOR)
+                    or not isinstance(projection["version"], str)
+                    or not projection["version"].strip()
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou au champ exact "
+                        f"{sorted(CHAMPS_PROJECTION_VERSION_CURSOR)} attendue"
+                    )
+            elif commande_sonde == SONDE_AIDE_CURSOR:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_AIDE_CURSOR)
+                    or any(
+                        not isinstance(projection[champ], bool)
+                        for champ in CHAMPS_PROJECTION_AIDE_CURSOR
+                    )
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux deux champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_AIDE_CURSOR)} attendue"
+                    )
+            elif commande_sonde == SONDE_STATUT_CURSOR:
+                if projection != INCONNU and not _projection_statut_cursor_valide(
+                    projection
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux deux champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_STATUT_CURSOR)} attendue"
+                    )
+            elif commande_sonde == SONDE_COMPTE_CURSOR:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_COMPTE_CURSOR)
+                    or any(
+                        not isinstance(projection[champ], str)
+                        or not projection[champ].strip()
+                        for champ in CHAMPS_PROJECTION_COMPTE_CURSOR
+                    )
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux deux champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_COMPTE_CURSOR)} attendue"
+                    )
+            elif commande_sonde == SONDE_CATALOGUE_CURSOR:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_CATALOGUE_CURSOR)
+                    or not isinstance(projection["cible_presente"], bool)
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou au champ exact "
+                        f"{sorted(CHAMPS_PROJECTION_CATALOGUE_CURSOR)} attendue"
+                    )
             else:
                 if projection != INCONNU and (
                     not isinstance(projection, dict)
@@ -3164,6 +3846,12 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
             raise ErreurRestitution(
                 f"reçu de préflight '{nom_fichier}' : authentification.observee "
                 "'INCONNU' ou aux clés exactes connecte, methode attendue"
+            )
+    elif adaptateur == ADAPTATEUR_CURSOR:
+        if observee != INCONNU and not _projection_statut_cursor_valide(observee):
+            raise ErreurRestitution(
+                f"reçu de préflight '{nom_fichier}' : authentification.observee "
+                "'INCONNU' ou aux clés exactes status, isAuthenticated attendue"
             )
     else:
         if observee != INCONNU and (
@@ -3246,6 +3934,8 @@ def _texte_auth_preflight(observee: object) -> str:
         champs = CHAMPS_PROJECTION_LOGIN_CODEX
     elif set(observee) == set(CHAMPS_PROJECTION_AUTH_GROK):
         champs = CHAMPS_PROJECTION_AUTH_GROK
+    elif set(observee) == set(CHAMPS_PROJECTION_STATUT_CURSOR):
+        champs = CHAMPS_PROJECTION_STATUT_CURSOR
     else:
         champs = ("loggedIn", "authMethod", "apiProvider")
     return " · ".join(
@@ -4099,13 +4789,14 @@ def principal(arguments: list[str], racine: Path | None = None) -> int:
             return 2
         if "--configuration" not in options:
             # Refus fail-closed : le préflight de panel entier exige les
-            # adaptateurs des tranches V1-XS-06D à V1-XS-06F, non couvertes ici
+            # adaptateurs des tranches V1-XS-06E à V1-XS-06F, non couvertes ici
             print(
                 "ECHEC option '--configuration' requise : V1-XS-06A à "
-                f"V1-XS-06C couvrent les seuls adaptateurs "
-                f"'{ADAPTATEUR_CLAUDE}', '{ADAPTATEUR_CODEX}' et "
-                f"'{ADAPTATEUR_GROK}' ; le préflight sans option relève des "
-                "tranches V1-XS-06D à V1-XS-06F"
+                f"V1-XS-06D couvrent les seuls adaptateurs "
+                f"'{ADAPTATEUR_CLAUDE}', '{ADAPTATEUR_CODEX}', "
+                f"'{ADAPTATEUR_GROK}' et '{ADAPTATEUR_CURSOR}' ; le "
+                "préflight sans option relève des tranches V1-XS-06E à "
+                "V1-XS-06F"
             )
             return 1
         return preflight_configuration(racine, options["--configuration"])
