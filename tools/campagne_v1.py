@@ -1445,6 +1445,524 @@ def _observer_route_codex(
     )
 
 
+ADAPTATEUR_GROK = "grok"
+# D-V1-01 : politique d'effort demandée de la configuration grok-build-grok-4-6
+EFFORT_DEMANDE_GROK = "high"
+# Sondes non génératives Grok : jamais de login, logout, agent, -p,
+# --prompt-file, prompt positionnel, session interactive ni commande
+# portant --model ; liste exacte et fermée
+SONDE_VERSION_GROK = ("grok", "version", "--json")
+SONDE_AIDE_GROK = ("grok", "--help")
+SONDE_CATALOGUE_GROK = ("grok", "models")
+SONDES_AUTORISEES_PREFLIGHT_GROK = (
+    SONDE_VERSION_GROK,
+    SONDE_AIDE_GROK,
+    SONDE_CATALOGUE_GROK,
+)
+CHAMPS_PROJECTION_VERSION_GROK = ("version",)
+CHAMPS_PROJECTION_AIDE_GROK = ("option_modele_native", "option_effort_native")
+CHAMPS_PROJECTION_CATALOGUE_GROK = ("modele_demande_present",)
+# Détection textuelle des options natives dans l'aide : aucune commande
+# portant --model n'est jamais lancée
+_MOTIF_OPTION_MODELE_GROK = re.compile(r"(?<![\w-])--model(?![\w-])")
+_MOTIF_OPTION_EFFORT_GROK = re.compile(r"(?<![\w-])--reasoning-effort(?![\w-])")
+# Les flux du client réel portent des séquences ANSI ; elles sont retirées
+# avant projection et jamais persistées
+_MOTIF_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+ENTETE_CATALOGUE_GROK = "Available models:"
+# Grok Build 1.0.5 n'a pas de commande de statut d'authentification ; le
+# client documente ~/.grok/auth.json comme stockage de ses credentials.
+# Projection minimale fermée : présence d'un credential, auth_mode = oidc et
+# issuer normalisé https://auth.x.ai. La clé d'entrée, le jeton, le refresh
+# token, l'expiration, l'utilisateur, l'e-mail, les identifiants
+# d'organisation ou d'équipe et le document brut ne sortent jamais de la
+# mémoire locale ; la présence de cette métadonnée ne prouve pas à elle
+# seule la validité distante du credential.
+CHEMIN_AUTH_GROK = Path(".grok") / "auth.json"
+AUTH_MODE_OIDC_GROK = "oidc"
+ISSUER_XAI_GROK = "https://auth.x.ai"
+CHAMPS_PROJECTION_AUTH_GROK = ("credential_present", "auth_mode", "issuer")
+
+
+def _projeter_version_grok(stdout: str, stderr: str) -> dict | None:
+    """Projection de la seule version machine de 'grok version --json'.
+
+    None signale un JSON illisible ou un champ currentVersion absent : le
+    préflight reste fail-closed sans inventer de fait.
+    """
+    for flux in (stdout, stderr):
+        try:
+            donnees = json.loads(flux)
+        except json.JSONDecodeError:
+            continue
+        version = (
+            donnees.get("currentVersion") if isinstance(donnees, dict) else None
+        )
+        if isinstance(version, str) and version.strip():
+            return {"version": version.strip()}
+    return None
+
+
+def _projeter_aide_grok(stdout: str, stderr: str) -> dict | None:
+    """Projection de l'aide : présence des seules options natives de
+    sélection explicite du modèle et d'effort.
+
+    Le texte d'aide complet n'est jamais conservé. None signale une aide
+    vide donc inobservée : fail-closed sans inventer de fait.
+    """
+    texte = _MOTIF_ANSI.sub("", stdout + "\n" + stderr)
+    if not texte.strip():
+        return None
+    return {
+        "option_modele_native": bool(_MOTIF_OPTION_MODELE_GROK.search(texte)),
+        "option_effort_native": bool(_MOTIF_OPTION_EFFORT_GROK.search(texte)),
+    }
+
+
+def _projeter_catalogue_grok(
+    stdout: str, stderr: str, modele_demande: str
+) -> dict | None:
+    """Projection du catalogue : présence ou absence de la correspondance
+    exacte du modèle demandé, rien d'autre.
+
+    Le catalogue complet, le modèle par défaut, les avertissements de
+    configuration et les autres modèles ne sont jamais conservés. None
+    signale une section de catalogue absente ou vide : le préflight reste
+    fail-closed sans inventer de fait.
+    """
+    for flux in (stdout, stderr):
+        noms: list[str] = []
+        dans_section = False
+        for ligne in _MOTIF_ANSI.sub("", flux).splitlines():
+            depouillee = ligne.strip()
+            if depouillee == ENTETE_CATALOGUE_GROK:
+                dans_section = True
+                continue
+            if not dans_section or not depouillee:
+                continue
+            if depouillee[:2] in ("* ", "- "):
+                jetons = depouillee[2:].split()
+                if jetons:
+                    noms.append(jetons[0])
+            else:
+                break
+        if noms:
+            return {"modele_demande_present": modele_demande in noms}
+    return None
+
+
+def _projeter_credential_grok() -> dict | None:
+    """Projection locale minimale du credential documenté ~/.grok/auth.json.
+
+    Lecture seule : le préflight ne renouvelle pas l'authentification et ne
+    modifie aucun fichier Grok. Seuls trois faits sortent de la mémoire
+    locale : la présence d'un credential, auth_mode s'il vaut exactement
+    'oidc' et l'issuer s'il se normalise exactement en https://auth.x.ai ;
+    toute valeur divergente est projetée INCONNU sans être conservée. None
+    signale un document illisible ou une forme ambiguë (plusieurs
+    credentials, champs documentés absents) : fail-closed.
+    """
+    chemin = Path.home() / CHEMIN_AUTH_GROK
+    if not chemin.exists():
+        return {
+            "credential_present": False,
+            "auth_mode": INCONNU,
+            "issuer": INCONNU,
+        }
+    try:
+        donnees = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(donnees, dict):
+        return None
+    if not donnees:
+        return {
+            "credential_present": False,
+            "auth_mode": INCONNU,
+            "issuer": INCONNU,
+        }
+    if len(donnees) != 1:
+        # Plusieurs credentials : credential actif indécidable, forme ambiguë
+        return None
+    credential = next(iter(donnees.values()))
+    if not isinstance(credential, dict):
+        return None
+    auth_mode = credential.get("auth_mode")
+    issuer = credential.get("oidc_issuer")
+    if not isinstance(auth_mode, str) or not isinstance(issuer, str):
+        return None
+    issuer_normalise = issuer.strip().rstrip("/").lower()
+    if (
+        auth_mode.strip() != AUTH_MODE_OIDC_GROK
+        or issuer_normalise != ISSUER_XAI_GROK
+    ):
+        # Forme documentée jointe non satisfaite : seule la présence est
+        # projetée, aucune revendication partielle
+        return {
+            "credential_present": True,
+            "auth_mode": INCONNU,
+            "issuer": INCONNU,
+        }
+    return {
+        "credential_present": True,
+        "auth_mode": AUTH_MODE_OIDC_GROK,
+        "issuer": ISSUER_XAI_GROK,
+    }
+
+
+def _observer_route_grok(
+    modele_demande: str,
+) -> tuple[list[dict], str, object, str, str, str, str, str | None, str]:
+    """Sonde la route grok sans génération.
+
+    Rend (sondes, version, authentification observée, plan observé, modèle
+    exposé, effort exposé, verdict, cause, fait). MSW : version, options
+    natives et correspondance exacte de catalogue sont observables par les
+    trois sondes de la liste blanche ; le credential local n'est observé que
+    par la projection minimale de ~/.grok/auth.json, qui ne prouve jamais sa
+    validité distante ; la sélection explicite exige ensemble l'option
+    native --model et la présence exacte du modèle au catalogue ; l'option
+    --reasoning-effort seule ne prouve pas que l'effort demandé est exposé
+    pour le modèle demandé ; plan du compte, quota et identité réellement
+    servie restent INCONNU sans commande générative, donc READY n'est
+    jamais prouvable dans cette tranche.
+    """
+    sondes: list[dict] = []
+    commande_version = " ".join(SONDE_VERSION_GROK)
+    commande_aide = " ".join(SONDE_AIDE_GROK)
+    commande_catalogue = " ".join(SONDE_CATALOGUE_GROK)
+    if shutil.which(ADAPTATEUR_GROK) is None:
+        return (
+            sondes,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"client '{ADAPTATEUR_GROK}' introuvable sur le PATH local ; "
+            "aucune sonde lancée",
+        )
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution = _executer_borne(
+            list(SONDE_VERSION_GROK),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution["etat"] == "INCIDENT":
+        return (
+            sondes,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_version}' : {_expurger(execution['fait'])}",
+        )
+    if execution["code_sortie"] != 0:
+        # La sortie brute d'une sonde en échec n'est jamais consignée
+        sondes.append(
+            {
+                "commande": commande_version,
+                "code_sortie": execution["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "INTERFACE_UNAVAILABLE",
+            f"sonde '{commande_version}' en échec : code de sortie "
+            f"{execution['code_sortie']}, le client n'est pas utilisable ; "
+            "la projection du credential et les sondes d'aide et de "
+            "catalogue ne sont pas lancées",
+        )
+    projection_version = _projeter_version_grok(
+        execution["sortie"]["stdout"], execution["sortie"]["stderr"]
+    )
+    if projection_version is None:
+        sondes.append(
+            {
+                "commande": commande_version,
+                "code_sortie": 0,
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_version}' : JSON illisible ou champ "
+            "currentVersion absent, version inobservée ; la sortie brute "
+            "n'est pas consignée",
+        )
+    sondes.append(
+        {
+            "commande": commande_version,
+            "code_sortie": 0,
+            "projection": projection_version,
+        }
+    )
+    version = projection_version["version"]
+    projection_credential = _projeter_credential_grok()
+    if projection_credential is None:
+        return (
+            sondes,
+            version,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            "projection locale de ~/.grok/auth.json : document illisible ou "
+            "forme de credential ambiguë ; le document brut n'est pas "
+            "consigné ; les sondes d'aide et de catalogue ne sont pas "
+            "lancées",
+        )
+    if not projection_credential["credential_present"]:
+        return (
+            sondes,
+            version,
+            projection_credential,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "AUTHENTICATION_UNAVAILABLE",
+            "aucun credential dans ~/.grok/auth.json : aucun credential "
+            "OAuth xAI configuré, la route n'est pas utilisable ; les "
+            "sondes d'aide et de catalogue ne sont pas lancées",
+        )
+    if (
+        projection_credential["auth_mode"] != AUTH_MODE_OIDC_GROK
+        or projection_credential["issuer"] != ISSUER_XAI_GROK
+    ):
+        return (
+            sondes,
+            version,
+            projection_credential,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "AUTHENTICATION_UNAVAILABLE",
+            "credential présent dans ~/.grok/auth.json mais hors de la "
+            "forme OAuth xAI documentée (auth_mode 'oidc' et issuer xAI "
+            "normalisé, ensemble) : aucun credential OAuth xAI configuré ; "
+            "les valeurs divergentes ne sont pas consignées ; les sondes "
+            "d'aide et de catalogue ne sont pas lancées",
+        )
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution_aide = _executer_borne(
+            list(SONDE_AIDE_GROK),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution_aide["etat"] == "INCIDENT":
+        return (
+            sondes,
+            version,
+            projection_credential,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_aide}' : {_expurger(execution_aide['fait'])}",
+        )
+    if execution_aide["code_sortie"] != 0:
+        sondes.append(
+            {
+                "commande": commande_aide,
+                "code_sortie": execution_aide["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            projection_credential,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_aide}' en échec : code de sortie "
+            f"{execution_aide['code_sortie']}, options natives inobservées ; "
+            "la sortie brute n'est pas consignée",
+        )
+    projection_aide = _projeter_aide_grok(
+        execution_aide["sortie"]["stdout"], execution_aide["sortie"]["stderr"]
+    )
+    if projection_aide is None:
+        sondes.append(
+            {
+                "commande": commande_aide,
+                "code_sortie": 0,
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            projection_credential,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_aide}' : aide vide, options natives "
+            "inobservées ; la sortie brute n'est pas consignée",
+        )
+    sondes.append(
+        {
+            "commande": commande_aide,
+            "code_sortie": 0,
+            "projection": projection_aide,
+        }
+    )
+    if not projection_aide["option_modele_native"]:
+        return (
+            sondes,
+            version,
+            projection_credential,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "MODEL_UNAVAILABLE",
+            "aide observée sans option native --model : la sélection "
+            f"explicite de '{modele_demande}' est impossible et le modèle "
+            "par défaut ne vaut jamais preuve du pin ; la sonde de "
+            "catalogue n'est pas lancée",
+        )
+    with tempfile.TemporaryDirectory() as espace_texte:
+        execution_catalogue = _executer_borne(
+            list(SONDE_CATALOGUE_GROK),
+            b"",
+            Path(espace_texte),
+            DELAI_SONDE_PREFLIGHT,
+        )
+    if execution_catalogue["etat"] == "INCIDENT":
+        return (
+            sondes,
+            version,
+            projection_credential,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_catalogue}' : "
+            f"{_expurger(execution_catalogue['fait'])}",
+        )
+    if execution_catalogue["code_sortie"] != 0:
+        # Le catalogue complet n'est jamais consigné, même en échec
+        sondes.append(
+            {
+                "commande": commande_catalogue,
+                "code_sortie": execution_catalogue["code_sortie"],
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            projection_credential,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_catalogue}' en échec : code de sortie "
+            f"{execution_catalogue['code_sortie']}, catalogue inobservé ; "
+            "la sortie brute n'est pas consignée",
+        )
+    projection_catalogue = _projeter_catalogue_grok(
+        execution_catalogue["sortie"]["stdout"],
+        execution_catalogue["sortie"]["stderr"],
+        modele_demande,
+    )
+    if projection_catalogue is None:
+        sondes.append(
+            {
+                "commande": commande_catalogue,
+                "code_sortie": 0,
+                "projection": INCONNU,
+            }
+        )
+        return (
+            sondes,
+            version,
+            projection_credential,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "HOLD",
+            "HARNESS_ERROR",
+            f"sonde '{commande_catalogue}' : section de catalogue absente "
+            "ou illisible, catalogue inobservé ; la sortie brute n'est pas "
+            "consignée",
+        )
+    sondes.append(
+        {
+            "commande": commande_catalogue,
+            "code_sortie": 0,
+            "projection": projection_catalogue,
+        }
+    )
+    if not projection_catalogue["modele_demande_present"]:
+        return (
+            sondes,
+            version,
+            projection_credential,
+            INCONNU,
+            INCONNU,
+            INCONNU,
+            "UNAVAILABLE",
+            "MODEL_UNAVAILABLE",
+            f"catalogue observé sans correspondance exacte pour "
+            f"'{modele_demande}' : le modèle demandé n'est pas exposé par "
+            "le client ; aucun alias, préfixe approximatif ni modèle par "
+            "défaut n'est admis",
+        )
+    return (
+        sondes,
+        version,
+        projection_credential,
+        INCONNU,
+        modele_demande,
+        INCONNU,
+        "HOLD",
+        "MISSING_OBSERVATION",
+        "client, version, credential OAuth xAI configuré, option native "
+        "--model et correspondance de catalogue exacte observés par les "
+        "sondes non génératives et la projection locale du credential, qui "
+        "ne prouve jamais la validité distante du credential ni le modèle "
+        "réellement servi ; l'option --reasoning-effort seule ne prouve pas "
+        f"que l'effort '{EFFORT_DEMANDE_GROK}' est exposé pour "
+        f"'{modele_demande}' ; plan du compte, quota, effort exposé et "
+        "identité réellement servie restent inobservables : la route n'est "
+        "pas prouvée prête",
+    )
+
+
 def _expurger(texte: str) -> str:
     """Expurgation des captures : le chemin du compte local ne sort jamais"""
     return texte.replace(str(Path.home()), "~")
@@ -1657,17 +2175,30 @@ def preflight_configuration(racine: Path, identifiant: str) -> int:
         return 1
     configuration = correspondances[0]
     argv = configuration["harnais"]["argv"]
-    adaptateurs_couverts = (ADAPTATEUR_CLAUDE, ADAPTATEUR_CODEX)
+    adaptateurs_couverts = (ADAPTATEUR_CLAUDE, ADAPTATEUR_CODEX, ADAPTATEUR_GROK)
     if configuration["interface"]["type"] != "cli" or argv[0] not in adaptateurs_couverts:
         print(
-            f"ECHEC adaptateur non couvert : '{argv[0]}' ; V1-XS-06A et "
-            f"V1-XS-06B couvrent les seuls adaptateurs '{ADAPTATEUR_CLAUDE}' "
-            f"et '{ADAPTATEUR_CODEX}', les autres configurations relèvent "
-            "des tranches V1-XS-06C à V1-XS-06F"
+            f"ECHEC adaptateur non couvert : '{argv[0]}' ; V1-XS-06A à "
+            f"V1-XS-06C couvrent les seuls adaptateurs '{ADAPTATEUR_CLAUDE}', "
+            f"'{ADAPTATEUR_CODEX}' et '{ADAPTATEUR_GROK}', les autres "
+            "configurations relèvent des tranches V1-XS-06D à V1-XS-06F"
         )
         return 1
     adaptateur = argv[0]
-    if adaptateur == ADAPTATEUR_CODEX:
+    if adaptateur == ADAPTATEUR_GROK:
+        (
+            sondes,
+            version,
+            authentification,
+            plan_observe,
+            modele_expose,
+            effort_expose,
+            verdict,
+            cause,
+            fait,
+        ) = _observer_route_grok(configuration["modele"]["demande"])
+        effort_demande = EFFORT_DEMANDE_GROK
+    elif adaptateur == ADAPTATEUR_CODEX:
         (
             sondes,
             version,
@@ -2392,10 +2923,21 @@ def _projection_login_codex_valide(projection: object) -> bool:
 
 
 # Liste blanche des sondes par adaptateur : une sonde d'un adaptateur ne
-# vaut jamais pour l'autre
+# vaut jamais pour un autre
 _SONDES_PAR_ADAPTATEUR = {
     ADAPTATEUR_CLAUDE: SONDES_AUTORISEES_PREFLIGHT,
     ADAPTATEUR_CODEX: SONDES_AUTORISEES_PREFLIGHT_CODEX,
+    ADAPTATEUR_GROK: SONDES_AUTORISEES_PREFLIGHT_GROK,
+}
+# Champs de projection par sonde à projection : la restitution ne rend que
+# ces champs fermés, jamais une sortie brute
+_CHAMPS_PROJECTION_PAR_SONDE = {
+    SONDE_AUTH_CLAUDE: CHAMPS_PROJECTION_AUTH,
+    SONDE_LOGIN_CODEX: CHAMPS_PROJECTION_LOGIN_CODEX,
+    SONDE_CATALOGUE_CODEX: CHAMPS_PROJECTION_CATALOGUE_CODEX,
+    SONDE_VERSION_GROK: CHAMPS_PROJECTION_VERSION_GROK,
+    SONDE_AIDE_GROK: CHAMPS_PROJECTION_AIDE_GROK,
+    SONDE_CATALOGUE_GROK: CHAMPS_PROJECTION_CATALOGUE_GROK,
 }
 
 
@@ -2450,7 +2992,8 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
     if adaptateur not in _SONDES_PAR_ADAPTATEUR:
         raise ErreurRestitution(
             f"reçu de préflight '{nom_fichier}' : adaptateur "
-            f"'{ADAPTATEUR_CLAUDE}' ou '{ADAPTATEUR_CODEX}' attendu"
+            f"'{ADAPTATEUR_CLAUDE}', '{ADAPTATEUR_CODEX}' ou "
+            f"'{ADAPTATEUR_GROK}' attendu"
         )
     for champ in ("commande_publique", "fait"):
         if not isinstance(recu[champ], str) or not recu[champ].strip():
@@ -2490,11 +3033,7 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                 "sortie entier"
             )
         commande_sonde = tuple(sonde["commande"].split())
-        if commande_sonde in (
-            SONDE_AUTH_CLAUDE,
-            SONDE_LOGIN_CODEX,
-            SONDE_CATALOGUE_CODEX,
-        ):
+        if commande_sonde in _CHAMPS_PROJECTION_PAR_SONDE:
             # Ces sondes ne portent qu'une projection, jamais la sortie brute
             if set(sonde) != {"commande", "code_sortie", "projection"}:
                 raise ErreurRestitution(
@@ -2527,7 +3066,7 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                         "projection 'INCONNU' ou aux deux champs exacts "
                         f"{sorted(CHAMPS_PROJECTION_LOGIN_CODEX)} attendue"
                     )
-            else:
+            elif commande_sonde == SONDE_CATALOGUE_CODEX:
                 if projection != INCONNU and (
                     not isinstance(projection, dict)
                     or set(projection) != set(CHAMPS_PROJECTION_CATALOGUE_CODEX)
@@ -2542,6 +3081,43 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                         f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
                         "projection 'INCONNU' ou aux deux champs exacts "
                         f"{sorted(CHAMPS_PROJECTION_CATALOGUE_CODEX)} attendue"
+                    )
+            elif commande_sonde == SONDE_VERSION_GROK:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_VERSION_GROK)
+                    or not isinstance(projection["version"], str)
+                    or not projection["version"].strip()
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou au champ exact "
+                        f"{sorted(CHAMPS_PROJECTION_VERSION_GROK)} attendue"
+                    )
+            elif commande_sonde == SONDE_AIDE_GROK:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_AIDE_GROK)
+                    or any(
+                        not isinstance(projection[champ], bool)
+                        for champ in CHAMPS_PROJECTION_AIDE_GROK
+                    )
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou aux deux champs exacts "
+                        f"{sorted(CHAMPS_PROJECTION_AIDE_GROK)} attendue"
+                    )
+            else:
+                if projection != INCONNU and (
+                    not isinstance(projection, dict)
+                    or set(projection) != set(CHAMPS_PROJECTION_CATALOGUE_GROK)
+                    or not isinstance(projection["modele_demande_present"], bool)
+                ):
+                    raise ErreurRestitution(
+                        f"reçu de préflight '{nom_fichier}' : sonde {rang} : "
+                        "projection 'INCONNU' ou au champ exact "
+                        f"{sorted(CHAMPS_PROJECTION_CATALOGUE_GROK)} attendue"
                     )
         else:
             if set(sonde) != {
@@ -2583,11 +3159,26 @@ def _valider_recu_preflight(nom_fichier: str, recu: object) -> dict:
                 "'INCONNU' ou aux clés exactes loggedIn, authMethod, apiProvider "
                 "attendue"
             )
-    else:
+    elif adaptateur == ADAPTATEUR_CODEX:
         if observee != INCONNU and not _projection_login_codex_valide(observee):
             raise ErreurRestitution(
                 f"reçu de préflight '{nom_fichier}' : authentification.observee "
                 "'INCONNU' ou aux clés exactes connecte, methode attendue"
+            )
+    else:
+        if observee != INCONNU and (
+            not isinstance(observee, dict)
+            or set(observee) != set(CHAMPS_PROJECTION_AUTH_GROK)
+            or not isinstance(observee["credential_present"], bool)
+            or any(
+                not isinstance(observee[champ], str) or not observee[champ].strip()
+                for champ in ("auth_mode", "issuer")
+            )
+        ):
+            raise ErreurRestitution(
+                f"reçu de préflight '{nom_fichier}' : authentification.observee "
+                "'INCONNU' ou aux clés exactes auth_mode, credential_present, "
+                "issuer attendue"
             )
     if verdict == "READY":
         # READY exige les cinq contrôles établis : aucun champ observé ne
@@ -2632,12 +3223,7 @@ def _texte_sonde_preflight(sonde: dict) -> str:
             texte = f"projection <code>{INCONNU}</code>"
         else:
             commande_sonde = tuple(sonde["commande"].split())
-            if commande_sonde == SONDE_LOGIN_CODEX:
-                champs = CHAMPS_PROJECTION_LOGIN_CODEX
-            elif commande_sonde == SONDE_CATALOGUE_CODEX:
-                champs = CHAMPS_PROJECTION_CATALOGUE_CODEX
-            else:
-                champs = CHAMPS_PROJECTION_AUTH
+            champs = _CHAMPS_PROJECTION_PAR_SONDE[commande_sonde]
             texte = "projection " + " · ".join(
                 f"{champ} <code>{_echapper(projection[champ])}</code>"
                 for champ in champs
@@ -2658,11 +3244,21 @@ def _texte_auth_preflight(observee: object) -> str:
         return f"<code>{INCONNU}</code>"
     if set(observee) == set(CHAMPS_PROJECTION_LOGIN_CODEX):
         champs = CHAMPS_PROJECTION_LOGIN_CODEX
+    elif set(observee) == set(CHAMPS_PROJECTION_AUTH_GROK):
+        champs = CHAMPS_PROJECTION_AUTH_GROK
     else:
         champs = ("loggedIn", "authMethod", "apiProvider")
     return " · ".join(
-        f"{champ} <code>{_echapper(observee[champ])}</code>" for champ in champs
+        f"{champ} <code>{_neutraliser_schema(_echapper(observee[champ]))}</code>"
+        for champ in champs
     )
+
+
+def _neutraliser_schema(texte: str) -> str:
+    """La page autonome ne porte jamais la séquence d'un schéma distant :
+    le deux-points d'un issuer projeté est rendu par entité HTML ; la
+    valeur du reçu reste canonique, le texte affiché est identique."""
+    return texte.replace("://", "&#58;//")
 
 
 def _article_preflight(relatif: str, sha_fichier: str, recu: dict) -> str:
@@ -3450,13 +4046,13 @@ def principal(arguments: list[str], racine: Path | None = None) -> int:
             return 2
         if "--configuration" not in options:
             # Refus fail-closed : le préflight de panel entier exige les
-            # adaptateurs des tranches V1-XS-06C à V1-XS-06F, non couvertes ici
+            # adaptateurs des tranches V1-XS-06D à V1-XS-06F, non couvertes ici
             print(
-                "ECHEC option '--configuration' requise : V1-XS-06A et "
-                f"V1-XS-06B couvrent les seuls adaptateurs "
-                f"'{ADAPTATEUR_CLAUDE}' et '{ADAPTATEUR_CODEX}' ; le "
-                "préflight sans option relève des tranches V1-XS-06C à "
-                "V1-XS-06F"
+                "ECHEC option '--configuration' requise : V1-XS-06A à "
+                f"V1-XS-06C couvrent les seuls adaptateurs "
+                f"'{ADAPTATEUR_CLAUDE}', '{ADAPTATEUR_CODEX}' et "
+                f"'{ADAPTATEUR_GROK}' ; le préflight sans option relève des "
+                "tranches V1-XS-06D à V1-XS-06F"
             )
             return 1
         return preflight_configuration(racine, options["--configuration"])

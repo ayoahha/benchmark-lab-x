@@ -352,11 +352,11 @@ class PreflightRefusTests(BaseXS06A):
         self.assertFalse((self.racine / CHEMIN_PREFLIGHTS).exists())
 
     def test_adaptateur_non_couvert_rend_un_sans_recu(self):
-        # Depuis XS-06B, codex est couvert ; grok reste hors périmètre
-        code, sortie = self._preflight("grok-build-grok-4-6")
+        # Depuis XS-06C, grok est couvert ; cursor reste hors périmètre
+        code, sortie = self._preflight("cursor-kimi-k3")
         self.assertEqual(code, 1)
         self.assertIn("ECHEC", sortie)
-        self.assertIn("V1-XS-06C", sortie)
+        self.assertIn("V1-XS-06D", sortie)
         self.assertFalse((self.racine / CHEMIN_PREFLIGHTS).exists())
         self.assertFalse(self.journal.exists())
 
