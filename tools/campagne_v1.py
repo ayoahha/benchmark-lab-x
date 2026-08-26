@@ -3613,6 +3613,59 @@ def _rendre_page(racine: Path) -> bytes:
         + "</section>"
     )
 
+    sections.append(
+        "<section id=\"revue-humaine\"><h2>Réponses à la revue humaine</h2>"
+        + _article(
+            "fait",
+            "<p>Commentaire <code>c_ce85ad851f47</code> — <code>INCONNU</code> "
+            "signifie qu'aucune preuve admissible n'est ingérée dans l'état "
+            "V1 courant pour le champ concerné, pas qu'il serait impossible "
+            "en général de trouver la donnée. Certaines valeurs déclaratives "
+            "sont recherchables dans des sources publiques ou locales ; "
+            "d'autres champs sont des observations qui exigent une étape du "
+            "parcours officiel. Une valeur recherchée n'entre dans le panel "
+            "qu'une fois ingérée comme preuve admissible et sourcée.</p>"
+            + src(etat_relatif, "état V1 versionné")
+            + src(rules, "U-018"),
+            ' data-commentaire="c_ce85ad851f47"',
+        )
+        + _article(
+            "fait",
+            "<p>Une autorisation de rechercher des valeurs accessibles est "
+            "une décision de pilotage, distincte des observations : elle ne "
+            "constitue pas une observation, n'améliore et ne remplace aucune "
+            "preuve. Un champ <code>INCONNU</code> ne change qu'à l'ingestion "
+            "d'une observation autorisée produite par sa tranche porteuse ; "
+            "la présente restitution n'en ingère aucune et aucune valeur ne "
+            "change. Une absence de preuve n'est jamais transformée en "
+            "résultat favorable.</p>"
+            + src(etat_relatif, "état V1 versionné")
+            + src(rules, "U-018"),
+        )
+        + _article(
+            "fait",
+            "<p>Commentaire <code>c_3f78b813dc60</code> — les inconnues "
+            "d'expérience réelle, de coûts, de latences et de couverture ne "
+            "se résolvent que par les preuves produites par le parcours "
+            "officiel : chaque acquisition exige un reçu immuable et chaque "
+            "restitution exige ses preuves, ou l'abstention correspondante. "
+            "Les collectes appartiennent aux étapes à venir, décrites avec "
+            "leurs sources dans la section "
+            '<a href="#etapes-futures">Six étapes futures</a> de cette '
+            "page.</p>" + src(rules, "U-010 et U-018"),
+            ' data-commentaire="c_3f78b813dc60"',
+        )
+        + _article(
+            "fait",
+            "<p><code>NON_DEFINI</code> est un état calculé par la règle de "
+            "coût par sortie officiellement acceptable, pas une donnée "
+            "publique à rechercher : aucune recherche ne peut le résoudre, "
+            "seule l'existence de sorties officiellement acceptables le "
+            "remplace par une mesure.</p>" + src(rules, "U-020"),
+        )
+        + "</section>"
+    )
+
     lignes_etapes = "".join(
         _article(
             "planifie",

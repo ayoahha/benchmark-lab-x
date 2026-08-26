@@ -688,6 +688,54 @@ class RestitutionPreflightGrokTests(BaseXS06C):
         code, sortie = _principal(["verifier-restitution"], self.racine)
         self.assertEqual(code, 0, sortie)
 
+    def test_reponses_revue_humaine_visibles_et_conformes(self):
+        # Lot human-review du 26 août 2026 : les deux commentaires reçoivent
+        # une réponse visible, sans qu'une autorisation ni une recherche ne
+        # soit jamais présentée comme une observation
+        self.assertEqual(self._preflight()[0], 2)
+        page = self._restituer()
+        self.assertIn('<section id="revue-humaine">', page)
+        section = page.split('<section id="revue-humaine">', 1)[1].split(
+            "</section>", 1
+        )[0]
+        # Aucun paragraphe assertif nu : hors articles MSW classés et sourcés,
+        # la section ne porte aucun <p>
+        hors_articles = M._MOTIF_ARTICLE.sub("", section)
+        self.assertNotIn("<p", hors_articles)
+        # c_ce85ad851f47 : INCONNU = aucune preuve admissible ingérée dans
+        # l'état courant, jamais une impossibilité générale de trouver la
+        # donnée ; recherchable et observé restent distincts
+        self.assertIn('data-commentaire="c_ce85ad851f47"', section)
+        self.assertIn("c_ce85ad851f47</code>", section)
+        self.assertIn("preuve admissible", section)
+        self.assertIn("recherchable", section)
+        # Une autorisation est une décision de pilotage, jamais une
+        # observation ; aucune valeur ne change dans cette tranche
+        self.assertIn("décision de pilotage", section)
+        self.assertIn("ne constitue pas une observation", section)
+        self.assertIn("aucune valeur ne change", section)
+        # c_3f78b813dc60 : les collectes appartiennent aux tranches futures ;
+        # aucun identifiant d'Issue sans soutien admissible visible
+        self.assertIn('data-commentaire="c_3f78b813dc60"', section)
+        self.assertIn("c_3f78b813dc60</code>", section)
+        for non_soutenu in (
+            "V1-XS-06A",
+            "V1-XS-07",
+            "V1-XS-08",
+            "D-V1-04",
+            "V1-XS-12A",
+            "V1-XS-12B",
+            "V1-XS-13",
+            "D-V1-02",
+        ):
+            self.assertNotIn(non_soutenu, section)
+        # NON_DEFINI est un état calculé, pas une donnée à rechercher
+        self.assertIn("état calculé", section)
+        # Renvoi visible vers le parcours à venir déjà présent dans la page
+        self.assertIn('href="#etapes-futures"', section)
+        code, sortie = _principal(["verifier-restitution"], self.racine)
+        self.assertEqual(code, 0, sortie)
+
     def test_restitutions_successives_byte_identiques_avec_preflight_grok(self):
         self.assertEqual(self._preflight()[0], 2)
         self.assertEqual(self._restituer(), self._restituer())
