@@ -9,6 +9,7 @@ Interface figée :
 - uv run tools/campagne_v1.py autorisations [--configuration <id>]
 - uv run tools/campagne_v1.py acquerir --local --configuration <id>
 - uv run tools/campagne_v1.py preflight --configuration <id>
+- uv run tools/campagne_v1.py verrouiller
 - uv run tools/campagne_v1.py restituer
 - uv run tools/campagne_v1.py verifier-restitution
 """
@@ -16,12 +17,14 @@ Interface figée :
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import platform
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -5761,6 +5764,907 @@ def _objets_distincts_preflight(recu: dict) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# V1-XS-07 : verrou de campagne abonnement
+# Autorités : V1_XS_07 = LAUNCH, V1_XS_07_PLAN_CONTRACT = VALIDATE (Issue #107)
+
+SCHEMA_SOURCES_PLANS = "campagne-v1-sources-plans/v1"
+CHEMIN_SOURCES_PLANS = _RACINE_CAMPAGNE_V1 / "sources-plans-v1.toml"
+SEMANTIQUE_PRIX_PLANS = (
+    "CATALOGUE_STANDARD_MENSUEL_USD_HORS_TAXE_REMISE_ET_FACTURATION_LOCALE"
+)
+CLASSE_PLAN_FAIT = "FAIT_ETABLI"
+CLASSE_PLAN_DEDUCTION = "DEDUCTION_RAISONNEE"
+# Seule la correspondance Codex Pro 20x est une déduction raisonnée validée
+CONFIGURATION_PLAN_DEDUIT = "codex-gpt-5-6-sol"
+ATTESTATION_PANEL = "D-V1-01"
+DATE_ATTESTATION_PANEL = "2026-08-22"
+
+SCHEMA_VERROU = "campagne-v1-verrou-abonnement/v1"
+CHEMIN_VERROU = _RACINE_CAMPAGNE_V1 / "verrou-campagne-v1" / "verrou.json"
+ISSUE_VERROU = "https://github.com/ayoahha/benchmark-lab-x/issues/107"
+
+# Racine privée obligatoire : aucun drapeau CLI, variable d'environnement ni
+# fallback ne permet d'en choisir une autre ; le paramètre Python racine_privee
+# de principal existe pour les seuls tests
+RACINE_PRIVEE_PRODUCTION = Path(
+    "/Users/ayo/Library/Application Support/Benchmark Lab-X/private"
+)
+RELATIF_MATERIEL_VERROU = Path("v1-execution") / "xs-07" / "material"
+NOM_SEL_VERROU = "sel.bin"
+NOM_MANIFESTE_ORDRE = "manifeste-ordre.json"
+TAILLE_SEL_VERROU = 32
+
+# Méthode d'engagement d'ordre aveugle reprise à l'identique de la V0
+METHODE_ORDRE_VERROU = "SHA256_SALT_CAMPAIGN_ID_ACQUISITION_ID_SORT"
+CAMPAGNE_ID_VERROU = "benchmark-lab-x-v1-abonnement"
+
+# Engagement masqué du manifeste privé : avec deux créneaux, une empreinte
+# directe révélerait la permutation par énumération ; le commitment est un
+# HMAC-SHA256 à clé secrète (le sel) avec séparation de domaine
+METHODE_ENGAGEMENT_MANIFESTE = "HMAC_SHA256_KEY_SALT_DOMAIN_SEPARATED_V1"
+DOMAINE_ENGAGEMENT_MANIFESTE = b"benchmark-lab-x/campagne-v1/manifeste-ordre/v1\x00"
+
+DISPOSITION_ELIGIBLE = "ELIGIBLE"
+DISPOSITION_EXCLUE = "EXCLUDED_WAITING"
+
+REGLE_FRAICHEUR_VERROU = "EXACT_LOCK_EVENT_BASED_NO_TTL"
+EFFET_FRAICHEUR_VERROU = "HOLD_STOP_NO_CROSS_EVENT_COMPARISON"
+EVENEMENTS_FRAICHEUR_VERROU = (
+    "LOCKED_ARTIFACT_CHANGED",
+    "CONFIGURATION_CHANGED",
+    "HARNESS_CHANGED",
+    "ADAPTER_CHANGED",
+    "ROUTE_CHANGED",
+    "SERVED_IDENTITY_CHANGED",
+    "BILLING_REGIME_CHANGED",
+    "APPLICABLE_PRICE_FACT_CHANGED",
+)
+
+_MOTIF_DATE_PLAN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+_CLES_PLAN_SOURCES = {
+    "configuration_id",
+    "nom",
+    "prix_montant",
+    "prix_devise",
+    "periode",
+    "source_url",
+    "date_publication",
+    "date_consultation",
+    "classe_msw",
+    "attestation_reference",
+}
+
+
+class ErreurSourcesPlans(Exception):
+    """Refus fail-closed de la source de plans, avant toute écriture (code 1)."""
+
+
+class ErreurVerrou(Exception):
+    """HOLD du verrou de campagne, sans réparation ni écrasement (code 2)."""
+
+
+def _exiger_plan_chaine(nom: str, valeur: object) -> str:
+    if not isinstance(valeur, str) or not valeur:
+        raise ErreurSourcesPlans(f"champ '{nom}' : chaîne non vide attendue")
+    return valeur
+
+
+def _valider_plan_sources(
+    rang: int, entree: object, identifiants: tuple[str, ...]
+) -> dict:
+    nom_table = f"plan[{rang}]"
+    if not isinstance(entree, dict):
+        raise ErreurSourcesPlans(f"'{nom_table}' : table attendue")
+    identifiant = entree.get("configuration_id")
+    if not isinstance(identifiant, str) or identifiant not in identifiants:
+        raise ErreurSourcesPlans(
+            f"champ '{nom_table}.configuration_id' : identifiant hors panel "
+            f"déclaré : {identifiant!r}"
+        )
+    cles_attendues = set(_CLES_PLAN_SOURCES)
+    if identifiant == CONFIGURATION_PLAN_DEDUIT:
+        cles_attendues.add("premisses")
+    if set(entree) != cles_attendues:
+        raise ErreurSourcesPlans(
+            f"'{nom_table}' ({identifiant}) : clés exactes "
+            f"{sorted(cles_attendues)} attendues, hors vocabulaire refusé"
+        )
+    _exiger_plan_chaine(f"{nom_table}.nom", entree["nom"])
+    montant = entree["prix_montant"]
+    if (
+        isinstance(montant, bool)
+        or not isinstance(montant, (int, float))
+        or not montant > 0
+    ):
+        raise ErreurSourcesPlans(
+            f"champ '{nom_table}.prix_montant' : montant numérique strictement "
+            "positif attendu"
+        )
+    if entree["prix_devise"] != "USD":
+        raise ErreurSourcesPlans(f"champ '{nom_table}.prix_devise' : 'USD' attendu")
+    if entree["periode"] != "MONTH":
+        raise ErreurSourcesPlans(f"champ '{nom_table}.periode' : 'MONTH' attendu")
+    source_url = _exiger_plan_chaine(f"{nom_table}.source_url", entree["source_url"])
+    if not source_url.startswith("https://"):
+        raise ErreurSourcesPlans(
+            f"champ '{nom_table}.source_url' : URL officielle https attendue"
+        )
+    publication = entree["date_publication"]
+    if publication != "NON_DEFINI" and (
+        not isinstance(publication, str) or not _MOTIF_DATE_PLAN.match(publication)
+    ):
+        raise ErreurSourcesPlans(
+            f"champ '{nom_table}.date_publication' : date AAAA-MM-JJ ou "
+            "'NON_DEFINI' attendue"
+        )
+    consultation = entree["date_consultation"]
+    if not isinstance(consultation, str) or not _MOTIF_DATE_PLAN.match(consultation):
+        raise ErreurSourcesPlans(
+            f"champ '{nom_table}.date_consultation' : date AAAA-MM-JJ attendue"
+        )
+    classe_attendue = (
+        CLASSE_PLAN_DEDUCTION
+        if identifiant == CONFIGURATION_PLAN_DEDUIT
+        else CLASSE_PLAN_FAIT
+    )
+    if entree["classe_msw"] != classe_attendue:
+        raise ErreurSourcesPlans(
+            f"champ '{nom_table}.classe_msw' : '{classe_attendue}' attendu pour "
+            f"'{identifiant}'"
+        )
+    if entree["attestation_reference"] != ATTESTATION_PANEL:
+        raise ErreurSourcesPlans(
+            f"champ '{nom_table}.attestation_reference' : "
+            f"'{ATTESTATION_PANEL}' attendu"
+        )
+    if identifiant == CONFIGURATION_PLAN_DEDUIT:
+        premisses = entree["premisses"]
+        if (
+            not isinstance(premisses, list)
+            or not premisses
+            or not all(isinstance(p, str) and p for p in premisses)
+        ):
+            raise ErreurSourcesPlans(
+                f"champ '{nom_table}.premisses' : liste non vide de prémisses "
+                "explicites attendue pour la déduction raisonnée"
+            )
+    return entree
+
+
+def _charger_sources_plans(
+    racine: Path, identifiants: tuple[str, ...]
+) -> tuple[dict[str, dict], str]:
+    """Plans validés par configuration_id et SHA-256 du fichier source."""
+    chemin = racine / CHEMIN_SOURCES_PLANS
+    try:
+        donnees = tomllib.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as erreur:
+        raise ErreurSourcesPlans(
+            f"source de plans illisible : {CHEMIN_SOURCES_PLANS.as_posix()} "
+            f"({erreur})"
+        ) from erreur
+    if set(donnees) != {"schema_version", "semantique_prix", "plan"}:
+        raise ErreurSourcesPlans(
+            "source de plans : clés exactes ['plan', 'schema_version', "
+            "'semantique_prix'] attendues, hors vocabulaire refusé"
+        )
+    if donnees["schema_version"] != SCHEMA_SOURCES_PLANS:
+        raise ErreurSourcesPlans(
+            f"champ 'schema_version' : '{SCHEMA_SOURCES_PLANS}' attendu"
+        )
+    if donnees["semantique_prix"] != SEMANTIQUE_PRIX_PLANS:
+        raise ErreurSourcesPlans(
+            f"champ 'semantique_prix' : '{SEMANTIQUE_PRIX_PLANS}' attendu"
+        )
+    tables = donnees["plan"]
+    if not isinstance(tables, list):
+        raise ErreurSourcesPlans("champ 'plan' : liste de tables attendue")
+    plans: dict[str, dict] = {}
+    for rang, entree in enumerate(tables):
+        valide = _valider_plan_sources(rang, entree, identifiants)
+        identifiant = valide["configuration_id"]
+        if identifiant in plans:
+            raise ErreurSourcesPlans(
+                f"champ 'plan' : entrée dupliquée pour '{identifiant}'"
+            )
+        plans[identifiant] = valide
+    manquants = [i for i in identifiants if i not in plans]
+    if manquants:
+        raise ErreurSourcesPlans(
+            "champ 'plan' : source incomplète, provenance de prix absente pour "
+            + ", ".join(f"'{i}'" for i in manquants)
+        )
+    return plans, _sha256_fichier(chemin)
+
+
+def _identifiant_creneau(configuration_id: str) -> str:
+    return f"ACQ-V1-{configuration_id.upper()}-001"
+
+
+def _entrees_verrou(racine: Path) -> tuple[list[dict], list[dict], str]:
+    """Panel dérivé, créneaux et SHA-256 de la source de plans.
+
+    L'éligibilité est dérivée uniquement des reçus de préflight versionnés :
+    seul un verdict READY rend une configuration ELIGIBLE, toute autre reste
+    EXCLUDED_WAITING avec sa cause exacte.
+    """
+    try:
+        configurations = _configurations_officielles(racine)
+        preflights = _charger_recus_preflight(racine)
+    except ErreurRestitution as erreur:
+        raise ErreurVerrou(str(erreur)) from erreur
+    if not configurations:
+        raise ErreurVerrou("panel déclaré vide : aucun verrou dérivable")
+    identifiants = tuple(donnees["configuration_id"] for _, donnees in configurations)
+    par_identifiant = {
+        recu["configuration_id"]: (relatif, recu, sha)
+        for relatif, recu, sha in preflights
+    }
+    manquants = [i for i in identifiants if i not in par_identifiant]
+    if manquants:
+        raise ErreurVerrou("reçu de préflight absent pour : " + ", ".join(manquants))
+    hors_panel = sorted(set(par_identifiant) - set(identifiants))
+    if hors_panel:
+        raise ErreurVerrou(
+            "reçu de préflight hors panel déclaré : " + ", ".join(hors_panel)
+        )
+    plans, sha_sources = _charger_sources_plans(racine, identifiants)
+    panel: list[dict] = []
+    for chemin, donnees in configurations:
+        identifiant = donnees["configuration_id"]
+        relatif_preflight, recu, sha_preflight = par_identifiant[identifiant]
+        verdict = recu["verdict"]
+        disposition = (
+            DISPOSITION_ELIGIBLE if verdict == "READY" else DISPOSITION_EXCLUE
+        )
+        plan = plans[identifiant]
+        plan_verrou = {cle: plan[cle] for cle in plan if cle != "configuration_id"}
+        panel.append(
+            {
+                "configuration_id": identifiant,
+                "configuration": {
+                    "chemin": chemin,
+                    "sha256": _sha256_fichier(racine / chemin),
+                },
+                "attestation": {
+                    "reference": ATTESTATION_PANEL,
+                    "date": DATE_ATTESTATION_PANEL,
+                },
+                "preflight": {
+                    "chemin": relatif_preflight,
+                    "sha256": sha_preflight,
+                },
+                "verdict": verdict,
+                "cause": recu["cause"],
+                "disposition": disposition,
+                "plan": plan_verrou,
+            }
+        )
+    eligibles = sorted(
+        entree["configuration_id"]
+        for entree in panel
+        if entree["disposition"] == DISPOSITION_ELIGIBLE
+    )
+    creneaux = [
+        {
+            "acquisition_id": _identifiant_creneau(identifiant),
+            "configuration_id": identifiant,
+        }
+        for identifiant in eligibles
+    ]
+    return panel, creneaux, sha_sources
+
+
+def _construire_verrou(
+    panel: list[dict], creneaux: list[dict], engagements: list[dict], sha_sources: str
+) -> dict:
+    """Verrou public fermé : jamais de sel, d'ordre, de chemin privé ni de
+    self-hash ; l'engagement du sel porte kind, mode, size et sha256, celui
+    du manifeste porte kind, mode, size, commitment_method et commitment,
+    sans empreinte directe."""
+    return {
+        "schema_version": SCHEMA_VERROU,
+        "portee": {
+            "product_version": "V1",
+            "measurement_profile": "abonnement",
+            "issue": ISSUE_VERROU,
+        },
+        "autorites": {
+            "attestation_panel": ATTESTATION_PANEL,
+            "lancement": "V1_XS_07 = LAUNCH",
+            "contrat_plans": "V1_XS_07_PLAN_CONTRACT = VALIDATE",
+            "preflight": AUTORITE_PREFLIGHT,
+        },
+        "cardinalite_declaree": len(panel),
+        "panel": panel,
+        "cardinalite_eligible": len(creneaux),
+        "creneaux": creneaux,
+        "creneaux_par_configuration_eligible": 1,
+        "reprises": {"automatiques": 0, "manuelles": 0},
+        "fallbacks": "NONE",
+        "autorite_execution": {
+            "autorite_acquisition_d_v1_04": "NOT_GRANTED",
+            "acquisition": "NOT_GRANTED",
+            "appel_fournisseur": "NOT_GRANTED",
+            "consommation_quota": "NOT_GRANTED",
+            "depense": "NOT_GRANTED",
+        },
+        "preuve_zero_execution": {
+            "commandes_fournisseur_lancees": 0,
+            "creneaux_executes": 0,
+            "reprises_executees": 0,
+        },
+        "fraicheur": {
+            "regle": REGLE_FRAICHEUR_VERROU,
+            "evenements_materiels": list(EVENEMENTS_FRAICHEUR_VERROU),
+            "effet": EFFET_FRAICHEUR_VERROU,
+        },
+        "engagement_ordre": {
+            "methode": METHODE_ORDRE_VERROU,
+            "campaign_id": CAMPAGNE_ID_VERROU,
+            "items": [
+                f"ITEM-{position:03d}" for position in range(1, len(creneaux) + 1)
+            ],
+            "positions": list(range(1, len(creneaux) + 1)),
+            "publication": "AVEUGLE",
+        },
+        "engagements_prives": engagements,
+        "sources_plans": {
+            "chemin": CHEMIN_SOURCES_PLANS.as_posix(),
+            "sha256": sha_sources,
+        },
+    }
+
+
+def _octets_manifeste_ordre(sel: bytes, creneaux: list[dict]) -> bytes:
+    """Manifeste privé : les identifiants de créneau, les positions contiguës
+    et les identifiants opaques, ordonnés par la méthode V0."""
+
+    def cle(entree: dict) -> tuple[bytes, bytes]:
+        acquisition_id = entree["acquisition_id"]
+        empreinte = hashlib.sha256(
+            sel + CAMPAGNE_ID_VERROU.encode("utf-8") + acquisition_id.encode("utf-8")
+        ).digest()
+        return (empreinte, acquisition_id.encode("utf-8"))
+
+    ordre = sorted(creneaux, key=cle)
+    return octets_canoniques(
+        [
+            {
+                "acquisition_id": entree["acquisition_id"],
+                "item": f"ITEM-{position:03d}",
+                "position": position,
+            }
+            for position, entree in enumerate(ordre, start=1)
+        ]
+    )
+
+
+def _engagement_prive(chemin: Path, genre: str) -> dict:
+    infos = os.lstat(chemin)
+    return {
+        "kind": genre,
+        "mode": f"{stat.S_IMODE(infos.st_mode):04o}",
+        "sha256": _sha256_fichier(chemin),
+        "size": infos.st_size,
+    }
+
+
+def _engagement_manifeste(chemin_manifeste: Path, sel: bytes) -> dict:
+    """Engagement masqué du manifeste : jamais d'empreinte directe publiée,
+    le commitment n'est vérifiable qu'avec le sel privé lors de la révélation."""
+    infos = os.lstat(chemin_manifeste)
+    commitment = hmac.new(
+        sel,
+        DOMAINE_ENGAGEMENT_MANIFESTE + chemin_manifeste.read_bytes(),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "commitment": commitment,
+        "commitment_method": METHODE_ENGAGEMENT_MANIFESTE,
+        "kind": "manifeste-ordre",
+        "mode": f"{stat.S_IMODE(infos.st_mode):04o}",
+        "size": infos.st_size,
+    }
+
+
+def _ecrire_prive(chemin: Path, octets: bytes) -> None:
+    descripteur = os.open(chemin, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descripteur, "wb") as flux:
+        flux.write(octets)
+    os.chmod(chemin, 0o600)
+
+
+def _verifier_materiel_prive(
+    repertoire: Path, chemin_sel: Path, chemin_manifeste: Path
+) -> list[dict]:
+    """Types, modes, tailles et empreintes du matériel privé, sans jamais
+    exposer de contenu dans les erreurs."""
+    infos_repertoire = os.lstat(repertoire)
+    if stat.S_ISLNK(infos_repertoire.st_mode) or not stat.S_ISDIR(
+        infos_repertoire.st_mode
+    ):
+        raise ErreurVerrou(
+            "répertoire de matériel privé : répertoire régulier attendu"
+        )
+    if stat.S_IMODE(infos_repertoire.st_mode) != 0o700:
+        raise ErreurVerrou("répertoire de matériel privé : mode 0700 attendu")
+    noms = sorted(entree.name for entree in repertoire.iterdir())
+    if noms != sorted((NOM_SEL_VERROU, NOM_MANIFESTE_ORDRE)):
+        raise ErreurVerrou(
+            "répertoire de matériel privé : exactement deux objets attendus, "
+            "objet inattendu présent"
+        )
+    for chemin in (chemin_sel, chemin_manifeste):
+        infos = os.lstat(chemin)
+        if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+            raise ErreurVerrou(
+                f"objet privé '{chemin.name}' : fichier régulier non "
+                "symbolique attendu"
+            )
+        if stat.S_IMODE(infos.st_mode) != 0o600:
+            raise ErreurVerrou(f"objet privé '{chemin.name}' : mode 0600 attendu")
+    if os.lstat(chemin_sel).st_size != TAILLE_SEL_VERROU:
+        raise ErreurVerrou(
+            f"objet privé '{NOM_SEL_VERROU}' : {TAILLE_SEL_VERROU} octets attendus"
+        )
+    return [
+        _engagement_prive(chemin_sel, "sel"),
+        _engagement_manifeste(chemin_manifeste, chemin_sel.read_bytes()),
+    ]
+
+
+def _verifier_ordre_prive(
+    chemin_sel: Path, chemin_manifeste: Path, creneaux: list[dict]
+) -> None:
+    sel = chemin_sel.read_bytes()
+    if chemin_manifeste.read_bytes() != _octets_manifeste_ordre(sel, creneaux):
+        raise ErreurVerrou(
+            "manifeste d'ordre incohérent avec le sel et les créneaux verrouillés"
+        )
+
+
+def _verifier_verrou_public(
+    chemin_verrou: Path, octets_attendus: bytes, panel: list[dict]
+) -> None:
+    infos = os.lstat(chemin_verrou)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurVerrou("verrou public : fichier régulier non symbolique attendu")
+    octets = chemin_verrou.read_bytes()
+    if octets == octets_attendus:
+        return
+    # Divergence : nommer la cause exacte sans réparation ni écrasement
+    verdicts = {entree["configuration_id"]: entree["verdict"] for entree in panel}
+    try:
+        existant = json.loads(octets.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        existant = None
+    if isinstance(existant, dict) and isinstance(existant.get("panel"), list):
+        for entree in existant["panel"]:
+            if not isinstance(entree, dict):
+                continue
+            if entree.get("disposition") != DISPOSITION_ELIGIBLE:
+                continue
+            identifiant = entree.get("configuration_id")
+            if (
+                entree.get("verdict") != "READY"
+                or verdicts.get(identifiant) != "READY"
+            ):
+                raise ErreurVerrou(
+                    "configuration non READY marquée éligible dans le verrou "
+                    f"existant : {identifiant}"
+                )
+    attendu = json.loads(octets_attendus.decode("utf-8"))
+    if isinstance(existant, dict):
+        if existant.get("sources_plans") != attendu["sources_plans"]:
+            raise ErreurVerrou(
+                "fait de plan applicable changé après verrou "
+                "(APPLICABLE_PRICE_FACT_CHANGED) : aucune réécriture"
+            )
+        if existant.get("panel") != attendu["panel"]:
+            raise ErreurVerrou(
+                "entrée verrouillée changée après verrou (CONFIGURATION_CHANGED "
+                "ou ROUTE_CHANGED) : aucune réécriture"
+            )
+        if existant.get("engagements_prives") != attendu["engagements_prives"]:
+            raise ErreurVerrou(
+                "engagement privé divergent du matériel présent : aucune réparation"
+            )
+    raise ErreurVerrou(
+        "verrou public divergent des entrées courantes (LOCKED_ARTIFACT_CHANGED) : "
+        "aucune réécriture"
+    )
+
+
+def _materialiser_verrou(
+    chemin_verrou: Path,
+    repertoire_materiel: Path,
+    chemin_sel: Path,
+    chemin_manifeste: Path,
+    panel: list[dict],
+    creneaux: list[dict],
+    sha_sources: str,
+) -> None:
+    """Matérialise une seule fois, sans écraser aucun fichier existant."""
+    repertoire_materiel.mkdir(parents=True, exist_ok=False)
+    os.chmod(repertoire_materiel, 0o700)
+    sel = os.urandom(TAILLE_SEL_VERROU)
+    _ecrire_prive(chemin_sel, sel)
+    _ecrire_prive(chemin_manifeste, _octets_manifeste_ordre(sel, creneaux))
+    engagements = [
+        _engagement_prive(chemin_sel, "sel"),
+        _engagement_manifeste(chemin_manifeste, sel),
+    ]
+    verrou = _construire_verrou(panel, creneaux, engagements, sha_sources)
+    chemin_verrou.parent.mkdir(parents=True, exist_ok=True)
+    descripteur = os.open(chemin_verrou, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(descripteur, "wb") as flux:
+        flux.write(octets_canoniques(verrou))
+
+
+def verrouiller(racine: Path, racine_privee: Path | None = None) -> int:
+    """Valide les entrées, matérialise une seule fois le verrou et les deux
+    objets privés, puis vérifie l'ensemble dans la même invocation. N'exécute
+    aucune commande externe de fournisseur, de modèle ou de harnais."""
+    if racine_privee is None:
+        racine_privee = RACINE_PRIVEE_PRODUCTION
+    chemin_verrou = racine / CHEMIN_VERROU
+    repertoire_materiel = racine_privee / RELATIF_MATERIEL_VERROU
+    chemin_sel = repertoire_materiel / NOM_SEL_VERROU
+    chemin_manifeste = repertoire_materiel / NOM_MANIFESTE_ORDRE
+    try:
+        panel, creneaux, sha_sources = _entrees_verrou(racine)
+    except ErreurSourcesPlans as erreur:
+        print(f"ECHEC {erreur}")
+        return 1
+    except ErreurVerrou as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    sorties = (chemin_verrou, repertoire_materiel, chemin_sel, chemin_manifeste)
+    presentes = [chemin for chemin in sorties if os.path.lexists(chemin)]
+    try:
+        if not presentes:
+            _materialiser_verrou(
+                chemin_verrou,
+                repertoire_materiel,
+                chemin_sel,
+                chemin_manifeste,
+                panel,
+                creneaux,
+                sha_sources,
+            )
+        elif len(presentes) != len(sorties):
+            raise ErreurVerrou(
+                "sortie partielle : verrou et matériel privé incomplets, aucune "
+                "réparation ni écrasement"
+            )
+        engagements = _verifier_materiel_prive(
+            repertoire_materiel, chemin_sel, chemin_manifeste
+        )
+        _verifier_ordre_prive(chemin_sel, chemin_manifeste, creneaux)
+        verrou_attendu = _construire_verrou(panel, creneaux, engagements, sha_sources)
+        _verifier_verrou_public(chemin_verrou, octets_canoniques(verrou_attendu), panel)
+    except ErreurVerrou as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    except OSError as erreur:
+        # Cause fail-closed nommée, sans traceback ni chemin privé complet
+        nom = Path(erreur.filename).name if erreur.filename else "inconnu"
+        print(
+            f"ECHEC artefact du verrou inaccessible : '{nom}' ({erreur.strerror})"
+        )
+        return 2
+    exclusions = len(panel) - len(creneaux)
+    print(f"verrou vérifié : {CHEMIN_VERROU.as_posix()}")
+    print(
+        f"panel déclaré : {len(panel)} · éligibles : {len(creneaux)} · "
+        f"exclusions : {exclusions} · créneaux : {len(creneaux)} · "
+        "reprises : 0 · fallbacks : NONE"
+    )
+    for engagement in engagements:
+        if "commitment" in engagement:
+            print(
+                f"engagement privé {engagement['kind']} : mode "
+                f"{engagement['mode']} · {engagement['size']} octets · "
+                f"méthode {engagement['commitment_method']} · commitment "
+                f"{engagement['commitment']}"
+            )
+        else:
+            print(
+                f"engagement privé {engagement['kind']} : mode "
+                f"{engagement['mode']} · {engagement['size']} octets · "
+                f"SHA-256 {engagement['sha256']}"
+            )
+    return 0
+
+
+SECTION_VERROU = "verrou de campagne abonnement versionné"
+SECTION_SOURCES_PLANS = "sources de plans validées versionnées"
+
+_CLES_VERROU_PUBLIC = {
+    "schema_version",
+    "portee",
+    "autorites",
+    "cardinalite_declaree",
+    "panel",
+    "cardinalite_eligible",
+    "creneaux",
+    "creneaux_par_configuration_eligible",
+    "reprises",
+    "fallbacks",
+    "autorite_execution",
+    "preuve_zero_execution",
+    "fraicheur",
+    "engagement_ordre",
+    "engagements_prives",
+    "sources_plans",
+}
+_CLES_ENTREE_PANEL_VERROU = {
+    "configuration_id",
+    "configuration",
+    "attestation",
+    "preflight",
+    "verdict",
+    "cause",
+    "disposition",
+    "plan",
+}
+
+
+def _charger_verrou_restitution(racine: Path) -> tuple[str, dict, str] | None:
+    """Verrou public validé pour le rendu : (chemin relatif, verrou, SHA-256),
+    ou None lorsque le verrou n'est pas matérialisé."""
+    chemin = racine / CHEMIN_VERROU
+    if not os.path.lexists(chemin):
+        return None
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurRestitution(
+            "verrou de campagne : fichier régulier non symbolique attendu"
+        )
+    try:
+        verrou = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurRestitution(f"verrou de campagne illisible : {erreur}") from erreur
+    if not isinstance(verrou, dict) or set(verrou) != _CLES_VERROU_PUBLIC:
+        raise ErreurRestitution("verrou de campagne : clés hors schéma fermé")
+    if verrou["schema_version"] != SCHEMA_VERROU:
+        raise ErreurRestitution(
+            f"verrou de campagne : schéma '{SCHEMA_VERROU}' attendu"
+        )
+    panel = verrou["panel"]
+    if not isinstance(panel, list) or verrou["cardinalite_declaree"] != len(panel):
+        raise ErreurRestitution(
+            "verrou de campagne : cardinalité déclarée incohérente"
+        )
+    for entree in panel:
+        if not isinstance(entree, dict) or set(entree) != _CLES_ENTREE_PANEL_VERROU:
+            raise ErreurRestitution(
+                "verrou de campagne : entrée de panel hors schéma fermé"
+            )
+    creneaux = verrou["creneaux"]
+    if not isinstance(creneaux, list) or verrou["cardinalite_eligible"] != len(
+        creneaux
+    ):
+        raise ErreurRestitution(
+            "verrou de campagne : cardinalité éligible incohérente"
+        )
+    sources = verrou["sources_plans"]
+    if (
+        not isinstance(sources, dict)
+        or sources.get("chemin") != CHEMIN_SOURCES_PLANS.as_posix()
+        or not isinstance(sources.get("sha256"), str)
+        or not _MOTIF_SHA256.match(sources["sha256"])
+    ):
+        raise ErreurRestitution(
+            "verrou de campagne : référence de sources de plans invalide"
+        )
+    engagements = verrou["engagements_prives"]
+    if not isinstance(engagements, list) or any(
+        not isinstance(engagement, dict) for engagement in engagements
+    ):
+        raise ErreurRestitution(
+            "verrou de campagne : engagements privés hors schéma fermé"
+        )
+    for engagement in engagements:
+        if engagement.get("kind") == "manifeste-ordre":
+            # jamais d'empreinte directe du manifeste : commitment masqué seul
+            if set(engagement) != {
+                "kind",
+                "mode",
+                "size",
+                "commitment_method",
+                "commitment",
+            } or engagement["commitment_method"] != METHODE_ENGAGEMENT_MANIFESTE:
+                raise ErreurRestitution(
+                    "verrou de campagne : engagement du manifeste hors schéma "
+                    "masqué fermé"
+                )
+        elif set(engagement) != {"kind", "mode", "sha256", "size"}:
+            raise ErreurRestitution(
+                "verrou de campagne : engagements privés hors schéma fermé"
+            )
+    return CHEMIN_VERROU.as_posix(), verrou, _sha256_fichier(chemin)
+
+
+def _articles_verrou(relatif_verrou: str, sha_verrou: str, verrou: dict) -> list[str]:
+    """Articles régénérables à l'identique depuis le verrou public."""
+    src_verrou = _span_source(relatif_verrou, sha_verrou, SECTION_VERROU)
+    sources = verrou["sources_plans"]
+    src_sources = _span_source(
+        sources["chemin"], sources["sha256"], SECTION_SOURCES_PLANS
+    )
+    creneaux = verrou["creneaux"]
+    reprises = verrou["reprises"]
+    autorite = verrou["autorite_execution"]
+    zero = verrou["preuve_zero_execution"]
+    fraicheur = verrou["fraicheur"]
+    ordre = verrou["engagement_ordre"]
+    exclusions = verrou["cardinalite_declaree"] - verrou["cardinalite_eligible"]
+    liste_creneaux = " · ".join(
+        f"<code>{_echapper(creneau['acquisition_id'])}</code> pour "
+        f"<code>{_echapper(creneau['configuration_id'])}</code>"
+        for creneau in creneaux
+    )
+    articles = [
+        _article(
+            "fait",
+            "<p><strong>Verrou de campagne abonnement matérialisé et vérifié"
+            f"</strong> — schéma <code>{_echapper(verrou['schema_version'])}"
+            "</code> · panel fermé : cardinalité déclarée "
+            f"<code>{_echapper(verrou['cardinalite_declaree'])}</code> · "
+            f"éligibles <code>{_echapper(verrou['cardinalite_eligible'])}</code> · "
+            f"exclusions <code>{exclusions}</code>.</p>"
+            f"<p>créneaux planifiés <code>{len(creneaux)}</code> : {liste_creneaux} "
+            "· créneaux par configuration éligible "
+            f"<code>{_echapper(verrou['creneaux_par_configuration_eligible'])}</code> "
+            f"· reprises automatiques <code>{_echapper(reprises['automatiques'])}"
+            "</code> · reprises manuelles "
+            f"<code>{_echapper(reprises['manuelles'])}</code> · fallbacks "
+            f"<code>{_echapper(verrou['fallbacks'])}</code> — aucun créneau n'est "
+            "exécuté par le verrou.</p>"
+            "<p>autorité d'acquisition D-V1-04 "
+            f"<code>{_echapper(autorite['autorite_acquisition_d_v1_04'])}</code> · "
+            f"acquisition <code>{_echapper(autorite['acquisition'])}</code> · appel "
+            f"fournisseur <code>{_echapper(autorite['appel_fournisseur'])}</code> · "
+            "consommation de quota "
+            f"<code>{_echapper(autorite['consommation_quota'])}</code> · dépense "
+            f"<code>{_echapper(autorite['depense'])}</code> — commandes fournisseur "
+            f"lancées <code>{_echapper(zero['commandes_fournisseur_lancees'])}</code>, "
+            f"créneaux exécutés <code>{_echapper(zero['creneaux_executes'])}</code>, "
+            f"reprises exécutées <code>{_echapper(zero['reprises_executees'])}</code>."
+            "</p>" + src_verrou,
+            ' data-verrou="campagne"',
+        )
+    ]
+    for entree in verrou["panel"]:
+        plan = entree["plan"]
+        cause = entree["cause"] if entree["cause"] is not None else "aucune"
+        attestation = entree["attestation"]
+        contenu = (
+            f"<p><strong>{_echapper(entree['configuration_id'])}</strong> — verdict "
+            f"de préflight <code>{_echapper(entree['verdict'])}</code> · cause "
+            f"<code>{_echapper(cause)}</code> · disposition "
+            f"<code>{_echapper(entree['disposition'])}</code>. Une disposition "
+            "éligible désigne une route prouvée disponible, jamais un modèle servi "
+            "ni un résultat ; l'identité réellement servie reste "
+            "<code>INCONNU</code>.</p>"
+            f"<p>attestation <code>{_echapper(attestation['reference'])}</code> du "
+            f"<code>{_echapper(attestation['date'])}</code> : détention déclarée de "
+            "l'abonnement, ni observation d'identité servie, ni facture, ni preuve "
+            "de disponibilité.</p>"
+            f"<p>plan validé <code>{_echapper(plan['nom'])}</code> · tarif catalogue "
+            f"<code>{_echapper(plan['prix_montant'])}</code> "
+            f"<code>{_echapper(plan['prix_devise'])}</code> par période "
+            f"<code>{_echapper(plan['periode'])}</code> · publication "
+            f"<code>{_echapper(plan['date_publication'])}</code> · consultation "
+            f"<code>{_echapper(plan['date_consultation'])}</code> · classe "
+            f"<code>{_echapper(plan['classe_msw'])}</code> · source officielle "
+            f"<code>{_neutraliser_schema(_echapper(plan['source_url']))}</code></p>"
+            + _span_source(
+                entree["configuration"]["chemin"],
+                entree["configuration"]["sha256"],
+                SECTION_REGISTRE,
+            )
+            + _span_source(
+                entree["preflight"]["chemin"],
+                entree["preflight"]["sha256"],
+                SECTION_PREFLIGHT,
+            )
+            + src_sources
+            + src_verrou
+        )
+        if plan["classe_msw"] == CLASSE_PLAN_DEDUCTION:
+            premisses = " ; ".join(plan["premisses"])
+            articles.append(
+                _article(
+                    "deduction",
+                    contenu,
+                    f' data-verrou-panel="{entree["configuration_id"]}"'
+                    f' data-premisses="{premisses}"',
+                )
+            )
+        else:
+            articles.append(
+                _article(
+                    "fait",
+                    contenu,
+                    f' data-verrou-panel="{entree["configuration_id"]}"',
+                )
+            )
+    evenements = " · ".join(
+        f"<code>{_echapper(evenement)}</code>"
+        for evenement in fraicheur["evenements_materiels"]
+    )
+    articles.append(
+        _article(
+            "fait",
+            f"<p>règle de fraîcheur <code>{_echapper(fraicheur['regle'])}</code> — "
+            "le temps écoulé seul n'invalide aucune preuve du verrou. Événements "
+            f"matériels fermés : {evenements}. Effet "
+            f"<code>{_echapper(fraicheur['effet'])}</code> : toute observation "
+            "impossible reste <code>INCONNU</code> et entraîne l'abstention "
+            "correspondante.</p>" + src_verrou,
+        )
+    )
+    items = " ".join(f"<code>{_echapper(item)}</code>" for item in ordre["items"])
+    positions = " ".join(
+        f"<code>{_echapper(position)}</code>" for position in ordre["positions"]
+    )
+    fragments_engagements = []
+    for engagement in verrou["engagements_prives"]:
+        if engagement["kind"] == "manifeste-ordre":
+            fragments_engagements.append(
+                f"<p>engagement privé <code>{_echapper(engagement['kind'])}"
+                "</code> : mode "
+                f"<code>{_echapper(engagement['mode'])}</code> · "
+                f"<code>{_echapper(engagement['size'])}</code> octets · méthode "
+                f"<code>{_echapper(engagement['commitment_method'])}</code> · "
+                "commitment "
+                f"<code>{_echapper(engagement['commitment'])}</code> — engagement "
+                "masqué : aucune empreinte directe du manifeste n'est publiée, le "
+                "commitment n'est vérifiable qu'avec le sel privé lors de la "
+                "révélation ; contenu et chemin jamais publiés.</p>"
+            )
+        else:
+            fragments_engagements.append(
+                f"<p>engagement privé <code>{_echapper(engagement['kind'])}"
+                "</code> : mode "
+                f"<code>{_echapper(engagement['mode'])}</code> · "
+                f"<code>{_echapper(engagement['size'])}</code> octets · SHA-256 "
+                f"<code>{_echapper(engagement['sha256'])}</code> — empreinte "
+                "seule, contenu et chemin jamais publiés.</p>"
+            )
+    engagements = "".join(fragments_engagements)
+    articles.append(
+        _article(
+            "fait",
+            f"<p>engagement d'ordre aveugle — méthode "
+            f"<code>{_echapper(ordre['methode'])}</code> · campagne "
+            f"<code>{_echapper(ordre['campaign_id'])}</code> · items {items} · "
+            f"positions {positions} · publication "
+            f"<code>{_echapper(ordre['publication'])}</code> : la correspondance "
+            "entre créneaux et items reste engagée dans le manifeste privé, "
+            "jamais publiée.</p>" + engagements + src_verrou,
+        )
+    )
+    articles.append(
+        _article(
+            "fait",
+            f"<p>sémantique des prix <code>{SEMANTIQUE_PRIX_PLANS}</code> : chaque "
+            "montant est un tarif catalogue standard mensuel en USD, hors taxe, "
+            "remise et facturation locale ; il ne prouve pas le montant réellement "
+            "facturé. Une page officielle actuelle non datée conserve son URL et "
+            "porte <code>date_publication</code> <code>NON_DEFINI</code>.</p>"
+            + src_sources
+            + src_verrou,
+        )
+    )
+    return articles
+
+
 def _span_source(chemin: str, sha256: str, section: str) -> str:
     return (
         f'<span class="source" data-chemin="{chemin}" data-sha256="{sha256}">'
@@ -5782,6 +6686,7 @@ def _rendre_page(racine: Path) -> bytes:
     configurations = _configurations_officielles(racine)
     qualification = _charger_recu_qualification(racine)
     preflights = _charger_recus_preflight(racine)
+    verrou_charge = _charger_verrou_restitution(racine)
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
         etat, 0, len(configurations)
     )
@@ -5793,6 +6698,18 @@ def _rendre_page(racine: Path) -> bytes:
     empreintes.update({relatif: sha for relatif, _, sha in preflights})
     if qualification is not None:
         empreintes[qualification[0]] = qualification[2]
+    relatif_sources_plans = CHEMIN_SOURCES_PLANS.as_posix()
+    if verrou_charge is not None:
+        empreintes[verrou_charge[0]] = verrou_charge[2]
+        try:
+            empreintes[relatif_sources_plans] = _sha256_fichier(
+                racine / CHEMIN_SOURCES_PLANS
+            )
+        except OSError as erreur:
+            raise ErreurRestitution(
+                "sources de plans absentes alors que le verrou est "
+                f"matérialisé : {erreur}"
+            ) from erreur
 
     def src(chemin: str, section: str) -> str:
         return _span_source(chemin, empreintes[chemin], section)
@@ -6021,6 +6938,21 @@ def _rendre_page(racine: Path) -> bytes:
             + "</section>"
         )
 
+    if verrou_charge is not None:
+        relatif_verrou, verrou, sha_verrou = verrou_charge
+        sections.append(
+            "<section id=\"verrou-campagne\"><h2>Verrou de campagne "
+            "abonnement</h2>"
+            "<p>Le verrou versionné fige le panel, les plans validés et leurs "
+            "provenances, les créneaux, les reprises, les règles de fraîcheur "
+            "et l'engagement d'ordre aveugle. Il ne confère aucune autorité "
+            "d'acquisition, n'exécute aucun créneau et ne publie aucun contenu "
+            "privé : seules les empreintes des engagements privés sont "
+            "publiées.</p>"
+            + "".join(_articles_verrou(relatif_verrou, sha_verrou, verrou))
+            + "</section>"
+        )
+
     if configurations:
         article_identites_inconnues = _article(
             "fait",
@@ -6246,6 +7178,14 @@ def _rendre_page(racine: Path) -> bytes:
                 else ()
             ),
             *((relatif, SECTION_PREFLIGHT) for relatif, _, _ in preflights),
+            *(
+                (
+                    (relatif_sources_plans, SECTION_SOURCES_PLANS),
+                    (verrou_charge[0], SECTION_VERROU),
+                )
+                if verrou_charge is not None
+                else ()
+            ),
             (etat_relatif, "état V1 versionné"),
         )
     )
@@ -6341,6 +7281,7 @@ def verifier_restitution(racine: Path) -> int:
     configurations = _configurations_officielles(racine)
     qualification = _charger_recu_qualification(racine)
     preflights = _charger_recus_preflight(racine)
+    verrou_charge = _charger_verrou_restitution(racine)
     jetons_factuels = _jetons_attendus(etat, 0, len(configurations))
     etat_relatif = CHEMIN_ETAT.as_posix()
     empreintes = _empreintes_sources(
@@ -6350,6 +7291,38 @@ def verifier_restitution(racine: Path) -> int:
     empreintes.update({relatif: sha for relatif, _, sha in preflights})
     if qualification is not None:
         empreintes[qualification[0]] = qualification[2]
+    if verrou_charge is not None:
+        empreintes[verrou_charge[0]] = verrou_charge[2]
+        try:
+            empreintes[CHEMIN_SOURCES_PLANS.as_posix()] = _sha256_fichier(
+                racine / CHEMIN_SOURCES_PLANS
+            )
+        except OSError as erreur:
+            raise ErreurRestitution(
+                "sources de plans absentes alors que le verrou est "
+                f"matérialisé : {erreur}"
+            ) from erreur
+        for attendu in _articles_verrou(
+            verrou_charge[0], verrou_charge[2], verrou_charge[1]
+        ):
+            if attendu not in page:
+                echecs.append("entrée de verrou infidèle ou absente")
+    nombre_entrees_verrou = page.count(' data-verrou-panel="')
+    attendu_entrees_verrou = (
+        len(verrou_charge[1]["panel"]) if verrou_charge is not None else 0
+    )
+    if nombre_entrees_verrou != attendu_entrees_verrou:
+        echecs.append(
+            f"{attendu_entrees_verrou} entrées de panel verrouillé attendues "
+            f"dans la page, {nombre_entrees_verrou} trouvées"
+        )
+    nombre_verrous = page.count(' data-verrou="campagne"')
+    attendu_verrous = 0 if verrou_charge is None else 1
+    if nombre_verrous != attendu_verrous:
+        echecs.append(
+            f"{attendu_verrous} article de verrou attendu dans la page, "
+            f"{nombre_verrous} trouvé"
+        )
 
     for relatif, recu, sha in preflights:
         attendu = _article_preflight(relatif, sha, recu)
@@ -6504,15 +7477,23 @@ _USAGE = (
     "| panel [--registre <chemin>] | autorisations [--configuration <id>] "
     "| acquerir --local --configuration <id> "
     "| preflight --configuration <id> "
-    "| qualifier | restituer | verifier-restitution"
+    "| qualifier | verrouiller | restituer | verifier-restitution"
 )
 
 
-def principal(arguments: list[str], racine: Path | None = None) -> int:
+def principal(
+    arguments: list[str],
+    racine: Path | None = None,
+    racine_privee: Path | None = None,
+) -> int:
     if racine is None:
         racine = Path(__file__).resolve().parent.parent
     if arguments == ["qualifier"]:
         return qualifier_harnais(racine)
+    if arguments == ["verrouiller"]:
+        # racine_privee n'existe que pour les tests Python : la CLI de
+        # production conserve la racine privée obligatoire exacte
+        return verrouiller(racine, racine_privee)
     if arguments == ["restituer"]:
         try:
             return restituer(racine)
