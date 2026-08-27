@@ -10464,6 +10464,669 @@ def _geler_lot_vide(
     return 0
 
 
+# --- V1-XS-12A : état et couverture de la campagne, registre versionné ---
+
+SCHEMA_COUVERTURE_ETAT = "campagne-v1/etat-v1/couverture/1"
+SECTION_COUVERTURE_ETAT = "registre de couverture V1 versionné dans l'état"
+CAUSE_PREUVE_MANQUANTE = "PREUVE_MANQUANTE"
+REGLE_COUVERTURE_ETAT = (
+    "PRD 8.5 : part du plan pour laquelle une décision officielle ou un "
+    "échec fournisseur attribuable est disponible"
+)
+# Pannes fournisseur du dénominateur décidable lorsque l'attribution à la
+# configuration est prouvée par le reçu validé (PRD 8.5)
+_PANNES_FOURNISSEUR_ATTRIBUABLES = ("PROVIDER_FAILURE", "QUOTA_EXHAUSTED")
+# Décisions qui couvrent un créneau du plan : états officiels tranchés et
+# pannes fournisseur attribuables ; HARNESS_ERROR et UNABLE_TO_JUDGE
+# restent hors couverture avec leur cause exacte
+_DECISIONS_COUVRANTES = (
+    ETAT_OFFICIELLEMENT_ACCEPTABLE,
+    ETAT_CANDIDAT_NON_ACCEPTABLE,
+    *_PANNES_FOURNISSEUR_ATTRIBUABLES,
+)
+_CAUSES_NON_COUVERTES = (
+    ETAT_ERREUR_HARNAIS,
+    ETAT_INJUGEABLE,
+    "MISSING_OBSERVATION",
+    "IDENTITY_MISMATCH",
+    "INTERFACE_UNAVAILABLE",
+    "AUTHENTICATION_UNAVAILABLE",
+    "MODEL_UNAVAILABLE",
+    "PLAN_UNAVAILABLE",
+    CAUSE_PREUVE_MANQUANTE,
+)
+_ETATS_OFFICIELS_VOCABULAIRE = (
+    ETAT_OFFICIELLEMENT_ACCEPTABLE,
+    ETAT_CANDIDAT_NON_ACCEPTABLE,
+    ETAT_INJUGEABLE,
+    ETAT_ERREUR_HARNAIS,
+)
+
+
+def _croiser_registre_recus_etat(
+    registre: dict | None,
+    recus_officiels: list[tuple[str, dict, str]],
+) -> dict[str, list[dict]]:
+    """Entrées du registre par configuration, registre et reçus croisés.
+
+    Le registre couvre exactement les acquisitions officielles dans l'ordre
+    du chaînage ; chaque cause conservée est celle du reçu, jamais
+    convertie ; toute divergence est refusée, aucune réparation."""
+    if registre is None:
+        return {}
+    recus_par_chemin = {
+        relatif: (enveloppe, sha) for relatif, enveloppe, sha in recus_officiels
+    }
+    entrees = registre["entrees"]
+    if [entree["recu"] for entree in entrees] != [
+        relatif for relatif, _, _ in recus_officiels
+    ]:
+        raise ErreurRestitution(
+            "registre de validation non aligné sur les acquisitions "
+            "officielles : aucune réparation"
+        )
+    for entree in entrees:
+        enveloppe, sha = recus_par_chemin[entree["recu"]]
+        if entree["recu_sha256"] != sha:
+            raise ErreurRestitution(
+                "empreinte du reçu divergente dans le registre de "
+                f"validation : {entree['recu']}"
+            )
+        execution = enveloppe["payload"]["execution"]
+        if entree["verdict"] is None:
+            if (
+                execution["etat"] != "INCIDENT"
+                or execution["incident"] != entree["cause_recue"]
+            ):
+                raise ErreurRestitution(
+                    "cause conservée du registre divergente du reçu, "
+                    f"jamais convertie : {entree['recu']}"
+                )
+        elif execution["etat"] != "OBSERVED":
+            raise ErreurRestitution(
+                f"verdict candidat sans exécution observée : {entree['recu']}"
+            )
+    par_configuration: dict[str, list[dict]] = {}
+    for entree in entrees:
+        par_configuration.setdefault(entree["configuration_id"], []).append(
+            entree
+        )
+    return par_configuration
+
+
+def _etats_officiels_etat(
+    registre: dict | None, artefacts_verdicts: dict | None
+) -> dict[str, str]:
+    """État officiel révélé par chemin de reçu, croisé avec le registre.
+
+    Le gel du lot vide prouve l'absence de toute sortie PASS ; une
+    révélation couvre exactement les entrées du registre, dans le
+    vocabulaire officiel du PRD. Toute divergence est refusée."""
+    if registre is None or artefacts_verdicts is None:
+        return {}
+    pass_present = any(
+        entree["verdict"] is not None and entree["verdict"]["statut"] == "PASS"
+        for entree in registre["entrees"]
+    )
+    gel = artefacts_verdicts["gel"][1]
+    if "lot_vide" in gel:
+        if pass_present:
+            raise ErreurRestitution(
+                "gel de lot vide divergent du registre : une sortie PASS "
+                "exige un lot non vide"
+            )
+        comptage: dict[str, int] = {}
+        for entree in registre["entrees"]:
+            statut = (
+                entree["verdict"]["statut"]
+                if entree["verdict"] is not None
+                else "ABSENTE"
+            )
+            comptage[statut] = comptage.get(statut, 0) + 1
+        if gel["lot_vide"].get("comptage_statuts") != comptage:
+            raise ErreurRestitution(
+                "comptage de lot vide du gel divergent du registre de "
+                "verdicts"
+            )
+        return {}
+    revelation = artefacts_verdicts["revelation"][1]
+    etats = revelation.get("etats_officiels")
+    if not isinstance(etats, list) or [
+        entree.get("recu") if isinstance(entree, dict) else None
+        for entree in etats
+    ] != [entree["recu"] for entree in registre["entrees"]]:
+        raise ErreurRestitution(
+            "états officiels de la révélation non alignés sur le registre "
+            "de verdicts"
+        )
+    for entree in etats:
+        if entree.get("etat_officiel") not in _ETATS_OFFICIELS_VOCABULAIRE:
+            raise ErreurRestitution(
+                "état officiel hors vocabulaire dans la révélation : "
+                f"{entree.get('etat_officiel')}"
+            )
+    return {entree["recu"]: entree["etat_officiel"] for entree in etats}
+
+
+def _disposition_creneau(
+    configuration_id: str,
+    entrees: list[dict],
+    registre_charge: tuple[str, dict, str] | None,
+    recus: list[tuple[str, dict, str]],
+    artefacts_verdicts: dict | None,
+    etats_officiels: dict[str, str],
+    preflight: tuple[str, dict, str] | None,
+) -> dict:
+    """Disposition prouvée d'un créneau du plan : décision couvrante ou
+    cause exacte non couverte, avec les preuves qui la fondent.
+
+    Un créneau sans preuve reste une preuve manquante, jamais un échec
+    candidat ; un échec fournisseur ne couvre que lorsque son attribution
+    à la configuration est prouvée par le reçu validé."""
+    preuves = [
+        {"chemin": relatif, "sha256": sha} for relatif, _, sha in recus
+    ]
+    incidents: list[str] = []
+    decision: str | None = None
+    cause: str | None = None
+    detail = ""
+    if entrees:
+        if registre_charge is not None:
+            preuves.append(
+                {"chemin": registre_charge[0], "sha256": registre_charge[2]}
+            )
+        incidents = [
+            entree["cause_recue"]
+            for entree in entrees
+            if entree["verdict"] is None
+        ]
+        verdicts = [
+            entree for entree in entrees if entree["verdict"] is not None
+        ]
+        if verdicts:
+            dernier = verdicts[-1]
+            statut = dernier["verdict"]["statut"]
+            if statut == "FAIL":
+                decision = ETAT_CANDIDAT_NON_ACCEPTABLE
+                detail = (
+                    "sortie candidate au verdict mécanique FAIL : candidate "
+                    "non acceptable, aucun verdict humain requis"
+                )
+            elif statut == "HARNESS_ERROR":
+                cause = ETAT_ERREUR_HARNAIS
+                detail = (
+                    "verdict mécanique HARNESS_ERROR : défaut du "
+                    "dispositif, jamais une pénalité de configuration"
+                )
+            else:
+                etat_officiel = etats_officiels.get(dernier["recu"])
+                if etat_officiel is None:
+                    cause = CAUSE_PREUVE_MANQUANTE
+                    detail = (
+                        "sortie candidate au verdict PASS sans verdict "
+                        "humain gelé"
+                    )
+                else:
+                    if artefacts_verdicts is not None:
+                        preuves.append(
+                            {
+                                "chemin": artefacts_verdicts["gel"][0],
+                                "sha256": artefacts_verdicts["gel"][2],
+                            }
+                        )
+                        if artefacts_verdicts["revelation"] is not None:
+                            preuves.append(
+                                {
+                                    "chemin": artefacts_verdicts[
+                                        "revelation"
+                                    ][0],
+                                    "sha256": artefacts_verdicts[
+                                        "revelation"
+                                    ][2],
+                                }
+                            )
+                    if etat_officiel == ETAT_INJUGEABLE:
+                        cause = ETAT_INJUGEABLE
+                        detail = (
+                            "verdict humain UNABLE_TO_JUDGE gelé : la "
+                            "preuve humaine manque, sans pénalité de "
+                            "configuration"
+                        )
+                    elif etat_officiel == ETAT_OFFICIELLEMENT_ACCEPTABLE:
+                        decision = etat_officiel
+                        detail = (
+                            "verdict mécanique PASS et verdict humain "
+                            "ACCEPTABLE gelé : officiellement acceptable"
+                        )
+                    else:
+                        decision = etat_officiel
+                        detail = (
+                            "verdict mécanique PASS et verdict humain "
+                            "NOT_ACCEPTABLE gelé : candidate non acceptable"
+                        )
+        else:
+            terminal = entrees[-1]["cause_recue"]
+            if terminal in _PANNES_FOURNISSEUR_ATTRIBUABLES:
+                decision = terminal
+                detail = (
+                    "échec fournisseur attribuable, attribution prouvée "
+                    "par le reçu d'acquisition validé"
+                )
+            elif terminal == "HARNESS_ERROR":
+                cause = terminal
+                detail = (
+                    "incident HARNESS_ERROR consigné : défaut du "
+                    "dispositif, jamais une pénalité de configuration"
+                )
+            else:
+                cause = terminal
+                detail = (
+                    f"incident {terminal} consigné, attribution prouvée "
+                    "par le reçu d'acquisition validé"
+                )
+    elif recus:
+        incidents = [
+            enveloppe["payload"]["execution"]["incident"]
+            for _, enveloppe, _ in recus
+            if enveloppe["payload"]["execution"]["etat"] == "INCIDENT"
+        ]
+        cause = CAUSE_PREUVE_MANQUANTE
+        detail = (
+            "acquisition(s) sans registre de validation : la preuve de "
+            "décision manque"
+        )
+    elif preflight is not None:
+        relatif_preflight, recu_preflight, sha_preflight = preflight
+        preuves.append(
+            {"chemin": relatif_preflight, "sha256": sha_preflight}
+        )
+        verdict_preflight = recu_preflight["verdict"]
+        cause_preflight = recu_preflight["cause"]
+        fait_preflight = recu_preflight["fait"]
+        if (
+            verdict_preflight == "UNAVAILABLE"
+            and cause_preflight in _PANNES_FOURNISSEUR_ATTRIBUABLES
+        ):
+            decision = cause_preflight
+            detail = f"préflight UNAVAILABLE : {fait_preflight}"
+        elif verdict_preflight in ("HOLD", "UNAVAILABLE"):
+            cause = cause_preflight
+            detail = f"préflight {verdict_preflight} : {fait_preflight}"
+        else:
+            cause = CAUSE_PREUVE_MANQUANTE
+            detail = (
+                "préflight READY sans acquisition : la preuve de décision "
+                "manque"
+            )
+    else:
+        cause = CAUSE_PREUVE_MANQUANTE
+        detail = "aucun reçu d'acquisition ni reçu de préflight"
+    return {
+        "configuration_id": configuration_id,
+        "couvert": decision is not None,
+        "decision": decision,
+        "cause": cause,
+        "detail": detail,
+        "incidents": incidents,
+        "preuves": preuves,
+    }
+
+
+def _calculer_couverture(
+    configurations: list[tuple[str, dict]],
+    recus_officiels: list[tuple[str, dict, str]],
+    registre_charge: tuple[str, dict, str] | None,
+    artefacts_verdicts: dict | None,
+    preflights: list[tuple[str, dict, str]],
+) -> dict:
+    """Couverture du plan déclaré : une entrée par configuration officielle,
+    la fraction exacte et la cause prouvée de chaque créneau non couvert."""
+    registre = registre_charge[1] if registre_charge is not None else None
+    entrees_par_config = _croiser_registre_recus_etat(
+        registre, recus_officiels
+    )
+    etats_officiels = _etats_officiels_etat(registre, artefacts_verdicts)
+    recus_par_config: dict[str, list[tuple[str, dict, str]]] = {}
+    for relatif, enveloppe, sha in recus_officiels:
+        identifiant = enveloppe["payload"]["configuration"]["identifiant"]
+        recus_par_config.setdefault(identifiant, []).append(
+            (relatif, enveloppe, sha)
+        )
+    preflights_par_config = {
+        recu["configuration_id"]: (relatif, recu, sha)
+        for relatif, recu, sha in preflights
+    }
+    creneaux = [
+        _disposition_creneau(
+            donnees["configuration_id"],
+            entrees_par_config.get(donnees["configuration_id"], []),
+            registre_charge,
+            recus_par_config.get(donnees["configuration_id"], []),
+            artefacts_verdicts,
+            etats_officiels,
+            preflights_par_config.get(donnees["configuration_id"]),
+        )
+        for _, donnees in configurations
+    ]
+    numerateur = sum(1 for creneau in creneaux if creneau["couvert"])
+    denominateur = len(creneaux)
+    return {
+        "schema_couverture": SCHEMA_COUVERTURE_ETAT,
+        "regle": REGLE_COUVERTURE_ETAT,
+        "numerateur": numerateur,
+        "denominateur": denominateur,
+        "fraction": f"{numerateur}/{denominateur}",
+        "creneaux": creneaux,
+    }
+
+
+def _valider_couverture_etat(couverture: object) -> None:
+    """Cohérence interne du registre de couverture : clés exactes, jetons
+    du vocabulaire, fraction égale au comptage des créneaux. Refus
+    fail-closed, aucune réparation."""
+    if not isinstance(couverture, dict) or set(couverture) != {
+        "schema_couverture",
+        "regle",
+        "numerateur",
+        "denominateur",
+        "fraction",
+        "creneaux",
+    }:
+        raise ErreurRestitution(
+            "couverture de l'état V1 : clés exactes ['creneaux', "
+            "'denominateur', 'fraction', 'numerateur', 'regle', "
+            "'schema_couverture'] attendues"
+        )
+    if couverture["schema_couverture"] != SCHEMA_COUVERTURE_ETAT:
+        raise ErreurRestitution(
+            f"couverture de l'état V1 : schéma '{SCHEMA_COUVERTURE_ETAT}' "
+            "attendu"
+        )
+    if not isinstance(couverture["regle"], str) or not couverture[
+        "regle"
+    ].strip():
+        raise ErreurRestitution(
+            "couverture de l'état V1 : règle textuelle non vide attendue"
+        )
+    numerateur = couverture["numerateur"]
+    denominateur = couverture["denominateur"]
+    for nom, valeur in (
+        ("numerateur", numerateur),
+        ("denominateur", denominateur),
+    ):
+        if isinstance(valeur, bool) or not isinstance(valeur, int) or valeur < 0:
+            raise ErreurRestitution(
+                f"couverture de l'état V1 : '{nom}' entier positif attendu"
+            )
+    if numerateur > denominateur:
+        raise ErreurRestitution(
+            "couverture de l'état V1 : numérateur supérieur au dénominateur"
+        )
+    if couverture["fraction"] != f"{numerateur}/{denominateur}":
+        raise ErreurRestitution(
+            "couverture de l'état V1 : fraction divergente du numérateur "
+            "et du dénominateur explicites"
+        )
+    creneaux = couverture["creneaux"]
+    if not isinstance(creneaux, list):
+        raise ErreurRestitution(
+            "couverture de l'état V1 : créneaux liste attendue"
+        )
+    identifiants: set[str] = set()
+    for creneau in creneaux:
+        if not isinstance(creneau, dict) or set(creneau) != {
+            "configuration_id",
+            "couvert",
+            "decision",
+            "cause",
+            "detail",
+            "incidents",
+            "preuves",
+        }:
+            raise ErreurRestitution(
+                "couverture de l'état V1 : créneau aux clés exactes "
+                "['cause', 'configuration_id', 'couvert', 'decision', "
+                "'detail', 'incidents', 'preuves'] attendu"
+            )
+        identifiant = creneau["configuration_id"]
+        if not isinstance(identifiant, str) or not _MOTIF_SLUG.match(
+            identifiant
+        ):
+            raise ErreurRestitution(
+                "couverture de l'état V1 : créneau sans identifiant slug"
+            )
+        if identifiant in identifiants:
+            raise ErreurRestitution(
+                f"couverture de l'état V1 : créneau dupliqué '{identifiant}'"
+            )
+        identifiants.add(identifiant)
+        if not isinstance(creneau["couvert"], bool):
+            raise ErreurRestitution(
+                f"couverture de l'état V1 : créneau '{identifiant}' sans "
+                "booléen 'couvert'"
+            )
+        if creneau["couvert"]:
+            if (
+                creneau["decision"] not in _DECISIONS_COUVRANTES
+                or creneau["cause"] is not None
+            ):
+                raise ErreurRestitution(
+                    f"couverture de l'état V1 : créneau couvert '{identifiant}' "
+                    "sans décision du vocabulaire"
+                )
+        elif (
+            creneau["decision"] is not None
+            or creneau["cause"] not in _CAUSES_NON_COUVERTES
+        ):
+            raise ErreurRestitution(
+                f"couverture de l'état V1 : créneau non couvert "
+                f"'{identifiant}' sans cause du vocabulaire"
+            )
+        if not isinstance(creneau["detail"], str) or not creneau[
+            "detail"
+        ].strip():
+            raise ErreurRestitution(
+                f"couverture de l'état V1 : créneau '{identifiant}' sans "
+                "détail textuel"
+            )
+        incidents = creneau["incidents"]
+        if not isinstance(incidents, list) or any(
+            incident not in INCIDENTS_V1 for incident in incidents
+        ):
+            raise ErreurRestitution(
+                f"couverture de l'état V1 : créneau '{identifiant}' avec "
+                "incident hors vocabulaire"
+            )
+        preuves = creneau["preuves"]
+        if not isinstance(preuves, list) or any(
+            not isinstance(preuve, dict)
+            or set(preuve) != {"chemin", "sha256"}
+            or not isinstance(preuve["chemin"], str)
+            or not preuve["chemin"].strip()
+            or not isinstance(preuve["sha256"], str)
+            or not _MOTIF_SHA256.match(preuve["sha256"])
+            for preuve in preuves
+        ):
+            raise ErreurRestitution(
+                f"couverture de l'état V1 : créneau '{identifiant}' avec "
+                "preuve invalide"
+            )
+    if numerateur != sum(1 for creneau in creneaux if creneau["couvert"]):
+        raise ErreurRestitution(
+            "couverture de l'état V1 : numérateur divergent du comptage "
+            "des créneaux couverts"
+        )
+    if denominateur != len(creneaux):
+        raise ErreurRestitution(
+            "couverture de l'état V1 : dénominateur divergent du nombre "
+            "de créneaux"
+        )
+
+
+def _rapport_etat(
+    recus_locaux: list[tuple[str, dict, str]],
+    recus_officiels: list[tuple[str, dict, str]],
+    registre_charge: tuple[str, dict, str] | None,
+    artefacts_verdicts: dict | None,
+    couverture: dict,
+) -> str:
+    """Rapport français : acquisitions, incidents, observations ou preuves
+    manquantes et couverture en fraction exacte, chaque affirmation adossée
+    aux preuves versionnées lues."""
+    lignes = [
+        "état de la campagne V1 — lecture des seules preuves versionnées ; "
+        "aucune acquisition, aucun appel candidat, aucune dépense",
+        "",
+        "Acquisitions",
+        f"- {len(recus_officiels)} acquisition(s) officielle(s) et "
+        f"{len(recus_locaux)} reçu(s) de démonstration locale hors panel "
+        "officiel",
+    ]
+    verdicts_par_recu = {}
+    if registre_charge is not None:
+        for entree in registre_charge[1]["entrees"]:
+            if entree["verdict"] is not None:
+                verdicts_par_recu[entree["recu"]] = entree["verdict"]["statut"]
+    recus_par_config: dict[str, list[tuple[str, dict]]] = {}
+    for relatif, enveloppe, _ in recus_officiels:
+        identifiant = enveloppe["payload"]["configuration"]["identifiant"]
+        recus_par_config.setdefault(identifiant, []).append(
+            (relatif, enveloppe)
+        )
+    for identifiant in sorted(recus_par_config):
+        descriptions = []
+        for relatif, enveloppe in recus_par_config[identifiant]:
+            execution = enveloppe["payload"]["execution"]
+            if execution["etat"] == "INCIDENT":
+                descriptions.append(f"incident {execution['incident']}")
+            else:
+                statut = verdicts_par_recu.get(relatif)
+                if statut is None:
+                    descriptions.append(
+                        "sortie candidate sans verdict automatique"
+                    )
+                else:
+                    descriptions.append(
+                        f"sortie candidate au verdict {statut}"
+                    )
+        lignes.append(
+            f"- {identifiant} : {len(descriptions)} reçu(s) — "
+            + " ; ".join(descriptions)
+        )
+    if artefacts_verdicts is None:
+        lignes.append("- revue humaine : aucun gel de verdicts n'existe")
+    elif "lot_vide" in artefacts_verdicts["gel"][1]:
+        lignes.append(
+            "- revue humaine : lot éligible vide — 0 verdict humain "
+            "requis, aucune intervention du relecteur"
+        )
+    else:
+        lignes.append(
+            f"- revue humaine : {len(artefacts_verdicts['recus'])} "
+            "verdict(s) humain(s) gelé(s), correspondance révélée"
+        )
+    lignes += ["", "Incidents"]
+    lignes_incidents = []
+    for _, enveloppe, _ in recus_officiels:
+        execution = enveloppe["payload"]["execution"]
+        if execution["etat"] == "INCIDENT":
+            identifiant = enveloppe["payload"]["configuration"]["identifiant"]
+            lignes_incidents.append(
+                f"- {identifiant} : {execution['incident']} — "
+                f"{execution['fait']}"
+            )
+    lignes += lignes_incidents or ["- aucun incident consigné"]
+    lignes += ["", "Observations ou données manquantes"]
+    lignes_manquantes = []
+    for creneau in couverture["creneaux"]:
+        if creneau["couvert"]:
+            continue
+        libelle = (
+            "preuve manquante"
+            if creneau["cause"] == CAUSE_PREUVE_MANQUANTE
+            else creneau["cause"]
+        )
+        lignes_manquantes.append(
+            f"- {creneau['configuration_id']} : {libelle} — "
+            f"{creneau['detail']}"
+        )
+    lignes += lignes_manquantes or [
+        "- aucune donnée manquante : tous les créneaux sont couverts"
+    ]
+    lignes += ["", f"Couverture du plan : {couverture['fraction']}"]
+    lignes.append(
+        f"- {couverture['numerateur']} créneau(x) couvert(s) par une "
+        "décision officielle ou un échec fournisseur attribuable, sur "
+        f"{couverture['denominateur']} configuration(s) déclarée(s) "
+        "(règle PRD 8.5)"
+    )
+    for creneau in couverture["creneaux"]:
+        if creneau["couvert"]:
+            lignes.append(
+                f"- {creneau['configuration_id']} : couvert — "
+                f"{creneau['decision']} ({creneau['detail']})"
+            )
+        else:
+            libelle = (
+                "preuve manquante"
+                if creneau["cause"] == CAUSE_PREUVE_MANQUANTE
+                else creneau["cause"]
+            )
+            lignes.append(
+                f"- {creneau['configuration_id']} : non couvert — {libelle}"
+            )
+    lignes.append(
+        "- la couverture n'est ni un axe de comparaison, ni une métrique "
+        "comparative, ni un score, ni un classement, ni un gagnant, ni "
+        "une recommandation"
+    )
+    return "\n".join(lignes)
+
+
+def etat(racine: Path) -> int:
+    """État de la campagne V1 : acquisitions, incidents, observations ou
+    preuves manquantes et couverture en fraction exacte, lus des preuves
+    versionnées présentes.
+
+    Le registre de couverture est écrit dans l'état V1 versionné, prolongé
+    sans seconde source de vérité ; l'écriture est déterministe et
+    idempotente. Aucune acquisition, aucun appel candidat, aucune dépense."""
+    etat_v1 = _charger_etat(racine)
+    repertoire = _repertoire_recus(racine, etat_v1)
+    _compter_recus(repertoire)
+    recus_locaux, recus_officiels = _partitionner_recus(racine, etat_v1)
+    configurations = _configurations_officielles(racine)
+    registre_charge = _charger_registre_validation(racine)
+    artefacts_verdicts = _charger_artefacts_verdicts(racine)
+    preflights = _charger_recus_preflight(racine)
+    couverture = _calculer_couverture(
+        configurations,
+        recus_officiels,
+        registre_charge,
+        artefacts_verdicts,
+        preflights,
+    )
+    _valider_couverture_etat(couverture)
+    etat_v1["couverture"] = couverture
+    chemin_etat = racine / CHEMIN_ETAT
+    chemin_etat.write_bytes(
+        (json.dumps(etat_v1, ensure_ascii=False, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    print(
+        _rapport_etat(
+            recus_locaux,
+            recus_officiels,
+            registre_charge,
+            artefacts_verdicts,
+            couverture,
+        )
+    )
+    print(f"registre de couverture écrit : {CHEMIN_ETAT.as_posix()}")
+    return 0
+
+
 SECTION_DOSSIERS_REVUE = "manifeste de dossiers de revue aveugle V1 versionné"
 SECTION_ENGAGEMENT_ORDRE = "engagement d'ordre de revue aveugle V1 versionné"
 SECTION_CONTROLE_FUITES = "contrôle d'absence de fuite des dossiers V1 versionné"
@@ -11696,6 +12359,69 @@ def _article(classe: str, contenu: str, attributs: str = "") -> str:
     return f'<article class="affirmation" data-classe="{classe}"{attributs}>{contenu}</article>'
 
 
+def _section_couverture_etat(
+    etat_relatif: str, sha_etat: str, couverture: dict
+) -> str:
+    """Section de restitution de l'état et de la couverture : reprise
+    littérale du registre versionné produit par etat, jamais recalculée."""
+    lignes = []
+    for creneau in couverture["creneaux"]:
+        identifiant = creneau["configuration_id"]
+        if creneau["couvert"]:
+            statut = (
+                "couvert : décision "
+                f"<code>{_echapper(creneau['decision'])}</code>"
+            )
+        elif creneau["cause"] == CAUSE_PREUVE_MANQUANTE:
+            statut = "non couvert : preuve manquante"
+        else:
+            statut = (
+                "non couvert : cause prouvée "
+                f"<code>{_echapper(creneau['cause'])}</code>"
+            )
+        incidents = ""
+        if creneau["incidents"]:
+            consignes = ", ".join(
+                f"<code>{_echapper(incident)}</code>"
+                for incident in creneau["incidents"]
+            )
+            incidents = f" · incident(s) consigné(s) : {consignes}"
+        lignes.append(
+            f'<li data-couverture-creneau="{_echapper(identifiant)}">'
+            f"<code>{_echapper(identifiant)}</code> — {statut} · "
+            f"{_echapper(creneau['detail'])}{incidents}</li>"
+        )
+    return (
+        '<section id="couverture-v1" data-couverture-v1="section">'
+        "<h2>État et couverture de la campagne V1</h2>"
+        "<p>Cette section reprend le registre de couverture versionné, "
+        "produit par <code>etat</code> dans l'état V1 et consommé tel "
+        "quel : une fraction exacte du plan, avec la décision ou la cause "
+        "prouvée de chaque créneau. La couverture n'est ni un axe de "
+        "comparaison, ni une métrique comparative, ni un score, ni un "
+        "classement, ni un gagnant, ni une recommandation.</p>"
+        + _article(
+            "fait",
+            "<p>Couverture du plan : "
+            f"<code>{_echapper(couverture['fraction'])}</code> — "
+            f"{couverture['numerateur']} créneau(x) couvert(s) par une "
+            "décision officielle ou un échec fournisseur attribuable, sur "
+            f"{couverture['denominateur']} configurations déclarées au "
+            f"registre officiel ({_echapper(couverture['regle'])}). Les "
+            "créneaux non couverts restent visibles avec leur cause "
+            "prouvée ; un créneau sans preuve reste une preuve manquante, "
+            "jamais un échec candidat.</p>"
+            + _span_source(etat_relatif, sha_etat, SECTION_COUVERTURE_ETAT),
+        )
+        + _article(
+            "fait",
+            "<ul>" + "".join(lignes) + "</ul>"
+            + _span_source(etat_relatif, sha_etat, SECTION_COUVERTURE_ETAT),
+        )
+        + "</section>"
+    )
+
+
 def _rendre_page(racine: Path) -> bytes:
     etat = _charger_etat(racine)
     repertoire = _repertoire_recus(racine, etat)
@@ -12124,6 +12850,17 @@ def _rendre_page(racine: Path) -> bytes:
                 )
             )
             + "</section>"
+        )
+
+    couverture_etat = etat.get("couverture")
+    if couverture_etat is not None:
+        # Le registre de couverture versionné est restitué tel quel,
+        # jamais recalculé au rendu
+        _valider_couverture_etat(couverture_etat)
+        sections.append(
+            _section_couverture_etat(
+                etat_relatif, empreintes[etat_relatif], couverture_etat
+            )
         )
 
     if configurations:
@@ -12849,6 +13586,31 @@ def verifier_restitution(racine: Path) -> int:
             f"page, {nombre_revelations} trouvée"
         )
 
+    couverture_etat = etat.get("couverture")
+    if couverture_etat is not None:
+        _valider_couverture_etat(couverture_etat)
+        attendu_section_couverture = _section_couverture_etat(
+            etat_relatif, empreintes[etat_relatif], couverture_etat
+        )
+        if attendu_section_couverture not in page:
+            echecs.append("section de couverture V1 infidèle ou absente")
+    nombre_sections_couverture = page.count(' data-couverture-v1="section"')
+    attendu_sections_couverture = 0 if couverture_etat is None else 1
+    if nombre_sections_couverture != attendu_sections_couverture:
+        echecs.append(
+            f"{attendu_sections_couverture} section de couverture V1 "
+            f"attendue dans la page, {nombre_sections_couverture} trouvée"
+        )
+    nombre_creneaux_couverture = page.count(' data-couverture-creneau="')
+    attendu_creneaux_couverture = (
+        len(couverture_etat["creneaux"]) if couverture_etat is not None else 0
+    )
+    if nombre_creneaux_couverture != attendu_creneaux_couverture:
+        echecs.append(
+            f"{attendu_creneaux_couverture} créneaux de couverture attendus "
+            f"dans la page, {nombre_creneaux_couverture} trouvés"
+        )
+
     for relatif, enveloppe, sha in recus_officiels:
         attendu = _article_acquisition_officielle(relatif, sha, enveloppe)
         if attendu not in page:
@@ -12973,8 +13735,8 @@ _USAGE = (
     "| acquerir --officiel --configuration <id> "
     "| acquerir --recuperation --configuration <id> "
     "| preflight --configuration <id> "
-    "| qualifier | verrouiller | valider | dossiers | geler | restituer "
-    "| verifier-restitution | preparer-recuperation"
+    "| qualifier | verrouiller | valider | dossiers | geler | etat "
+    "| restituer | verifier-restitution | preparer-recuperation"
 )
 
 
@@ -13001,6 +13763,12 @@ def principal(
         # racine_privee n'existe que pour les tests Python : la CLI de
         # production conserve la racine privée obligatoire exacte
         return geler(racine, racine_privee)
+    if arguments == ["etat"]:
+        try:
+            return etat(racine)
+        except ErreurRestitution as erreur:
+            print(f"ECHEC {erreur}")
+            return 1
     if arguments == ["restituer"]:
         try:
             return restituer(racine)
