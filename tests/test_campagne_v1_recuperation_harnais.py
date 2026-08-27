@@ -1,12 +1,14 @@
 # /// script
 # requires-python = ">=3.12"
 # ///
-"""Contrôles verticaux de la préparation de récupération V1-R1 au seam public.
+"""Contrôles verticaux de la récupération V1-R1 (préparation) et V1-R2
+(exécution autorisée D-V1-05) au seam public.
 
 Chaque test passe par `principal` avec une racine de dépôt temporaire copiée
 du dépôt réel (doubles locaux). Aucun fournisseur, harnais ou exécutable
-n'est résolu ni lancé : `subprocess.Popen` et `shutil.which` sont doublés
-en échec explicite pendant toute la durée de chaque test.
+réel n'est résolu ni lancé : `subprocess.Popen` et `shutil.which` sont
+doublés en échec explicite par défaut ; les tests d'exécution R2 les
+remplacent par des doubles contrôlés qui comptent chaque processus.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 RACINE = Path(__file__).parent.parent
 sys.path.insert(0, str(RACINE / "tools"))
@@ -84,7 +87,20 @@ _FICHIERS_ENTREE = tuple(chemin for chemin, _ in M.SOURCES_AUTORISEES) + (
 _REPERTOIRES_ENTREE = (
     _CAMPAGNE / "registre-panel-v1",
     _CAMPAGNE / "preflights-v1",
-    _CAMPAGNE / "recus-v1",
+)
+# Reçus de référence copiés un à un : le répertoire vivant recus-v1 n'est
+# jamais copié en bloc, un reçu -002 réel du dépôt ne doit pas entrer dans
+# les bacs temporaires des tests
+_RECUS_REFERENCE = (
+    _CAMPAGNE
+    / "recus-v1"
+    / "80046afee6e56ab9dcbdbbda4d5a4190d0d77cad2449b900ae16861e14cad839.json",
+    _CAMPAGNE
+    / "recus-v1"
+    / "0964422c4970ed527846e5dce3f7f9fcc9640897424044aad3f7cbc146695f40.json",
+    _CAMPAGNE
+    / "recus-v1"
+    / "955c15c1d635386c7a25b9b0f3013e519883326236fcc2810cb05683d859a7f9.json",
 )
 
 
@@ -92,7 +108,7 @@ def _refus_executable(*arguments: object, **cles: object) -> None:
     raise AssertionError("aucun exécutable ne doit être résolu ni lancé")
 
 
-class RecuperationHarnaisTests(unittest.TestCase):
+class _BaseRecuperation(unittest.TestCase):
     def setUp(self):
         self._temporaire = tempfile.TemporaryDirectory()
         self.addCleanup(self._temporaire.cleanup)
@@ -103,6 +119,11 @@ class RecuperationHarnaisTests(unittest.TestCase):
             shutil.copyfile(RACINE / relatif, destination)
         for repertoire in _REPERTOIRES_ENTREE:
             shutil.copytree(RACINE / repertoire, self.racine / repertoire)
+        repertoire_recus = self.racine / _CAMPAGNE / "recus-v1"
+        repertoire_recus.mkdir(parents=True, exist_ok=True)
+        for relatif in _RECUS_REFERENCE:
+            shutil.copyfile(RACINE / relatif, self.racine / relatif)
+        self._aligner_registre_validation_sur_le_bac()
         self.chemin_verrou_recuperation = self.racine / M.CHEMIN_VERROU_RECUPERATION
         self._popen_d_origine = subprocess.Popen
         self._which_d_origine = shutil.which
@@ -110,6 +131,29 @@ class RecuperationHarnaisTests(unittest.TestCase):
         shutil.which = _refus_executable
         self.addCleanup(setattr, subprocess, "Popen", self._popen_d_origine)
         self.addCleanup(setattr, shutil, "which", self._which_d_origine)
+
+    def _aligner_registre_validation_sur_le_bac(self) -> None:
+        """Restreint le registre de validation copié aux seuls reçus isolés
+        du bac : les entrées couvrant des reçus officiels du dépôt réel
+        (les -002 vivants) sont retirées et la couverture recomptée, sans
+        jamais copier ces reçus dans le bac."""
+        chemin_registre = self.racine / M.CHEMIN_REGISTRE_VALIDATION
+        registre = json.loads(chemin_registre.read_text(encoding="utf-8"))
+        registre["entrees"] = [
+            entree
+            for entree in registre["entrees"]
+            if (self.racine / entree["recu"]).is_file()
+        ]
+        recompte = {verdict: 0 for verdict in M.VERDICTS_CANDIDATS}
+        for entree in registre["entrees"]:
+            if entree["verdict"] is not None:
+                recompte[entree["verdict"]["statut"]] += 1
+        registre["couverture"] = {
+            "acquisitions_officielles": len(registre["entrees"]),
+            "sorties_candidates": sum(recompte.values()),
+            "verdicts": recompte,
+        }
+        chemin_registre.write_bytes(M.octets_canoniques(registre))
 
     def _appeler(self, arguments: list[str]) -> tuple[int, str]:
         tampon = io.StringIO()
@@ -134,6 +178,8 @@ class RecuperationHarnaisTests(unittest.TestCase):
             self.chemin_verrou_recuperation.read_text(encoding="utf-8")
         )
 
+
+class RecuperationHarnaisTests(_BaseRecuperation):
     def test_preparer_recuperation_materialise_le_verrou_exact(self):
         code, sortie = self._appeler(["preparer-recuperation"])
         self.assertEqual(code, 0)
@@ -252,7 +298,41 @@ class RecuperationHarnaisTests(unittest.TestCase):
         ).hexdigest()
         self.assertIn(empreinte, sortie)
         self.assertIn("verrou de récupération vérifié", sortie)
-        self.assertIn("AUTORITE_ABSENTE", sortie)
+        self.assertIn("AUTORITE_EXECUTION : D-V1-05", sortie)
+        chemin_autorisation = (
+            self.racine / M.CHEMIN_AUTORISATION_RECUPERATION
+        )
+        autorisation = json.loads(
+            chemin_autorisation.read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            chemin_autorisation.read_bytes(),
+            M.octets_canoniques(autorisation),
+        )
+        self.assertEqual(autorisation["autorite"], "D-V1-05")
+        self.assertEqual(
+            autorisation["jeton"],
+            "D_V1_05 = AUTHORIZE:CANDIDATES_HIGH_COMMON; AGENTS_MEDIUM",
+        )
+        self.assertEqual(
+            autorisation["verrou_recuperation"]["sha256"], empreinte
+        )
+        portee = autorisation["portee"]
+        self.assertEqual(portee["tranche"], "V1-R2")
+        self.assertEqual(portee["appels_fournisseur_max"], 2)
+        self.assertEqual(portee["appels_par_creneau"], 1)
+        self.assertEqual(portee["reprises_automatiques"], 0)
+        self.assertEqual(portee["reprises_manuelles"], 0)
+        self.assertEqual(portee["fallback"], "NONE")
+        self.assertEqual(portee["depense_incrementale"], 0)
+        self.assertEqual(portee["effort_candidat"], "high")
+        self.assertEqual(
+            [creneau["acquisition_id"] for creneau in portee["acquisitions"]],
+            [
+                "ACQ-V1-ANTIGRAVITY-GEMINI-3-7-FLASH-002",
+                "ACQ-V1-ZAI-GLM-5-3-002",
+            ],
+        )
 
     def test_reexecution_verifie_les_octets_sans_reecriture(self):
         premier, _ = self._appeler(["preparer-recuperation"])
@@ -349,11 +429,15 @@ class RecuperationHarnaisTests(unittest.TestCase):
         code, _ = self._appeler(["restituer"])
         self.assertEqual(code, 0)
         page = (self.racine / M.CHEMIN_PAGE).read_text(encoding="utf-8")
-        self.assertEqual(page.count(' data-recuperation-harnais="'), 2)
+        self.assertEqual(page.count(' data-recuperation-harnais="'), 3)
         self.assertIn("ACQ-V1-ANTIGRAVITY-GEMINI-3-7-FLASH-002", page)
         self.assertIn("ACQ-V1-ZAI-GLM-5-3-002", page)
         self.assertIn("NOT_GRANTED", page)
         self.assertIn("INCONNU et HOLD", page)
+        self.assertIn("D-V1-05", page)
+        self.assertIn(
+            "D_V1_05 = AUTHORIZE:CANDIDATES_HIGH_COMMON; AGENTS_MEDIUM", page
+        )
         code, _ = self._appeler(["verifier-restitution"])
         self.assertEqual(code, 0)
 
@@ -577,7 +661,7 @@ class RecuperationHarnaisTests(unittest.TestCase):
         infos_premier = os.lstat(self.chemin_verrou_recuperation)
         code, sortie = self._appeler(["preparer-recuperation"])
         self.assertEqual(code, 0)
-        self.assertIn("AUTORITE_ABSENTE", sortie)
+        self.assertIn("AUTORITE_EXECUTION : D-V1-05", sortie)
         self.assertEqual(self._instantane(), avant)
         infos_second = os.lstat(self.chemin_verrou_recuperation)
         self.assertEqual(infos_second.st_ino, infos_premier.st_ino)
@@ -643,6 +727,466 @@ class RecuperationHarnaisTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("création concurrente détectée", sortie)
         self.assertFalse(self.chemin_verrou_recuperation.exists())
+
+
+class _ProcessusFactice:
+    """Double local d'un processus candidat ou de sonde : aucune exécution."""
+
+    def __init__(self, stdout: bytes, stderr: bytes = b"", code: int = 0):
+        self._stdout = stdout
+        self._stderr = stderr
+        self._code = code
+        self.pid = 424242
+        self.returncode: int | None = None
+        self.stdin = io.BytesIO()
+        self.stdout = io.BytesIO()
+        self.stderr = io.BytesIO()
+        self.entree: bytes | None = None
+
+    def communicate(self, entree: bytes | None = None, timeout=None):
+        self.entree = entree
+        self.returncode = self._code
+        return self._stdout, self._stderr
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self):
+        return self.returncode
+
+
+class ExecutionRecuperationTests(_BaseRecuperation):
+    """Exécution V1-R2 sous D-V1-05, prouvée avec des doubles locaux."""
+
+    def setUp(self):
+        super().setUp()
+        self._privee = tempfile.TemporaryDirectory()
+        self.addCleanup(self._privee.cleanup)
+        self.racine_privee = Path(self._privee.name)
+        self.appels: list[dict] = []
+        self._sorties_sonde_usage: list[bytes] = []
+        killpg_origine = os.killpg
+
+        def _killpg_factice(groupe: int, signal_envoye: int) -> None:
+            raise ProcessLookupError
+
+        os.killpg = _killpg_factice
+        self.addCleanup(setattr, os, "killpg", killpg_origine)
+
+    def _appeler_prive(self, arguments: list[str]) -> tuple[int, str]:
+        tampon = io.StringIO()
+        with redirect_stdout(tampon):
+            code = M.principal(
+                arguments,
+                racine=self.racine,
+                racine_privee=self.racine_privee,
+            )
+        return code, tampon.getvalue()
+
+    def _preparer(self) -> None:
+        code, _ = self._appeler(["preparer-recuperation"])
+        self.assertEqual(code, 0)
+
+    def _observer_ready(self) -> None:
+        observation = {
+            "verdict": "READY",
+            "cause": None,
+            "fait": "double local READY",
+        }
+        for nom in ("_observer_route_antigravity", "_observer_route_zai"):
+            origine = getattr(M, nom)
+            setattr(M, nom, lambda *args, **cles: dict(observation))
+            self.addCleanup(setattr, M, nom, origine)
+
+    def _installer_popen(
+        self, sorties_candidat: dict[str, tuple[bytes, bytes, int]]
+    ) -> None:
+        def _popen_factice(argv, **cles):
+            self.appels.append({"argv": list(argv), "cles": cles})
+            if argv[0] == "opencodex":
+                sortie = self._sorties_sonde_usage.pop(0)
+                return _ProcessusFactice(sortie)
+            stdout, stderr, code = sorties_candidat[argv[0]]
+            processus = _ProcessusFactice(stdout, stderr, code)
+            self.dernier_candidat = processus
+            return processus
+
+        subprocess.Popen = _popen_factice
+
+    def _journal(self) -> dict | None:
+        chemin = (
+            self.racine_privee
+            / M.RELATIF_EXECUTION_R2
+            / M.NOM_JOURNAL_EXECUTION
+        )
+        if not chemin.exists():
+            return None
+        return json.loads(chemin.read_text(encoding="utf-8"))
+
+    def _recus_002(self) -> list[dict]:
+        repertoire = self.racine / _CAMPAGNE / "recus-v1"
+        recus = []
+        for chemin in sorted(repertoire.iterdir()):
+            enveloppe = json.loads(chemin.read_text(encoding="utf-8"))
+            if "recuperation" in enveloppe["payload"]:
+                recus.append(enveloppe)
+        return recus
+
+    def test_autorite_divergente_rend_deux_sans_processus(self):
+        self._preparer()
+        chemin = self.racine / M.CHEMIN_AUTORISATION_RECUPERATION
+        autorisation = json.loads(chemin.read_text(encoding="utf-8"))
+        autorisation["jeton"] = "D_V1_05 = AUTHORIZE:AUTRE"
+        chemin.write_bytes(M.octets_canoniques(autorisation))
+        avant = self._instantane()
+        code, sortie = self._appeler_prive(
+            ["acquerir", "--recuperation", "--configuration", "zai-glm-5-3"]
+        )
+        self.assertEqual(code, 2, sortie)
+        self.assertIn("jeton", sortie)
+        self.assertIn("aucun processus fournisseur", sortie)
+        self.assertEqual(self._instantane(), avant)
+        self.assertIsNone(self._journal())
+
+    def test_preflight_non_ready_bloque_sans_processus_candidat(self):
+        self._preparer()
+        observation = {
+            "verdict": "UNAVAILABLE",
+            "cause": "INTERFACE_UNAVAILABLE",
+            "fait": "double local : client introuvable",
+        }
+        origine = M._observer_route_antigravity
+        M._observer_route_antigravity = lambda: dict(observation)
+        self.addCleanup(setattr, M, "_observer_route_antigravity", origine)
+        avant = self._instantane()
+        code, sortie = self._appeler_prive(
+            [
+                "acquerir",
+                "--recuperation",
+                "--configuration",
+                "antigravity-gemini-3-7-flash",
+            ]
+        )
+        self.assertEqual(code, 2, sortie)
+        self.assertIn("PREFLIGHT_NON_READY", sortie)
+        self.assertIn("UNAVAILABLE", sortie)
+        self.assertEqual(self.appels, [])
+        self.assertEqual(self._instantane(), avant)
+        self.assertIsNone(self._journal())
+        self.assertFalse(
+            (self.racine_privee / M.RELATIF_EXECUTION_R2).exists()
+        )
+
+    def test_antigravity_ready_execute_une_fois_le_descripteur_exact(self):
+        self._preparer()
+        self._observer_ready()
+        stimulus = (self.racine / M.CHEMIN_STIMULUS).read_bytes()
+        self._installer_popen(
+            {
+                "agy": (
+                    "sortie candidate de récupération\n"
+                    "model: gemini-3.7-flash-high\n".encode("utf-8"),
+                    b"",
+                    0,
+                )
+            }
+        )
+        code, sortie = self._appeler_prive(
+            [
+                "acquerir",
+                "--recuperation",
+                "--configuration",
+                "antigravity-gemini-3-7-flash",
+            ]
+        )
+        self.assertEqual(code, 0, sortie)
+        self.assertEqual(len(self.appels), 1)
+        appel = self.appels[0]
+        espace = (
+            self.racine_privee
+            / M.RELATIF_EXECUTION_R2
+            / "runtime"
+            / "ACQ-V1-ANTIGRAVITY-GEMINI-3-7-FLASH-002"
+            / "espace"
+        )
+        self.assertEqual(
+            appel["argv"],
+            [
+                "agy",
+                "--model",
+                "gemini-3.7-flash-high",
+                "--effort",
+                "high",
+                "--sandbox",
+                "--disable-slash-commands",
+                "--print=" + stimulus.decode("utf-8"),
+            ],
+        )
+        self.assertEqual(appel["cles"]["cwd"], espace)
+        self.assertTrue(appel["cles"]["start_new_session"])
+        self.assertEqual(self.dernier_candidat.entree, b"")
+        self.assertTrue((espace.parent / "sortie-stdout.txt").is_file())
+        recus = self._recus_002()
+        self.assertEqual(len(recus), 1)
+        charge = recus[0]["payload"]
+        self.assertEqual(
+            charge["recuperation"]["acquisition_id"],
+            "ACQ-V1-ANTIGRAVITY-GEMINI-3-7-FLASH-002",
+        )
+        self.assertEqual(charge["recuperation"]["autorite"], "D-V1-05")
+        self.assertEqual(
+            charge["recuperation"]["identite_servie"]["statut"], "OBSERVED"
+        )
+        self.assertEqual(
+            charge["provenance_servie"]["valeur"],
+            {"modele": "gemini-3.7-flash-high"},
+        )
+        self.assertEqual(
+            charge["requete"]["argv_resolu"], list(ARGV_ANTIGRAVITY)
+        )
+        self.assertEqual(charge["execution"]["etat"], "OBSERVED")
+        self.assertEqual(
+            charge["creneau"].split(":")[2],
+            "ACQ-V1-ANTIGRAVITY-GEMINI-3-7-FLASH-002",
+        )
+        journal = self._journal()
+        self.assertEqual(len(journal["entrees"]), 1)
+        self.assertEqual(journal["entrees"][0]["etat_terminal"], "OBSERVED")
+        self.assertEqual(journal["entrees"][0]["retry"], 0)
+        self.assertEqual(journal["entrees"][0]["descendants"], 0)
+        # Seconde invocation : refusée sans aucun processus supplémentaire
+        code, sortie = self._appeler_prive(
+            [
+                "acquerir",
+                "--recuperation",
+                "--configuration",
+                "antigravity-gemini-3-7-flash",
+            ]
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("déjà occupé", sortie)
+        self.assertEqual(len(self.appels), 1)
+
+    def test_zai_ready_trace_delta_et_stimulus_stdin(self):
+        self._preparer()
+        self._observer_ready()
+        stimulus = (self.racine / M.CHEMIN_STIMULUS).read_bytes()
+        self._sorties_sonde_usage = [
+            b'{"requests": []}',
+            (
+                b'{"requests": [{"provider": "zai", "model": "zai/glm-5.3",'
+                b' "reasoning_effort": "high"}]}'
+            ),
+        ]
+        self._installer_popen(
+            {"codex": (b"sortie candidate zai\n", b"", 0)}
+        )
+        code, sortie = self._appeler_prive(
+            ["acquerir", "--recuperation", "--configuration", "zai-glm-5-3"]
+        )
+        self.assertEqual(code, 0, sortie)
+        self.assertEqual(len(self.appels), 3)
+        self.assertEqual(self.appels[0]["argv"][0], "opencodex")
+        self.assertEqual(self.appels[2]["argv"][0], "opencodex")
+        espace = (
+            self.racine_privee
+            / M.RELATIF_EXECUTION_R2
+            / "runtime"
+            / "ACQ-V1-ZAI-GLM-5-3-002"
+            / "espace"
+        )
+        attendu = [
+            element if element != "__ISOLATED_WORKSPACE__" else str(espace)
+            for element in ARGV_ZAI
+        ]
+        self.assertEqual(self.appels[1]["argv"], attendu)
+        self.assertEqual(self.dernier_candidat.entree, stimulus)
+        recus = self._recus_002()
+        self.assertEqual(len(recus), 1)
+        charge = recus[0]["payload"]
+        self.assertEqual(
+            charge["recuperation"]["identite_servie"]["statut"], "OBSERVED"
+        )
+        self.assertEqual(
+            charge["provenance_servie"]["valeur"],
+            {
+                "fournisseur": "zai",
+                "modele": "glm-5.3",
+                "effort_effectif": "high",
+                "tentatives": 1,
+                "fallback": "NONE",
+            },
+        )
+        self.assertIn("délta d'usage OpenCodex", charge["provenance_servie"]["preuve"])
+
+    def test_preflight_zai_recoit_la_demande_canonique_non_prefixee(self):
+        # Rejoue le défaut V1-R2 : extraire '--model' du descripteur scellé
+        # transmettait 'zai/glm-5.3' à _observer_route_zai qui préfixe
+        # lui-même 'zai/', d'où la cible fausse 'zai/zai/glm-5.3'
+        self._preparer()
+        demandes_observees: list[str] = []
+        origine = M._observer_route_zai
+
+        def _observer_capture(modele_demande: str) -> dict:
+            demandes_observees.append(modele_demande)
+            return {
+                "verdict": "READY",
+                "cause": None,
+                "fait": "double local READY",
+            }
+
+        M._observer_route_zai = _observer_capture
+        self.addCleanup(setattr, M, "_observer_route_zai", origine)
+        self._sorties_sonde_usage = [
+            b'{"requests": []}',
+            (
+                b'{"requests": [{"provider": "zai", "model": "zai/glm-5.3",'
+                b' "reasoning_effort": "high"}]}'
+            ),
+        ]
+        self._installer_popen(
+            {"codex": (b"sortie candidate zai\n", b"", 0)}
+        )
+        code, sortie = self._appeler_prive(
+            ["acquerir", "--recuperation", "--configuration", "zai-glm-5-3"]
+        )
+        self.assertEqual(code, 0, sortie)
+        self.assertEqual(demandes_observees, ["glm-5.3"])
+        # Le descripteur candidat exécuté reste exactement celui scellé :
+        # '--model zai/glm-5.3', seul l'espace isolé est substitué
+        espace = (
+            self.racine_privee
+            / M.RELATIF_EXECUTION_R2
+            / "runtime"
+            / "ACQ-V1-ZAI-GLM-5-3-002"
+            / "espace"
+        )
+        attendu = [
+            element if element != "__ISOLATED_WORKSPACE__" else str(espace)
+            for element in ARGV_ZAI
+        ]
+        self.assertEqual(self.appels[1]["argv"], attendu)
+
+    def test_identite_absente_reste_inconnu_hold_avec_recu(self):
+        self._preparer()
+        self._observer_ready()
+        self._installer_popen(
+            {"agy": (b"sortie candidate sans metadonnee\n", b"", 0)}
+        )
+        code, sortie = self._appeler_prive(
+            [
+                "acquerir",
+                "--recuperation",
+                "--configuration",
+                "antigravity-gemini-3-7-flash",
+            ]
+        )
+        self.assertEqual(code, 0, sortie)
+        self.assertIn("identité servie : INCONNU · disposition HOLD", sortie)
+        self.assertIn("HOLD : provenance servie non attribuable", sortie)
+        recus = self._recus_002()
+        self.assertEqual(len(recus), 1)
+        charge = recus[0]["payload"]
+        self.assertEqual(charge["provenance_servie"], "INCONNU")
+        identite = charge["recuperation"]["identite_servie"]
+        self.assertEqual(identite["statut"], "INCONNU")
+        self.assertEqual(identite["disposition"], "HOLD")
+        self.assertIsNone(identite["incident"])
+        self.assertEqual(charge["execution"]["etat"], "OBSERVED")
+
+    def test_validation_et_restitution_couvrent_le_recu_002(self):
+        self._preparer()
+        self._observer_ready()
+        for relatif in (M.CHEMIN_VALIDATEUR,):
+            destination = self.racine / relatif
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(RACINE / relatif, destination)
+        self._installer_popen(
+            {
+                "agy": (
+                    "sortie candidate\nmodel: gemini-3.7-flash-high\n".encode(
+                        "utf-8"
+                    ),
+                    b"",
+                    0,
+                )
+            }
+        )
+        code, _ = self._appeler_prive(
+            [
+                "acquerir",
+                "--recuperation",
+                "--configuration",
+                "antigravity-gemini-3-7-flash",
+            ]
+        )
+        self.assertEqual(code, 0)
+        # Frontière système simulée à un CPython 3.12 concret, à l'identique
+        # de la fixture de qualification : le pin de production reste intact
+        with (
+            mock.patch.object(
+                M.platform, "python_implementation", return_value="CPython"
+            ),
+            mock.patch.object(
+                M.platform, "python_version", return_value="3.12.13"
+            ),
+            mock.patch.object(
+                M.platform,
+                "python_version_tuple",
+                return_value=("3", "12", "13"),
+            ),
+        ):
+            code, sortie = self._appeler(["valider"])
+        self.assertEqual(code, 0, sortie)
+        registre = json.loads(
+            (self.racine / M.CHEMIN_REGISTRE_VALIDATION).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(len(registre["entrees"]), 3)
+        creneaux = [entree["creneau"] for entree in registre["entrees"]]
+        self.assertEqual(
+            sum(
+                1
+                for creneau in creneaux
+                if creneau.endswith("ACQ-V1-ANTIGRAVITY-GEMINI-3-7-FLASH-002")
+            ),
+            1,
+        )
+        # Le verrou R1 reste reconstructible : les épingles -001 ne sont
+        # jamais réécrites par les entrées -002 du registre régénéré
+        code, _ = self._appeler(["preparer-recuperation"])
+        self.assertEqual(code, 0)
+        code, sortie = self._appeler(["restituer"])
+        self.assertEqual(code, 0, sortie)
+        code, sortie = self._appeler(["verifier-restitution"])
+        self.assertEqual(code, 0, sortie)
+
+    def test_trace_zai_sans_delta_ou_avec_fallback(self):
+        trace, preuve = M._trace_zai_recuperation("ACQ-V1-ZAI-GLM-5-3-002", [], [])
+        self.assertIsNone(trace)
+        self.assertIsNone(preuve)
+        enregistrement = {
+            "provider": "zai",
+            "model": "zai/glm-5.3",
+            "reasoning_effort": "high",
+        }
+        autre = {"provider": "openai", "model": "gpt-5.6"}
+        trace, _ = M._trace_zai_recuperation(
+            "ACQ-V1-ZAI-GLM-5-3-002", [], [enregistrement, autre]
+        )
+        self.assertEqual(trace["tentatives"], 2)
+        self.assertEqual(trace["fallback"], "OBSERVE")
+        verdict = M.evaluer_identite_servie_recuperation("zai-glm-5-3", trace)
+        self.assertEqual(verdict["statut"], "INCONNU")
+        self.assertEqual(verdict["incident"], "IDENTITY_MISMATCH")
+        trace, _ = M._trace_zai_recuperation(
+            "ACQ-V1-ZAI-GLM-5-3-002",
+            [enregistrement],
+            [enregistrement, dict(enregistrement)],
+        )
+        verdict = M.evaluer_identite_servie_recuperation("zai-glm-5-3", trace)
+        self.assertEqual(verdict["statut"], "OBSERVED")
 
 
 if __name__ == "__main__":
