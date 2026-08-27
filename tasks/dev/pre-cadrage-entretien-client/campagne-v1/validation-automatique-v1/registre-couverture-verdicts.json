@@ -1,9 +1,9 @@
 {
   "couverture": {
-    "acquisitions_officielles": 2,
-    "sorties_candidates": 0,
+    "acquisitions_officielles": 4,
+    "sorties_candidates": 2,
     "verdicts": {
-      "FAIL": 0,
+      "FAIL": 2,
       "HARNESS_ERROR": 0,
       "PASS": 0
     }
@@ -26,6 +26,54 @@
       "recu_sha256": "0f081930b493ae9b990d7422b15763fff9337ae99a1344362835c39cbf0c6481",
       "sortie_candidate": "ABSENTE",
       "verdict": null
+    },
+    {
+      "cause_recue": null,
+      "configuration_id": "antigravity-gemini-3-7-flash",
+      "creneau": "antigravity-gemini-3-7-flash:20f0be450640704b0c467eee57ca2ea58a4d629e63eba3efccbc6f68440e07e4:ACQ-V1-ANTIGRAVITY-GEMINI-3-7-FLASH-002",
+      "recu": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/recus-v1/1b8692b44a5680d280a54cec31f7b48c1688cf0757355947b6576263d5fb5c94.json",
+      "recu_sha256": "a4f31c7f53b275baa934feac69c194624cdfbb47e8a6ba8a9c2a271b8425e071",
+      "sortie_candidate": "PRESENTE",
+      "verdict": {
+        "empreinte_candidate": "d8597f66db8004847ff72fdd30a80b99e2ba76160545e1a071aa96581614762f",
+        "origine": "CANDIDATE_ERROR",
+        "porte_en_cause": "G-001",
+        "portes": [
+          [
+            "G-005",
+            true
+          ],
+          [
+            "G-001",
+            false
+          ]
+        ],
+        "statut": "FAIL"
+      }
+    },
+    {
+      "cause_recue": null,
+      "configuration_id": "zai-glm-5-3",
+      "creneau": "zai-glm-5-3:20f0be450640704b0c467eee57ca2ea58a4d629e63eba3efccbc6f68440e07e4:ACQ-V1-ZAI-GLM-5-3-002",
+      "recu": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/recus-v1/dff58875d0412f275dfc1d781617214e2557ae1eeaf9177885f50b05a8591c2f.json",
+      "recu_sha256": "10d67b67250dd3dfe0be1445a12f683e922fe0069077a97aa73d361e67c30612",
+      "sortie_candidate": "PRESENTE",
+      "verdict": {
+        "empreinte_candidate": "0980522e9481243e2e327e40bd1dc5ebcb2a7ad0daea38ece612ca162e5e45a9",
+        "origine": "CANDIDATE_ERROR",
+        "porte_en_cause": "G-001",
+        "portes": [
+          [
+            "G-005",
+            true
+          ],
+          [
+            "G-001",
+            false
+          ]
+        ],
+        "statut": "FAIL"
+      }
     }
   ],
   "interpreteur": {

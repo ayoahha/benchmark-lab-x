@@ -450,6 +450,82 @@ _CLES_CHARGE_RECU = {
     "execution",
     "provenance_servie",
 }
+# Table additive des seuls reçus de récupération V1-R2 : présente uniquement
+# sur les créneaux -002, jamais sur les reçus historiques
+_CLES_RECUPERATION_RECU = {
+    "tranche",
+    "autorite",
+    "acquisition_id",
+    "identite_servie",
+}
+_CLES_IDENTITE_SERVIE_RECU = {
+    "statut",
+    "disposition",
+    "incident",
+    "champs_divergents",
+    "cause",
+}
+
+
+def _valider_recuperation_recu(valeur: object, configuration_id: str) -> dict:
+    """Valide la table additive de récupération d'un reçu -002 et rend la
+    table ; toute divergence du contrat fermé V1-R2 est refusée."""
+    table = _exiger_cles("recuperation", valeur, _CLES_RECUPERATION_RECU)
+    if table["tranche"] != TRANCHE_RECUPERATION_EXECUTION:
+        raise ErreurRecu(
+            f"champ 'recuperation.tranche' : '{TRANCHE_RECUPERATION_EXECUTION}' attendu"
+        )
+    if table["autorite"] != AUTORITE_RECUPERATION:
+        raise ErreurRecu(
+            f"champ 'recuperation.autorite' : '{AUTORITE_RECUPERATION}' attendu"
+        )
+    creneaux = {
+        CONFIGURATION_ANTIGRAVITY_RECUPERATION: CRENEAU_ANTIGRAVITY_RECUPERATION,
+        CONFIGURATION_ZAI_RECUPERATION: CRENEAU_ZAI_RECUPERATION,
+    }
+    attendu = creneaux.get(configuration_id)
+    if attendu is None or table["acquisition_id"] != attendu:
+        raise ErreurRecu(
+            "champ 'recuperation.acquisition_id' : créneau -002 exact de la "
+            f"configuration '{configuration_id}' attendu"
+        )
+    identite = _exiger_cles(
+        "recuperation.identite_servie",
+        table["identite_servie"],
+        _CLES_IDENTITE_SERVIE_RECU,
+    )
+    if identite["statut"] not in ("OBSERVED", INCONNU):
+        raise ErreurRecu(
+            "champ 'recuperation.identite_servie.statut' : OBSERVED ou "
+            "INCONNU attendu"
+        )
+    disposition_attendue = (
+        "OBSERVED" if identite["statut"] == "OBSERVED" else "HOLD"
+    )
+    if identite["disposition"] != disposition_attendue:
+        raise ErreurRecu(
+            "champ 'recuperation.identite_servie.disposition' : "
+            f"'{disposition_attendue}' attendu pour le statut "
+            f"'{identite['statut']}'"
+        )
+    if identite["incident"] is not None and identite["incident"] not in INCIDENTS_V1:
+        raise ErreurRecu(
+            "champ 'recuperation.identite_servie.incident' : None ou "
+            f"vocabulaire fermé ({' | '.join(INCIDENTS_V1)}) attendu"
+        )
+    if not isinstance(identite["champs_divergents"], list) or any(
+        not isinstance(champ, str) for champ in identite["champs_divergents"]
+    ):
+        raise ErreurRecu(
+            "champ 'recuperation.identite_servie.champs_divergents' : liste "
+            "de chaînes attendue"
+        )
+    if identite["cause"] is not None and not isinstance(identite["cause"], str):
+        raise ErreurRecu(
+            "champ 'recuperation.identite_servie.cause' : None ou chaîne "
+            "attendue"
+        )
+    return table
 
 
 def _valider_recu(enveloppe: object) -> dict:
@@ -463,7 +539,16 @@ def _valider_recu(enveloppe: object) -> dict:
     )
     if adresse["algorithm"] != "SHA256":
         raise ErreurRecu("champ 'content_address.algorithm' : 'SHA256' attendu")
-    charge = _exiger_cles("payload", recu["payload"], _CLES_CHARGE_RECU)
+    charge = recu["payload"]
+    if not isinstance(charge, dict) or set(charge) not in (
+        _CLES_CHARGE_RECU,
+        _CLES_CHARGE_RECU | {"recuperation"},
+    ):
+        raise ErreurRecu(
+            f"champ 'payload' : clés exactes {sorted(_CLES_CHARGE_RECU)} "
+            "attendues, plus la seule table additive 'recuperation' des "
+            "créneaux -002"
+        )
     if adresse["sha256"] != adresse_canonique(charge):
         raise ErreurRecu(
             "champ 'content_address.sha256' : adresse de contenu divergente du "
@@ -487,11 +572,24 @@ def _valider_recu(enveloppe: object) -> dict:
     ):
         raise ErreurRecu("champ 'configuration.identifiant' : slug stable attendu")
     _exiger_sha256_recu("configuration.sha256", configuration["sha256"])
-    creneau_attendu = f"{configuration['identifiant']}:{stimulus['sha256']}"
+    recuperation = charge.get("recuperation")
+    if recuperation is not None:
+        table_recuperation = _valider_recuperation_recu(
+            recuperation, configuration["identifiant"]
+        )
+        creneau_attendu = (
+            f"{configuration['identifiant']}:{stimulus['sha256']}:"
+            f"{table_recuperation['acquisition_id']}"
+        )
+        derivation = (
+            "'<configuration_id>:<sha256 du stimulus>:<acquisition_id -002>'"
+        )
+    else:
+        creneau_attendu = f"{configuration['identifiant']}:{stimulus['sha256']}"
+        derivation = "'<configuration_id>:<sha256 du stimulus>'"
     if charge["creneau"] != creneau_attendu:
         raise ErreurRecu(
-            "champ 'creneau' : dérivation exacte "
-            "'<configuration_id>:<sha256 du stimulus>' attendue"
+            f"champ 'creneau' : dérivation exacte {derivation} attendue"
         )
     for nom in ("plan_declare", "interface_declaree"):
         declare = _exiger_cles(nom, charge[nom], {"etat", "champs"})
@@ -516,6 +614,15 @@ def _valider_recu(enveloppe: object) -> dict:
         )
     _valider_execution_recu(charge["execution"])
     _valider_observable_sans_preuve("provenance_servie", charge["provenance_servie"])
+    if recuperation is not None:
+        statut = recuperation["identite_servie"]["statut"]
+        provenance_observee = isinstance(charge["provenance_servie"], dict)
+        if (statut == "OBSERVED") != provenance_observee:
+            raise ErreurRecu(
+                "champ 'recuperation.identite_servie.statut' : incohérent "
+                "avec 'provenance_servie' ; une identité OBSERVED exige une "
+                "provenance prouvée et réciproquement"
+            )
     return recu
 
 
@@ -5290,10 +5397,55 @@ def _article_acquisition_officielle(
             f"{_echapper(execution['fait'])}</p>" + preuve
         )
     predecesseur = charge["predecesseur_adresse_contenu"]
+    recuperation = charge.get("recuperation")
+    if recuperation is None:
+        entete = (
+            "acquisition officielle exécutée une seule fois sous D-V1-04, "
+            "sans retry ni fallback."
+        )
+        lignes_recuperation = ""
+    else:
+        identite = recuperation["identite_servie"]
+        entete = (
+            "acquisition de récupération "
+            f"<code>{_echapper(recuperation['acquisition_id'])}</code> "
+            "exécutée une seule fois sous "
+            f"{_echapper(recuperation['autorite'])} (tranche "
+            f"{_echapper(recuperation['tranche'])}), sans retry ni fallback."
+        )
+        complements = ""
+        if identite["incident"] is not None:
+            complements += (
+                f" · incident <code>{_echapper(identite['incident'])}</code>"
+            )
+        if identite["champs_divergents"]:
+            complements += (
+                " · champs divergents <code>"
+                f"{_echapper(', '.join(identite['champs_divergents']))}</code>"
+            )
+        if identite["cause"] is not None:
+            complements += f" · cause {_echapper(identite['cause'])}"
+        lignes_recuperation = (
+            "<p>identité servie de récupération : statut "
+            f"<code>{_echapper(identite['statut'])}</code> · disposition "
+            f"<code>{_echapper(identite['disposition'])}</code>"
+            f"{complements}</p>"
+        )
+    provenance = charge["provenance_servie"]
+    if isinstance(provenance, dict):
+        texte_provenance = (
+            "OBSERVED — "
+            + " · ".join(
+                f"{_echapper(cle)} <code>{_echapper(valeur)}</code>"
+                for cle, valeur in sorted(provenance["valeur"].items())
+            )
+            + f" · preuve <code>{_echapper(provenance['preuve'])}</code>"
+        )
+    else:
+        texte_provenance = f"<code>{_echapper(provenance)}</code>"
     contenu = (
         f"<p><strong>{_echapper(charge['configuration']['identifiant'])}</strong> — "
-        "acquisition officielle exécutée une seule fois sous D-V1-04, sans "
-        "retry ni fallback. Ce reçu restitue une exécution et ses faits ; il "
+        f"{entete} Ce reçu restitue une exécution et ses faits ; il "
         "n'établit aucune acceptabilité officielle et aucune conclusion.</p>"
         f"<p>reçu <code>{relatif}</code> · SHA-256 du fichier "
         f"<code>{sha_fichier}</code></p>"
@@ -5309,8 +5461,9 @@ def _article_acquisition_officielle(
         f"<p>requête expurgée : <code>{_echapper(' '.join(charge['requete']['argv_resolu']))}"
         "</code></p>"
         + lignes_execution
+        + lignes_recuperation
         + f"<p>quota observé : <code>{_echapper(charge['quota_observe'])}</code> · "
-        f"identité servie : <code>{_echapper(charge['provenance_servie'])}</code></p>"
+        f"identité servie : {texte_provenance}</p>"
         + _span_source(relatif, sha_fichier, SECTION_RECU_OFFICIEL)
     )
     return _article(
@@ -7570,7 +7723,10 @@ def _construire_verrou_recuperation(racine: Path) -> dict:
         )
     references_recus: dict[str, tuple[str, str]] = {}
     for entree in registre_charge[1]["entrees"]:
-        if entree["configuration_id"] in (
+        # Seules les entrées -001 (créneau à deux segments) épinglent la
+        # chaîne historique : les entrées de récupération -002 portent un
+        # créneau à trois segments et ne réécrivent jamais ces épingles
+        if entree["creneau"].count(":") == 1 and entree["configuration_id"] in (
             CONFIGURATION_ANTIGRAVITY_RECUPERATION,
             CONFIGURATION_ZAI_RECUPERATION,
         ):
@@ -7721,10 +7877,179 @@ def _verifier_verrou_recuperation(
     )
 
 
+# Contrat fermé de l'Issue #133 : exécution des acquisitions de récupération
+# sous l'autorité propriétaire additive D-V1-05 ; le verrou R1 reste
+# byte-identique et conserve NOT_GRANTED, cet artefact séparé porte seul le GO
+SCHEMA_AUTORISATION_RECUPERATION = "campagne-v1-autorisation-recuperation/v1"
+CHEMIN_AUTORISATION_RECUPERATION = (
+    _RACINE_CAMPAGNE_V1
+    / "recuperation-harnais-v1"
+    / "autorisation-recuperation-v1.json"
+)
+SECTION_AUTORISATION_RECUPERATION = (
+    "autorisation de récupération D-V1-05 versionnée"
+)
+ISSUE_RECUPERATION_EXECUTION = (
+    "https://github.com/ayoahha/benchmark-lab-x/issues/133"
+)
+TRANCHE_RECUPERATION_EXECUTION = "V1-R2"
+AUTORITE_RECUPERATION = "D-V1-05"
+JETON_AUTORITE_RECUPERATION = (
+    "D_V1_05 = AUTHORIZE:CANDIDATES_HIGH_COMMON; AGENTS_MEDIUM"
+)
+URL_COMMENTAIRE_RECUPERATION = (
+    "https://github.com/ayoahha/benchmark-lab-x/issues/133"
+    "#issuecomment-5439130978"
+)
+AUTEUR_COMMENTAIRE_RECUPERATION = "ayoahha"
+ASSOCIATION_COMMENTAIRE_RECUPERATION = "OWNER"
+DATE_COMMENTAIRE_RECUPERATION = "2026-08-27"
+SHA256_COMMENTAIRE_RECUPERATION = (
+    "fca4d1d29b406e969613a269a46866b59f34364c5fb121db728fe6a61fff347f"
+)
+EMPREINTE_VERROU_RECUPERATION = (
+    "d9d68f69a29826d9caa9db70d567df99c9e971ad8eaded6f15501dc71994f233"
+)
+EFFORT_CANDIDAT_RECUPERATION = "high"
+RELATIF_EXECUTION_R2 = Path("v1-execution") / "r2"
+# Sonde read-only du plan de contrôle OpenCodex, seule source de trace
+# attribuable Z.AI : jamais générative, jamais mutatrice
+SONDE_TRACE_ZAI = ("opencodex", "observe", "usage")
+_CLES_EFFORT_TRACE_ZAI = (
+    "effort_effectif",
+    "reasoning_effort",
+    "model_reasoning_effort",
+    "reasoningEffort",
+    "effort",
+)
+
+
+def _structure_autorisation_recuperation() -> dict:
+    """Contenu canonique fermé de l'autorisation additive D-V1-05."""
+    return {
+        "schema_version": SCHEMA_AUTORISATION_RECUPERATION,
+        "autorite": AUTORITE_RECUPERATION,
+        "jeton": JETON_AUTORITE_RECUPERATION,
+        "commentaire": {
+            "url": URL_COMMENTAIRE_RECUPERATION,
+            "auteur": AUTEUR_COMMENTAIRE_RECUPERATION,
+            "association": ASSOCIATION_COMMENTAIRE_RECUPERATION,
+            "date": DATE_COMMENTAIRE_RECUPERATION,
+            "sha256_corps": SHA256_COMMENTAIRE_RECUPERATION,
+        },
+        "verrou_recuperation": {
+            "chemin": CHEMIN_VERROU_RECUPERATION.as_posix(),
+            "sha256": EMPREINTE_VERROU_RECUPERATION,
+        },
+        "stimulus": {
+            "chemin": CHEMIN_STIMULUS,
+            "sha256": EMPREINTES_SOURCES_HISTORIQUES_RECUPERATION[
+                CHEMIN_STIMULUS
+            ],
+        },
+        "portee": {
+            "issue": ISSUE_RECUPERATION_EXECUTION,
+            "tranche": TRANCHE_RECUPERATION_EXECUTION,
+            "acquisitions": [
+                {
+                    "acquisition_id": CRENEAU_ANTIGRAVITY_RECUPERATION,
+                    "configuration_id": CONFIGURATION_ANTIGRAVITY_RECUPERATION,
+                },
+                {
+                    "acquisition_id": CRENEAU_ZAI_RECUPERATION,
+                    "configuration_id": CONFIGURATION_ZAI_RECUPERATION,
+                },
+            ],
+            "appels_fournisseur_max": 2,
+            "appels_par_creneau": 1,
+            "consommation_quota": "ABONNEMENTS_EXISTANTS",
+            "depense_incrementale": 0,
+            "reprises_automatiques": 0,
+            "reprises_manuelles": 0,
+            "fallback": "NONE",
+            "effort_candidat": EFFORT_CANDIDAT_RECUPERATION,
+        },
+    }
+
+
+def _nommer_divergence_autorisation(
+    existant: object, attendu: dict, prefixe: str = ""
+) -> str:
+    """Champ fautif exact d'une autorisation de récupération divergente."""
+    if not isinstance(existant, dict):
+        return prefixe.rstrip(".") or "schema_version"
+    for cle in sorted(set(attendu) | set(existant)):
+        if existant.get(cle) == attendu.get(cle):
+            continue
+        chemin = f"{prefixe}{cle}"
+        if cle == "acquisitions":
+            return _nommer_divergence_entrees(
+                existant.get(cle), attendu[cle], chemin, "configuration_id"
+            )
+        if isinstance(attendu.get(cle), dict) and isinstance(
+            existant.get(cle), dict
+        ):
+            return _nommer_divergence_autorisation(
+                existant[cle], attendu[cle], f"{chemin}."
+            )
+        return chemin
+    return prefixe.rstrip(".") or "schema_version"
+
+
+def _verifier_autorisation_recuperation(
+    chemin: Path, octets_attendus: bytes
+) -> None:
+    """Vérifie l'octet existant de l'autorisation sans réécriture ; toute
+    divergence nomme le champ fautif."""
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurRecuperation(
+            "autorisation de récupération : fichier régulier non symbolique "
+            "attendu"
+        )
+    octets = chemin.read_bytes()
+    if octets == octets_attendus:
+        return
+    try:
+        existant = json.loads(octets.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        existant = None
+    champ = _nommer_divergence_autorisation(
+        existant, json.loads(octets_attendus.decode("utf-8"))
+    )
+    raise ErreurRecuperation(
+        "autorisation de récupération divergente : champ fautif "
+        f"'{champ}' (LOCKED_ARTIFACT_CHANGED) : aucune réécriture"
+    )
+
+
+def _charger_autorisation_recuperation(racine: Path) -> dict:
+    """Autorisation D-V1-05 validée fail-closed : octets canoniques exacts,
+    verrou R1 byte-identique à l'empreinte figée d9d68f69."""
+    chemin = racine / CHEMIN_AUTORISATION_RECUPERATION
+    if not os.path.lexists(chemin):
+        raise ErreurRecuperation(
+            "AUTORITE_ABSENTE : autorisation D-V1-05 non matérialisée "
+            f"({CHEMIN_AUTORISATION_RECUPERATION.as_posix()})"
+        )
+    attendu = _structure_autorisation_recuperation()
+    _verifier_autorisation_recuperation(chemin, octets_canoniques(attendu))
+    verrou = racine / CHEMIN_VERROU_RECUPERATION
+    if not verrou.is_file() or _sha256_fichier(verrou) != (
+        EMPREINTE_VERROU_RECUPERATION
+    ):
+        raise ErreurRecuperation(
+            "verrou R1 absent ou divergent de l'empreinte autorisée "
+            f"{EMPREINTE_VERROU_RECUPERATION} (LOCKED_ARTIFACT_CHANGED)"
+        )
+    return attendu
+
+
 def preparer_recuperation(racine: Path) -> int:
-    """Matérialise une seule fois le verrou additif de récupération V1-R1,
-    ou vérifie l'octet existant sans le réécrire. N'exécute aucune commande
-    externe de fournisseur, de modèle ou de harnais."""
+    """Matérialise une seule fois le verrou additif de récupération V1-R1
+    puis l'autorisation additive D-V1-05, ou vérifie les octets existants
+    sans les réécrire. N'exécute aucune commande externe de fournisseur, de
+    modèle ou de harnais."""
     try:
         attendu = _construire_verrou_recuperation(racine)
     except ErreurRecuperation as erreur:
@@ -7737,28 +8062,41 @@ def preparer_recuperation(racine: Path) -> int:
         )
         return 2
     octets_attendus = octets_canoniques(attendu)
+    autorisation_attendue = octets_canoniques(
+        _structure_autorisation_recuperation()
+    )
     chemin = racine / CHEMIN_VERROU_RECUPERATION
+    chemin_autorisation = racine / CHEMIN_AUTORISATION_RECUPERATION
     try:
-        if os.path.lexists(chemin):
-            _verifier_verrou_recuperation(chemin, octets_attendus)
-        else:
-            chemin.parent.mkdir(parents=True, exist_ok=True)
+        for cible, octets, verifier, nom_artefact in (
+            (chemin, octets_attendus, _verifier_verrou_recuperation, "verrou"),
+            (
+                chemin_autorisation,
+                autorisation_attendue,
+                _verifier_autorisation_recuperation,
+                "autorisation",
+            ),
+        ):
+            if os.path.lexists(cible):
+                verifier(cible, octets)
+                continue
+            cible.parent.mkdir(parents=True, exist_ok=True)
             try:
                 descripteur = os.open(
-                    chemin, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
+                    cible, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
                 )
             except FileExistsError as erreur:
                 # Course de création distincte : aucune réparation ni
                 # réécriture dans la même invocation ; l'invocation
                 # suivante vérifiera l'octet existant.
                 raise ErreurRecuperation(
-                    "création concurrente détectée : le verrou de "
+                    f"création concurrente détectée : le {nom_artefact} de "
                     "récupération existe déjà (LOCKED_ARTIFACT_CHANGED) : "
                     "aucune réécriture, une nouvelle invocation vérifiera "
                     "l'octet existant"
                 ) from erreur
             with os.fdopen(descripteur, "wb") as flux:
-                flux.write(octets_attendus)
+                flux.write(octets)
     except ErreurRecuperation as erreur:
         print(f"ECHEC {erreur}")
         return 2
@@ -7770,6 +8108,7 @@ def preparer_recuperation(racine: Path) -> int:
         )
         return 2
     empreinte = hashlib.sha256(octets_attendus).hexdigest()
+    empreinte_autorisation = hashlib.sha256(autorisation_attendue).hexdigest()
     print(
         "verrou de récupération vérifié : "
         f"{CHEMIN_VERROU_RECUPERATION.as_posix()}"
@@ -7779,10 +8118,18 @@ def preparer_recuperation(racine: Path) -> int:
         "creneaux_executes : 0 · reprises_executees : 0 · fallback : NONE"
     )
     print(
-        "AUTORITE_ABSENTE : autorite_execution=NOT_GRANTED · créneaux "
-        f"{CRENEAU_ANTIGRAVITY_RECUPERATION} et {CRENEAU_ZAI_RECUPERATION}"
+        "autorisation additive vérifiée : "
+        f"{CHEMIN_AUTORISATION_RECUPERATION.as_posix()}"
+    )
+    print(
+        f"AUTORITE_EXECUTION : {AUTORITE_RECUPERATION} (additive, verrou "
+        "NOT_GRANTED byte-identique) · créneaux "
+        f"{CRENEAU_ANTIGRAVITY_RECUPERATION} et {CRENEAU_ZAI_RECUPERATION} · "
+        f"effort candidat commun {EFFORT_CANDIDAT_RECUPERATION} · reprises "
+        "0 · fallback NONE · dépense incrémentale 0"
     )
     print(f"empreinte SHA-256 : {empreinte}")
+    print(f"empreinte SHA-256 de l'autorisation : {empreinte_autorisation}")
     return 0
 
 
@@ -7791,21 +8138,540 @@ def _refus_recuperation(fait: str) -> int:
     return 2
 
 
-def acquerir_recuperation(racine: Path, identifiant: str) -> int:
-    """Refus unique de la tranche V1-R1 : aucune autorité d'exécution de
-    récupération n'existe. Rend 2 avec AUTORITE_ABSENTE avant tout
-    processus, espace de tentative, journal ou reçu ; ne résout et
-    n'exécute aucun fournisseur."""
+def _enregistrements_usage_opencodex(texte: str) -> list[dict] | None:
+    """Enregistrements fournisseur/modèle lisibles de la sonde d'usage
+    OpenCodex : None quand aucun JSON n'est lisible, liste sinon.
+
+    Projection fermée : seuls les objets portant à la fois 'model' et
+    'provider' (ou 'fournisseur') sont retenus ; tout le reste est ignoré
+    sans invention de valeur."""
+    documents: list[object] = []
+    try:
+        documents.append(json.loads(texte))
+    except json.JSONDecodeError:
+        for ligne in texte.splitlines():
+            ligne = ligne.strip()
+            if not ligne:
+                continue
+            try:
+                documents.append(json.loads(ligne))
+            except json.JSONDecodeError:
+                continue
+    if not documents:
+        return None
+    enregistrements: list[dict] = []
+
+    def visiter(valeur: object) -> None:
+        if isinstance(valeur, dict):
+            if "model" in valeur and (
+                "provider" in valeur or "fournisseur" in valeur
+            ):
+                enregistrements.append(valeur)
+            for sous_valeur in valeur.values():
+                visiter(sous_valeur)
+        elif isinstance(valeur, list):
+            for element in valeur:
+                visiter(element)
+
+    for document in documents:
+        visiter(document)
+    return enregistrements
+
+
+def _trace_zai_recuperation(
+    acquisition_id: str,
+    avant: list[dict] | None,
+    apres: list[dict] | None,
+) -> tuple[dict | None, str | None]:
+    """Trace OpenCodex attribuable à la tentative unique par différence
+    stricte avant/après : seuls les enregistrements nouveaux comptent.
+
+    Rend (trace, preuve) ou (None, None) sans délta attribuable. Le nombre
+    de tentatives est le compte exact des enregistrements nouveaux ; un
+    enregistrement nouveau hors du couple zai/glm-5.3 rend le fallback
+    observé divergent au lieu de NONE. Aucun champ absent n'est inventé."""
+    if apres is None:
+        return None, None
+    connus: dict[str, int] = {}
+    for enregistrement in avant or []:
+        adresse = adresse_canonique(enregistrement)
+        connus[adresse] = connus.get(adresse, 0) + 1
+    nouveaux: list[dict] = []
+    vus: dict[str, int] = {}
+    for enregistrement in apres:
+        adresse = adresse_canonique(enregistrement)
+        vus[adresse] = vus.get(adresse, 0) + 1
+        if vus[adresse] > connus.get(adresse, 0):
+            nouveaux.append(enregistrement)
+    if not nouveaux:
+        return None, None
+
+    def _modele(enregistrement: dict) -> str:
+        valeur = str(enregistrement.get("model"))
+        prefixe = f"{FOURNISSEUR_ZAI}/"
+        return valeur[len(prefixe):] if valeur.startswith(prefixe) else valeur
+
+    def _fournisseur(enregistrement: dict) -> str:
+        return str(
+            enregistrement.get("provider", enregistrement.get("fournisseur"))
+        )
+
+    correspondants = [
+        enregistrement
+        for enregistrement in nouveaux
+        if _modele(enregistrement) == "glm-5.3"
+        and _fournisseur(enregistrement) == FOURNISSEUR_ZAI
+    ]
+    reference = correspondants[0] if correspondants else nouveaux[0]
+    trace: dict = {
+        "tentative_id": acquisition_id,
+        "fournisseur": _fournisseur(reference),
+        "modele": _modele(reference),
+        "tentatives": len(nouveaux),
+        "fallback": (
+            "NONE" if len(nouveaux) == len(correspondants) else "OBSERVE"
+        ),
+    }
+    for cle in _CLES_EFFORT_TRACE_ZAI:
+        if cle in reference:
+            trace["effort_effectif"] = str(reference[cle])
+            break
+    # Preuve projetée sur les seuls champs fermés : la sortie brute des
+    # sondes reste dans l'espace réel privé, jamais dans le reçu public
+    projection = [
+        {
+            "fournisseur": _fournisseur(enregistrement),
+            "modele": _modele(enregistrement),
+            **{
+                "effort": str(enregistrement[cle])
+                for cle in _CLES_EFFORT_TRACE_ZAI
+                if cle in enregistrement
+            },
+        }
+        for enregistrement in nouveaux
+    ]
+    preuve = (
+        "délta d'usage OpenCodex après la tentative unique : "
+        + octets_canoniques(projection).decode("utf-8").strip()
+    )
+    return trace, preuve
+
+
+def _trace_antigravity_recuperation(
+    acquisition_id: str, stdout: str, stderr: str
+) -> tuple[dict | None, str | None]:
+    """Métadonnée d'identité servie émise par la tentative Antigravity :
+    première ligne 'model:' de la sortie capturée, ou (None, None)."""
+    for texte in (stdout, stderr):
+        correspondance = _MOTIF_IDENTITE_SERVIE.search(texte)
+        if correspondance is not None:
+            return (
+                {
+                    "tentative_id": acquisition_id,
+                    "modele": correspondance.group(1),
+                },
+                correspondance.group(0).strip(),
+            )
+    return None, None
+
+
+def acquerir_recuperation(
+    racine: Path, identifiant: str, racine_privee: Path | None = None
+) -> int:
+    """Exécute une seule fois le créneau -002 autorisé par D-V1-05.
+
+    Fail-closed : autorisation additive, verrou R1, sources historiques,
+    reçus, journal R2 et espace de tentative sont vérifiés avant toute
+    résolution d'exécutable ; le préflight non génératif de la route doit
+    rendre READY avant l'unique appel candidat. Aucun retry, aucun
+    fallback, aucune reprise.
+    """
+    if racine_privee is None:
+        racine_privee = RACINE_PRIVEE_PRODUCTION
     if not _MOTIF_SLUG.match(identifiant):
         return _refus_recuperation(
             f"champ 'configuration_id' : '{identifiant}' n'est pas un slug "
             "stable ; identifiant refusé avant toute résolution de chemin"
         )
-    return _refus_recuperation(
-        "AUTORITE_ABSENTE : autorite_execution=NOT_GRANTED pour la "
-        f"récupération '{identifiant}' ; aucun processus fournisseur créé, "
-        "aucun espace de tentative, aucun journal, aucun reçu"
+    try:
+        # L'autorité additive d'abord : son absence rend AUTORITE_ABSENTE
+        # avant toute autre vérification, puis le verrou R1 et les sept
+        # sources historiques sont revérifiés byte-identiques
+        autorisation = _charger_autorisation_recuperation(racine)
+        attendu_verrou = _construire_verrou_recuperation(racine)
+        _verifier_verrou_recuperation(
+            racine / CHEMIN_VERROU_RECUPERATION,
+            octets_canoniques(attendu_verrou),
+        )
+    except ErreurRecuperation as erreur:
+        return _refus_recuperation(
+            f"{erreur} ; aucun processus fournisseur créé, aucun espace de "
+            "tentative, aucun journal, aucun reçu"
+        )
+    except OSError as erreur:
+        return _refus_recuperation(
+            f"artefact de récupération illisible : {erreur} ; aucun "
+            "processus fournisseur créé, aucun espace de tentative, aucun "
+            "journal, aucun reçu"
+        )
+    creneau_autorise = next(
+        (
+            creneau
+            for creneau in autorisation["portee"]["acquisitions"]
+            if creneau["configuration_id"] == identifiant
+        ),
+        None,
     )
+    if creneau_autorise is None:
+        return _refus_recuperation(
+            f"configuration '{identifiant}' hors de la portée D-V1-05 : "
+            "seuls les deux créneaux -002 sont autorisés à acquérir"
+        )
+    acquisition_id = creneau_autorise["acquisition_id"]
+    stimulus_sha = autorisation["stimulus"]["sha256"]
+    creneau = f"{identifiant}:{stimulus_sha}:{acquisition_id}"
+    chemin_configuration = racine / REGISTRE_OFFICIEL / f"{identifiant}.toml"
+    try:
+        configuration = _charger_configuration(chemin_configuration)
+    except ErreurConfiguration as erreur:
+        return _refus_recuperation(str(erreur))
+    sources: dict[str, dict] = {}
+    for nom, relatif in (
+        ("carte", CHEMIN_CARTE),
+        ("paquet", CHEMIN_PAQUET),
+        ("stimulus", CHEMIN_STIMULUS),
+    ):
+        chemin_source = racine / relatif
+        if not chemin_source.is_file():
+            return _refus_recuperation(f"source du reçu absente : {relatif}")
+        sources[nom] = {
+            "chemin": relatif,
+            "sha256": _sha256_fichier(chemin_source),
+        }
+    if sources["stimulus"]["sha256"] != stimulus_sha:
+        return _refus_recuperation(
+            "stimulus divergent de l'autorisation D-V1-05 : aucun appel"
+        )
+    try:
+        etat = _charger_etat(racine)
+    except ErreurRestitution as erreur:
+        return _refus_recuperation(str(erreur))
+    repertoire = _repertoire_recus(racine, etat)
+    try:
+        recus = _charger_recus(repertoire)
+    except ErreurRecu as erreur:
+        return _refus_recuperation(str(erreur))
+    for _, existant in recus:
+        if existant["payload"]["creneau"] == creneau:
+            return _refus_recuperation(
+                f"collision append-only : le créneau '{creneau}' est déjà "
+                "occupé, aucun retry et aucune réécriture"
+            )
+    chemin_journal = (
+        racine_privee / RELATIF_EXECUTION_R2 / NOM_JOURNAL_EXECUTION
+    )
+    try:
+        journal = _charger_journal_execution(chemin_journal)
+    except ErreurJournal as erreur:
+        return _refus_recuperation(f"journal d'exécution R2 : {erreur} ; HOLD")
+    if journal is None:
+        journal = {"schema_version": SCHEMA_JOURNAL_EXECUTION, "entrees": []}
+    for entree in journal["entrees"]:
+        if entree["acquisition_id"] == acquisition_id:
+            return _refus_recuperation(
+                f"créneau '{acquisition_id}' déjà consommé selon le journal "
+                "R2 : aucun second appel du même créneau, aucun retry"
+            )
+        if entree["etat_terminal"] == "IDENTITY_MISMATCH":
+            return _refus_recuperation(
+                "HOLD : une identité servie divergente est journalisée en "
+                "R2, aucun appel suivant avant arbitrage propriétaire"
+            )
+        if entree["descendants"]:
+            return _refus_recuperation(
+                "HOLD : un descendant survivant est journalisé en R2, aucun "
+                "appel suivant avant arbitrage propriétaire"
+            )
+        if entree["recu"] is None:
+            return _refus_recuperation(
+                "HOLD : une tentative sans reçu est journalisée en R2, "
+                "aucun appel suivant avant arbitrage propriétaire"
+            )
+    espace_tentative = (
+        racine_privee / RELATIF_EXECUTION_R2 / NOM_RUNTIME_XS08 / acquisition_id
+    )
+    if os.path.lexists(espace_tentative):
+        return _refus_recuperation(
+            f"espace réel de tentative déjà présent pour '{acquisition_id}' : "
+            "le créneau est consommé, aucun retry et aucun nettoyage"
+        )
+    # Préflight non génératif de la route, exécuté une fois par invocation :
+    # tout verdict différent de READY bloque ce seul créneau avant l'appel
+    # candidat ; l'autre créneau indépendant reste vérifiable
+    if identifiant == CONFIGURATION_ANTIGRAVITY_RECUPERATION:
+        observation = _observer_route_antigravity()
+        descripteur_declare = DESCRIPTEUR_ANTIGRAVITY_RECUPERATION
+    else:
+        # Demande canonique non préfixée de la configuration validée :
+        # _observer_route_zai préfixe lui-même 'zai/', extraire '--model'
+        # du descripteur produirait la cible fausse 'zai/zai/glm-5.3'
+        observation = _observer_route_zai(configuration["modele"]["demande"])
+        descripteur_declare = DESCRIPTEUR_ZAI_RECUPERATION
+    if observation["verdict"] != "READY":
+        return _refus_recuperation(
+            f"PREFLIGHT_NON_READY : créneau '{acquisition_id}' bloqué avant "
+            f"tout appel candidat : verdict {observation['verdict']} · "
+            f"cause {observation['cause']} — {observation['fait']} ; aucun "
+            "processus candidat créé"
+        )
+    stimulus_octets = (racine / CHEMIN_STIMULUS).read_bytes()
+    espace = espace_tentative / "espace"
+    try:
+        tentative = construire_tentative_recuperation(
+            identifiant, stimulus_octets, str(espace)
+        )
+    except ErreurRecuperation as erreur:
+        return _refus_recuperation(str(erreur))
+    argv_execute = tentative["argv"]
+    if any(element in FLAGS_INTERDITS_ACQUISITION for element in argv_execute):
+        return _refus_recuperation(
+            "flag interdit présent dans le descripteur résolu : aucun appel"
+        )
+    espace.mkdir(parents=True, exist_ok=False)
+    sonde_avant = sonde_apres = None
+    if identifiant == CONFIGURATION_ZAI_RECUPERATION:
+        sonde_avant = _executer_borne(
+            list(SONDE_TRACE_ZAI), b"", espace, DELAI_SONDE_PREFLIGHT
+        )
+    entree_stdin = tentative["stdin"] if tentative["stdin"] is not None else b""
+    depart_tentative = time.monotonic()
+    execution, descendants = _executer_acquisition(
+        argv_execute, entree_stdin, espace, DELAI_ACQUISITION_OFFICIELLE
+    )
+    latence_tentative_ms = int((time.monotonic() - depart_tentative) * 1000)
+    trace = preuve_trace = None
+    if execution["etat"] == "OBSERVED":
+        # La sortie texte candidate est conservée dans l'espace réel privé
+        (espace_tentative / "sortie-stdout.txt").write_text(
+            execution["sortie"]["stdout"], encoding="utf-8"
+        )
+        (espace_tentative / "sortie-stderr.txt").write_text(
+            execution["sortie"]["stderr"], encoding="utf-8"
+        )
+        if identifiant == CONFIGURATION_ZAI_RECUPERATION:
+            sonde_apres = _executer_borne(
+                list(SONDE_TRACE_ZAI), b"", espace, DELAI_SONDE_PREFLIGHT
+            )
+            for nom, sonde in (
+                ("avant", sonde_avant),
+                ("apres", sonde_apres),
+            ):
+                if sonde is not None and sonde["etat"] == "OBSERVED":
+                    (espace_tentative / f"trace-usage-{nom}.txt").write_text(
+                        sonde["sortie"]["stdout"]
+                        + sonde["sortie"]["stderr"],
+                        encoding="utf-8",
+                    )
+            avant = (
+                _enregistrements_usage_opencodex(
+                    sonde_avant["sortie"]["stdout"]
+                )
+                if sonde_avant is not None
+                and sonde_avant["etat"] == "OBSERVED"
+                else None
+            )
+            apres = (
+                _enregistrements_usage_opencodex(
+                    sonde_apres["sortie"]["stdout"]
+                )
+                if sonde_apres is not None
+                and sonde_apres["etat"] == "OBSERVED"
+                else None
+            )
+            trace, preuve_trace = _trace_zai_recuperation(
+                acquisition_id, avant, apres
+            )
+        else:
+            trace, preuve_trace = _trace_antigravity_recuperation(
+                acquisition_id,
+                execution["sortie"]["stdout"],
+                execution["sortie"]["stderr"],
+            )
+    identite = evaluer_identite_servie_recuperation(
+        identifiant, trace if execution["etat"] == "OBSERVED" else None
+    )
+    if (
+        execution["etat"] == "OBSERVED"
+        and identite["incident"] == "IDENTITY_MISMATCH"
+    ):
+        execution = {
+            "etat": "INCIDENT",
+            "incident": "IDENTITY_MISMATCH",
+            "fait": (
+                "identité servie divergente de la trace attribuable : "
+                "champs " + ", ".join(identite["champs_divergents"]) + " ; "
+                "le créneau est consommé, HOLD avant tout appel suivant"
+            ),
+            "preuve_attribuable": (
+                preuve_trace
+                if preuve_trace is not None
+                else "trace attribuable divergente"
+            ),
+        }
+    elif (
+        execution["etat"] == "OBSERVED"
+        and execution["code_sortie"] != 0
+        and execution["sortie"]["stdout"] == ""
+    ):
+        # Erreur locale ou wrapper défaillant : sans sortie candidate, le
+        # code client non nul ne prouve aucune observation du fournisseur
+        execution = {
+            "etat": "INCIDENT",
+            "incident": "HARNESS_ERROR",
+            "fait": (
+                f"code client {execution['code_sortie']} sans sortie "
+                "candidate : erreur du harnais local, stderr conservée "
+                "dans l'espace réel privé, créneau consommé sans retry"
+            ),
+        }
+    if identite["statut"] == "OBSERVED" and execution["etat"] == "OBSERVED":
+        provenance: object = {
+            "etat": "OBSERVED",
+            "valeur": dict(
+                _IDENTITE_EXACTE_ANTIGRAVITY
+                if identifiant == CONFIGURATION_ANTIGRAVITY_RECUPERATION
+                else _IDENTITE_EXACTE_ZAI
+            ),
+            "preuve": preuve_trace,
+        }
+    else:
+        provenance = INCONNU
+        if identite["statut"] == "OBSERVED":
+            # Trace exacte mais exécution reclassée en incident : la
+            # provenance reste INCONNU, jamais promue sans sortie candidate
+            identite = {
+                "statut": INCONNU,
+                "disposition": "HOLD",
+                "incident": None,
+                "champs_divergents": [],
+                "cause": (
+                    "trace exacte sans sortie candidate observée : aucune "
+                    "promotion"
+                ),
+            }
+    latence_journal = (
+        execution["latence_ms"]
+        if execution["etat"] == "OBSERVED"
+        else latence_tentative_ms
+    )
+    charge = {
+        "measurement_profile": PROFIL_MESURE_RECU,
+        "creneau": creneau,
+        "predecesseur_adresse_contenu": (
+            recus[-1][1]["content_address"]["sha256"] if recus else None
+        ),
+        "carte": sources["carte"],
+        "paquet": sources["paquet"],
+        "stimulus": sources["stimulus"],
+        "configuration": {
+            "identifiant": identifiant,
+            "chemin": (REGISTRE_OFFICIEL / f"{identifiant}.toml").as_posix(),
+            "sha256": _sha256_fichier(chemin_configuration),
+        },
+        "plan_declare": {"etat": "DECLARE", "champs": configuration["plan"]},
+        "interface_declaree": {
+            "etat": "DECLARE",
+            "champs": configuration["interface"],
+        },
+        "quota_observe": INCONNU,
+        "requete": {
+            "etat": "REQUESTED",
+            "argv_resolu": list(descripteur_declare),
+            "mode_stdin": (
+                MODE_STIMULUS_STDIN
+                if identifiant == CONFIGURATION_ZAI_RECUPERATION
+                else MODE_STIMULUS_ARGUMENT
+            ),
+            "espace_de_travail": JETON_ESPACE_ISOLE,
+        },
+        "execution": execution,
+        "provenance_servie": provenance,
+        "recuperation": {
+            "tranche": TRANCHE_RECUPERATION_EXECUTION,
+            "autorite": AUTORITE_RECUPERATION,
+            "acquisition_id": acquisition_id,
+            "identite_servie": identite,
+        },
+    }
+    enveloppe = {
+        "schema_version": SCHEMA_RECU,
+        "content_address": {
+            "algorithm": "SHA256",
+            "sha256": adresse_canonique(charge),
+        },
+        "payload": charge,
+    }
+    adresse: str | None = enveloppe["content_address"]["sha256"]
+    etat_terminal = (
+        "OBSERVED" if execution["etat"] == "OBSERVED" else execution["incident"]
+    )
+    try:
+        _valider_recu(enveloppe)
+        destination = repertoire / f"{adresse}.json"
+        with open(destination, "xb") as fichier:
+            fichier.write(octets_canoniques(enveloppe))
+    except (ErreurRecu, OSError) as erreur:
+        # Tentative sans reçu : journalisée telle quelle, HOLD obligatoire
+        print(f"ECHEC reçu non écrit après tentative : {erreur} ; HOLD")
+        adresse = None
+        destination = None
+    code_commande = 0 if adresse is not None and descendants == 0 else 1
+    journal["entrees"].append(
+        {
+            "acquisition_id": acquisition_id,
+            "configuration_id": identifiant,
+            "invocation_publique": (
+                "uv run tools/campagne_v1.py acquerir --recuperation "
+                f"--configuration {identifiant}"
+            ),
+            "code": code_commande,
+            "recu": adresse,
+            "etat_terminal": etat_terminal,
+            "latence_ms": latence_journal,
+            "retry": 0,
+            "descendants": descendants,
+        }
+    )
+    _ecrire_journal_execution(chemin_journal, journal)
+    if destination is not None:
+        print(
+            "reçu V1 de récupération écrit : "
+            f"{destination.relative_to(racine).as_posix()}"
+        )
+        print(f"créneau : {creneau}")
+        print(f"adresse de contenu : {adresse}")
+    print(f"état terminal : {etat_terminal}")
+    if execution["etat"] == "INCIDENT":
+        print(f"incident : {execution['incident']} — {execution['fait']}")
+    print(
+        f"identité servie : {identite['statut']} · disposition "
+        f"{identite['disposition']}"
+    )
+    if identite["cause"]:
+        print(f"cause d'identité : {identite['cause']}")
+    if identite["disposition"] == "HOLD":
+        print(
+            "HOLD : provenance servie non attribuable ou divergente pour "
+            f"'{acquisition_id}' ; aucun appel suivant sans arbitrage "
+            "propriétaire"
+        )
+    print(f"descendants survivants : {descendants}")
+    if descendants:
+        print(
+            "ECHEC descendant survivant détecté après la tentative : groupe "
+            "tué, HOLD avant tout appel suivant"
+        )
+    return code_commande
 
 
 _IDENTITE_EXACTE_ZAI = {
@@ -8800,7 +9666,33 @@ def _charger_verrou_recuperation(racine: Path) -> tuple[str, dict, str] | None:
     )
 
 
-def _articles_recuperation(relatif: str, sha: str, verrou: dict) -> list[str]:
+def _charger_autorisation_recuperation_restitution(
+    racine: Path,
+) -> tuple[str, dict, str] | None:
+    """Autorisation D-V1-05 pour le rendu : (chemin relatif, données,
+    SHA-256 du fichier), ou None lorsque l'artefact n'existe pas."""
+    chemin = racine / CHEMIN_AUTORISATION_RECUPERATION
+    if not os.path.lexists(chemin):
+        return None
+    try:
+        donnees = _charger_autorisation_recuperation(racine)
+    except ErreurRecuperation as erreur:
+        raise ErreurRestitution(
+            f"autorisation de récupération invalide : {erreur}"
+        ) from erreur
+    return (
+        CHEMIN_AUTORISATION_RECUPERATION.as_posix(),
+        donnees,
+        _sha256_fichier(chemin),
+    )
+
+
+def _articles_recuperation(
+    relatif: str,
+    sha: str,
+    verrou: dict,
+    autorisation: tuple[str, dict, str] | None = None,
+) -> list[str]:
     """État minimal de récupération, régénérable à l'identique."""
     creneaux = " et ".join(
         f"<code>{_echapper(configuration['acquisition_id'])}</code>"
@@ -8831,7 +9723,40 @@ def _articles_recuperation(relatif: str, sha: str, verrou: dict) -> list[str]:
         + _span_source(relatif, sha, SECTION_VERROU_RECUPERATION),
         ' data-recuperation-harnais="preuves-identite"',
     )
-    return [etat, preuves]
+    articles = [etat, preuves]
+    if autorisation is not None:
+        relatif_autorisation, donnees, sha_autorisation = autorisation
+        portee = donnees["portee"]
+        creneaux_autorises = " et ".join(
+            f"<code>{_echapper(creneau['acquisition_id'])}</code>"
+            for creneau in portee["acquisitions"]
+        )
+        articles.append(
+            _article(
+                "fait",
+                "<p>Une autorisation propriétaire additive "
+                f"<strong>{_echapper(donnees['autorite'])}</strong> couvre "
+                f"l'exécution des créneaux {creneaux_autorises} (tranche "
+                f"<code>{_echapper(portee['tranche'])}</code>) : au plus "
+                f"{_echapper(portee['appels_fournisseur_max'])} appels "
+                f"fournisseur, {_echapper(portee['appels_par_creneau'])} par "
+                "créneau, effort candidat commun "
+                f"<code>{_echapper(portee['effort_candidat'])}</code>, "
+                "reprises automatiques 0, reprises manuelles 0, dépense "
+                "incrémentale 0, fallback <code>NONE</code>, quota des "
+                "abonnements existants seuls. Jeton propriétaire "
+                f"<code>{_echapper(donnees['jeton'])}</code>. Le verrou R1 "
+                "reste <code>NOT_GRANTED</code> et byte-identique ; cet "
+                "artefact séparé porte seul le GO d'exécution.</p>"
+                + _span_source(
+                    relatif_autorisation,
+                    sha_autorisation,
+                    SECTION_AUTORISATION_RECUPERATION,
+                ),
+                ' data-recuperation-harnais="autorisation-execution"',
+            )
+        )
+    return articles
 
 
 def _span_source(chemin: str, sha256: str, section: str) -> str:
@@ -8860,6 +9785,9 @@ def _rendre_page(racine: Path) -> bytes:
     autorisation = _charger_autorisation_restitution(racine)
     registre_validation = _charger_registre_validation(racine)
     recuperation = _charger_verrou_recuperation(racine)
+    autorisation_recuperation = _charger_autorisation_recuperation_restitution(
+        racine
+    )
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -8878,6 +9806,8 @@ def _rendre_page(racine: Path) -> bytes:
         empreintes[registre_validation[0]] = registre_validation[2]
     if recuperation is not None:
         empreintes[recuperation[0]] = recuperation[2]
+    if autorisation_recuperation is not None:
+        empreintes[autorisation_recuperation[0]] = autorisation_recuperation[2]
     relatif_sources_plans = CHEMIN_SOURCES_PLANS.as_posix()
     if verrou_charge is not None:
         empreintes[verrou_charge[0]] = verrou_charge[2]
@@ -9229,7 +10159,10 @@ def _rendre_page(racine: Path) -> bytes:
             "verrouillée des harnais</h2>"
             + "".join(
                 _articles_recuperation(
-                    recuperation[0], recuperation[2], recuperation[1]
+                    recuperation[0],
+                    recuperation[2],
+                    recuperation[1],
+                    autorisation_recuperation,
                 )
             )
             + "</section>"
@@ -9632,6 +10565,9 @@ def verifier_restitution(racine: Path) -> int:
     autorisation = _charger_autorisation_restitution(racine)
     registre_validation = _charger_registre_validation(racine)
     recuperation = _charger_verrou_recuperation(racine)
+    autorisation_recuperation = _charger_autorisation_recuperation_restitution(
+        racine
+    )
     jetons_factuels = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -9664,10 +10600,15 @@ def verifier_restitution(racine: Path) -> int:
         ):
             if attendu not in page:
                 echecs.append("entrée de verrou infidèle ou absente")
+    if autorisation_recuperation is not None:
+        empreintes[autorisation_recuperation[0]] = autorisation_recuperation[2]
     if recuperation is not None:
         empreintes[recuperation[0]] = recuperation[2]
         for attendu in _articles_recuperation(
-            recuperation[0], recuperation[2], recuperation[1]
+            recuperation[0],
+            recuperation[2],
+            recuperation[1],
+            autorisation_recuperation,
         ):
             if attendu not in page:
                 echecs.append("entrée de récupération infidèle ou absente")
@@ -9690,7 +10631,10 @@ def verifier_restitution(racine: Path) -> int:
     nombre_recuperations = page.count(' data-recuperation-harnais="')
     attendu_recuperations = 0 if recuperation is None else len(
         _articles_recuperation(
-            recuperation[0], recuperation[2], recuperation[1]
+            recuperation[0],
+            recuperation[2],
+            recuperation[1],
+            autorisation_recuperation,
         )
     )
     if nombre_recuperations != attendu_recuperations:
@@ -9983,7 +10927,7 @@ def principal(
         return afficher_autorisations(racine, options.get("--configuration"))
     if arguments[:1] == ["acquerir"]:
         # Trois formes figées : locale de démonstration, officielle D-V1-04,
-        # récupération V1-R1 (autorité toujours absente dans cette tranche).
+        # récupération V1-R2 sous l'autorité additive D-V1-05
         if len(arguments) != 4 or arguments[2] != "--configuration":
             print(_USAGE)
             return 2
@@ -9994,7 +10938,9 @@ def principal(
             # production conserve la racine privée obligatoire exacte
             return acquerir_officiel(racine, arguments[3], racine_privee)
         if arguments[1] == "--recuperation":
-            return acquerir_recuperation(racine, arguments[3])
+            # racine_privee n'existe que pour les tests Python : la CLI de
+            # production conserve la racine privée obligatoire exacte
+            return acquerir_recuperation(racine, arguments[3], racine_privee)
         print(_USAGE)
         return 2
     if arguments[:1] == ["preflight"]:
