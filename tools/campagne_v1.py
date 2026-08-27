@@ -9299,6 +9299,959 @@ def acquerir_officiel(
     return code_commande
 
 
+# V1-XS-10 : dossiers de revue aveugle. Sélection des seules sorties au
+# verdict automatique PASS, dossiers opaques embarquant la rubrique HR-001
+# byte-identique, engagement d'ordre écrit avant tout dossier sans publier
+# la correspondance, contrôle d'absence de fuite, puis restitution.
+
+SCHEMA_ENGAGEMENT_ORDRE_REVUE = "campagne-v1-engagement-ordre-revue/v1"
+SCHEMA_MANIFESTE_DOSSIERS = "campagne-v1-manifeste-dossiers-revue/v1"
+SCHEMA_CONTROLE_FUITES = "campagne-v1-controle-fuites-dossiers/v2"
+RESULTATS_CONTROLE_FUITES = ("CONFORME", "CONFORME_SUR_CATEGORIES_COUVERTES")
+REPERTOIRE_DOSSIERS_REVUE = _RACINE_CAMPAGNE_V1 / "dossiers-revue-aveugle-v1"
+CHEMIN_ENGAGEMENT_ORDRE_REVUE = REPERTOIRE_DOSSIERS_REVUE / "engagement-ordre.json"
+CHEMIN_MANIFESTE_DOSSIERS = REPERTOIRE_DOSSIERS_REVUE / "manifeste-dossiers.json"
+CHEMIN_CONTROLE_FUITES = REPERTOIRE_DOSSIERS_REVUE / "controle-fuites.json"
+NOM_SOUS_REPERTOIRE_DOSSIERS = "dossiers"
+ID_RUBRIQUE_REVUE = "HR-001"
+ELIGIBILITE_REVUE = "AUTOMATIC_PASS_ONLY"
+# Vocabulaire de révélation repris à l'identique de l'engagement V0 M9-1
+REVELATION_CORRESPONDANCE = "AFTER_ALL_HUMAN_VERDICTS_FROZEN"
+CORRESPONDANCE_SCELLEE = "SEALED"
+_MOTIF_ITEM_REVUE = re.compile(r"^ITEM-\d{3}$")
+# Racine des fichiers du paquet approuvé (le manifeste du paquet y vit)
+_RACINE_PAQUET = Path("tasks/dev/pre-cadrage-entretien-client")
+
+# Contrôle d'absence de fuite : jetons exacts extraits des sources
+# versionnées, par catégorie interdite. Un jeton trop court ou du vocabulaire
+# normatif n'identifie rien et n'est pas retenu.
+TAILLE_MINIMALE_JETON_FUITE = 4
+_JETONS_NORMATIFS_EXCLUS = frozenset({INCONNU, "NON_DEFINI"})
+CATEGORIES_FUITES = (
+    "configuration_id",
+    "acquisition_id",
+    "empreinte_candidate",
+    "adresse_recu",
+    "produit",
+    "plan",
+    "modele",
+    "interface",
+    "cout",
+    "quota",
+    "latence",
+    "source_url",
+    "materiel_prive",
+)
+
+
+def _cause_exclusion_revue(entree: dict) -> str:
+    """Cause exacte d'exclusion de la revue, dérivée du registre de verdicts."""
+    verdict = entree["verdict"]
+    if verdict is None:
+        return f"aucune sortie candidate — {entree['cause_recue']}"
+    return (
+        f"verdict {verdict['statut']} · porte {verdict['porte_en_cause']} · "
+        f"origine {verdict['origine']}"
+    )
+
+
+_MOTIF_FICHIER_DOSSIER = re.compile(r"^ITEM-\d{3}\.md$")
+
+
+def _fichiers_dossiers_generes(racine: Path) -> list[Path]:
+    """Fichiers du sous-répertoire des dossiers générés, triés par nom.
+
+    Seuls des fichiers réguliers ITEM-NNN.md y sont attendus : tout autre
+    contenu est refusé, jamais supprimé silencieusement."""
+    repertoire = (
+        racine / REPERTOIRE_DOSSIERS_REVUE / NOM_SOUS_REPERTOIRE_DOSSIERS
+    )
+    if not os.path.lexists(repertoire):
+        return []
+    infos = os.lstat(repertoire)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISDIR(infos.st_mode):
+        raise ErreurRestitution(
+            "répertoire des dossiers générés : répertoire réel non "
+            "symbolique attendu"
+        )
+    presents = sorted(repertoire.iterdir(), key=lambda chemin: chemin.name)
+    inattendus = []
+    for present in presents:
+        infos = os.lstat(present)
+        if (
+            stat.S_ISLNK(infos.st_mode)
+            or not stat.S_ISREG(infos.st_mode)
+            or not _MOTIF_FICHIER_DOSSIER.match(present.name)
+        ):
+            inattendus.append(present.name)
+    if inattendus:
+        raise ErreurRestitution(
+            "fichier(s) inattendu(s) dans le répertoire des dossiers "
+            "générés, aucune suppression : " + ", ".join(inattendus)
+        )
+    return presents
+
+
+def _retenir_jeton(valeur: object) -> str | None:
+    if not isinstance(valeur, str):
+        return None
+    if len(valeur) < TAILLE_MINIMALE_JETON_FUITE or valeur in (
+        _JETONS_NORMATIFS_EXCLUS
+    ):
+        return None
+    return valeur
+
+
+def _jetons_fuites_interdits(
+    racine: Path,
+    verrou: dict,
+    registre: dict,
+    latences: list[str],
+    sel: bytes,
+    commitment: str,
+) -> dict[str, list[str]]:
+    """Jetons interdits par catégorie, extraits mécaniquement des sources :
+    panel déclaré, plans validés, verrou, registre de verdicts, reçus et
+    matériel privé. Le contrôle prouve l'absence de ces jetons exacts."""
+    jetons: dict[str, set[str]] = {categorie: set() for categorie in CATEGORIES_FUITES}
+
+    def ajouter(categorie: str, valeur: object) -> None:
+        jeton = _retenir_jeton(valeur)
+        if jeton is not None:
+            jetons[categorie].add(jeton)
+
+    configurations = _configurations_officielles(racine)
+    identifiants = tuple(donnees["configuration_id"] for _, donnees in configurations)
+    for _, donnees in configurations:
+        ajouter("configuration_id", donnees["configuration_id"])
+        ajouter("produit", donnees["produit"]["nom"])
+        ajouter("produit", donnees["produit"]["editeur"])
+        ajouter("plan", donnees["plan"]["nom"])
+        ajouter("modele", donnees["modele"]["demande"])
+        ajouter("interface", donnees["interface"]["version"])
+        for quota in donnees["quota"]:
+            if quota["valeur"] != INCONNU:
+                ajouter("quota", f"{quota['valeur']} {quota['unite']}")
+    plans, _ = _charger_sources_plans(racine, identifiants)
+    for plan in plans.values():
+        ajouter("plan", plan["nom"])
+        ajouter("cout", f"{plan['prix_montant']} {plan['prix_devise']}")
+        ajouter("source_url", plan["source_url"])
+    for creneau in verrou["creneaux"]:
+        ajouter("acquisition_id", creneau["acquisition_id"])
+    for entree in registre["entrees"]:
+        ajouter("adresse_recu", Path(entree["recu"]).stem)
+        if entree["verdict"] is not None:
+            ajouter("empreinte_candidate", entree["verdict"]["empreinte_candidate"])
+    for latence in latences:
+        ajouter("latence", latence)
+    ajouter("materiel_prive", sel.hex())
+    ajouter("materiel_prive", commitment)
+    return {categorie: sorted(valeurs) for categorie, valeurs in jetons.items()}
+
+
+def _refus_dossiers(fait: str) -> int:
+    """Refus fail-closed de la construction des dossiers, fait nommé."""
+    print(f"ECHEC {fait}")
+    return 1
+
+
+def _correspondance_ordre_privee(
+    chemin_manifeste: Path, creneaux: list[dict]
+) -> dict[str, dict]:
+    """Correspondance privée acquisition_id -> {item, position}, lue du
+    manifeste d'ordre scellé ; jamais publiée."""
+    manifeste = json.loads(chemin_manifeste.read_bytes())
+    correspondance = {
+        entree["acquisition_id"]: {"item": entree["item"], "position": entree["position"]}
+        for entree in manifeste
+    }
+    attendus = {creneau["acquisition_id"] for creneau in creneaux}
+    if set(correspondance) != attendus:
+        raise ErreurVerrou(
+            "manifeste d'ordre privé non aligné sur les créneaux verrouillés"
+        )
+    return correspondance
+
+
+def _charger_paquet_approuve(racine: Path) -> tuple[dict, str]:
+    """Manifeste du paquet vérifié byte-identique à l'empreinte approuvée."""
+    chemin = racine / CHEMIN_PAQUET
+    if not chemin.is_file():
+        raise ErreurRestitution(
+            f"manifeste du paquet approuvé absent : {CHEMIN_PAQUET}"
+        )
+    sha = _sha256_fichier(chemin)
+    if sha != EMPREINTE_MANIFESTE_APPROUVEE:
+        raise ErreurRestitution(
+            f"manifeste du paquet divergent de l'empreinte approuvée : "
+            f"{CHEMIN_PAQUET} attendu {EMPREINTE_MANIFESTE_APPROUVEE}, "
+            f"observé {sha}"
+        )
+    try:
+        manifeste = json.loads(chemin.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurRestitution(
+            f"manifeste du paquet illisible : {erreur}"
+        ) from erreur
+    return manifeste, sha
+
+
+def _octets_fichier_paquet(
+    racine: Path, manifeste: dict, nom: str
+) -> tuple[bytes, str]:
+    """Octets d'un fichier du paquet, vérifiés contre l'empreinte portée par
+    le manifeste approuvé ; jamais relus sans cette chaîne."""
+    fichiers = manifeste.get("fichiers")
+    if not isinstance(fichiers, list):
+        raise ErreurRestitution("manifeste du paquet : champ 'fichiers' absent")
+    entrees = [f for f in fichiers if isinstance(f, dict) and f.get("chemin") == nom]
+    if len(entrees) != 1:
+        raise ErreurRestitution(
+            f"manifeste du paquet : exactement une entrée '{nom}' attendue"
+        )
+    attendu = entrees[0].get("sha256")
+    if not isinstance(attendu, str) or not _MOTIF_SHA256.match(attendu):
+        raise ErreurRestitution(
+            f"manifeste du paquet : empreinte SHA-256 attendue pour '{nom}'"
+        )
+    chemin = racine / _RACINE_PAQUET / nom
+    try:
+        octets = chemin.read_bytes()
+    except OSError as erreur:
+        raise ErreurRestitution(
+            f"fichier du paquet illisible : {nom} ({erreur})"
+        ) from erreur
+    if hashlib.sha256(octets).hexdigest() != attendu:
+        raise ErreurRestitution(
+            f"fichier du paquet divergent de l'empreinte du manifeste : {nom}"
+        )
+    return octets, attendu
+
+
+def _extraire_rubrique_hr001(octets_registre: bytes) -> bytes:
+    """Bloc exact '- ID: HR-001' du registre de vérité, jusqu'à la première
+    ligne vide suivante exclue ; exactement une occurrence exigée."""
+    texte = octets_registre.decode("utf-8")
+    lignes = texte.splitlines(keepends=True)
+    indices = [
+        rang
+        for rang, ligne in enumerate(lignes)
+        if ligne.startswith("- ID: HR-001")
+    ]
+    if len(indices) != 1:
+        raise ErreurRestitution(
+            "registre de vérité du paquet : exactement une rubrique "
+            f"'- ID: HR-001' attendue, {len(indices)} trouvée(s)"
+        )
+    debut = indices[0]
+    fin = debut
+    while fin < len(lignes) and lignes[fin].strip() != "":
+        fin += 1
+    return "".join(lignes[debut:fin]).encode("utf-8")
+
+
+def _contenu_dossier_revue(
+    item: str, rubrique: bytes, stimulus: bytes, sortie: bytes
+) -> bytes:
+    """Dossier opaque : rubrique, stimulus et sortie candidate en octets
+    exacts, sous un identifiant opaque, sans aucune identité."""
+    return (
+        f"# Dossier de revue aveugle — {item}\n\n"
+        "## Rubrique HR-001\n\n"
+    ).encode("utf-8") + rubrique + b"\n## Stimulus\n\n" + stimulus + (
+        b"\n## Sortie candidate\n\n" + sortie
+    )
+
+
+def dossiers(racine: Path, racine_privee: Path | None = None) -> int:
+    """Construit les dossiers de revue aveugle des seules sorties PASS.
+
+    N'exécute aucune commande externe ; dérive tout des preuves versionnées
+    et du matériel privé engagé au verrou, sans jamais publier la
+    correspondance entre créneaux et items.
+    """
+    if racine_privee is None:
+        racine_privee = RACINE_PRIVEE_PRODUCTION
+    try:
+        charge_registre = _charger_registre_validation(racine)
+    except ErreurRestitution as erreur:
+        return _refus_dossiers(f"registre de validation invalide : {erreur}")
+    if charge_registre is None:
+        return _refus_dossiers(
+            "registre de validation absent : "
+            f"{CHEMIN_REGISTRE_VALIDATION.as_posix()} — la sous-commande "
+            "valider doit le produire avant dossiers"
+        )
+    _, registre, _ = charge_registre
+    try:
+        charge_verrou = _charger_verrou_restitution(racine)
+    except ErreurRestitution as erreur:
+        return _refus_dossiers(f"verrou de campagne invalide : {erreur}")
+    if charge_verrou is None:
+        return _refus_dossiers(
+            f"verrou de campagne absent : {CHEMIN_VERROU.as_posix()} — la "
+            "sous-commande verrouiller doit le matérialiser avant dossiers"
+        )
+    relatif_verrou, verrou, sha_verrou = charge_verrou
+    repertoire_materiel = racine_privee / RELATIF_MATERIEL_VERROU
+    chemin_sel = repertoire_materiel / NOM_SEL_VERROU
+    chemin_manifeste_ordre = repertoire_materiel / NOM_MANIFESTE_ORDRE
+    try:
+        engagements = _verifier_materiel_prive(
+            repertoire_materiel, chemin_sel, chemin_manifeste_ordre
+        )
+        _verifier_ordre_prive(
+            chemin_sel, chemin_manifeste_ordre, verrou["creneaux"]
+        )
+        if engagements != verrou["engagements_prives"]:
+            raise ErreurVerrou(
+                "engagements privés recalculés divergents du verrou publié : "
+                "aucune réparation"
+            )
+        correspondance = _correspondance_ordre_privee(
+            chemin_manifeste_ordre, verrou["creneaux"]
+        )
+    except ErreurVerrou as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    except OSError as erreur:
+        nom = Path(erreur.filename).name if erreur.filename else "inconnu"
+        print(
+            f"ECHEC matériel privé du verrou inaccessible : '{nom}' "
+            f"({erreur.strerror})"
+        )
+        return 2
+    try:
+        paquet, _ = _charger_paquet_approuve(racine)
+        octets_registre_verite, sha_registre_verite = _octets_fichier_paquet(
+            racine, paquet, "registre-verite.md"
+        )
+        rubrique = _extraire_rubrique_hr001(octets_registre_verite)
+        stimulus, _ = _octets_fichier_paquet(racine, paquet, "stimulus.md")
+    except ErreurRestitution as erreur:
+        return _refus_dossiers(str(erreur))
+    selection: list[dict] = []
+    exclusions: list[dict] = []
+    latences: list[str] = []
+    for entree in registre["entrees"]:
+        verdict = entree["verdict"]
+        chemin_recu = racine / entree["recu"]
+        try:
+            octets_recu = chemin_recu.read_bytes()
+        except OSError as erreur:
+            return _refus_dossiers(
+                f"reçu du registre illisible : {entree['recu']} ({erreur})"
+            )
+        if hashlib.sha256(octets_recu).hexdigest() != entree["recu_sha256"]:
+            return _refus_dossiers(
+                f"reçu divergent de l'empreinte du registre : {entree['recu']}"
+            )
+        try:
+            enveloppe = _valider_recu(json.loads(octets_recu.decode("utf-8")))
+        except (UnicodeDecodeError, json.JSONDecodeError) as erreur:
+            return _refus_dossiers(
+                f"reçu du registre illisible : {entree['recu']} ({erreur})"
+            )
+        except ErreurRecu as erreur:
+            return _refus_dossiers(
+                f"reçu du registre invalide : {entree['recu']} ({erreur})"
+            )
+        execution = enveloppe["payload"]["execution"]
+        if execution["etat"] == "OBSERVED":
+            latences.append(str(execution["latence_ms"]))
+        if verdict is None or verdict["statut"] != "PASS":
+            exclusions.append(
+                {
+                    "configuration_id": entree["configuration_id"],
+                    "cause": _cause_exclusion_revue(entree),
+                }
+            )
+            continue
+        acquisition_id = _identifiant_creneau(entree["configuration_id"])
+        if acquisition_id not in correspondance:
+            return _refus_dossiers(
+                f"sortie PASS sans créneau verrouillé : {acquisition_id}"
+            )
+        sortie_candidate = execution["sortie"]["stdout"]
+        if (
+            hashlib.sha256(sortie_candidate.encode("utf-8")).hexdigest()
+            != verdict["empreinte_candidate"]
+        ):
+            return _refus_dossiers(
+                "sortie candidate divergente de l'empreinte validée : "
+                f"{entree['recu']} — aucune réécriture de sortie"
+            )
+        selection.append(
+            {
+                "item": correspondance[acquisition_id]["item"],
+                "position": correspondance[acquisition_id]["position"],
+                "contenu": _contenu_dossier_revue(
+                    correspondance[acquisition_id]["item"],
+                    rubrique,
+                    stimulus,
+                    sortie_candidate.encode("utf-8"),
+                ),
+            }
+        )
+    selection.sort(key=lambda entree: entree["position"])
+    # L'engagement d'ordre est écrit avant tout dossier : il porte les seuls
+    # identifiants opaques des sorties retenues, chaînés au commitment masqué
+    # du verrou ; la correspondance reste scellée dans le manifeste privé.
+    engagement_verrou = next(
+        engagement
+        for engagement in verrou["engagements_prives"]
+        if engagement["kind"] == "manifeste-ordre"
+    )
+    engagement_ordre = {
+        "schema_version": SCHEMA_ENGAGEMENT_ORDRE_REVUE,
+        "verrou": {"chemin": relatif_verrou, "sha256": sha_verrou},
+        "engagement_manifeste_verrou": {
+            "commitment": engagement_verrou["commitment"],
+            "commitment_method": engagement_verrou["commitment_method"],
+        },
+        "methode": METHODE_ORDRE_VERROU,
+        "campaign_id": CAMPAGNE_ID_VERROU,
+        # L'ordre engagé couvre le lot verrouillé complet, indépendamment
+        # des verdicts : il dérive du manifeste d'ordre engagé au verrou
+        "ordre_revue": [
+            {"item": entree["item"], "position": entree["position"]}
+            for entree in sorted(
+                correspondance.values(), key=lambda entree: entree["position"]
+            )
+        ],
+        "cardinalite_revue": len(correspondance),
+        "correspondance": CORRESPONDANCE_SCELLEE,
+        "revelation": REVELATION_CORRESPONDANCE,
+    }
+    destination_engagement = racine / CHEMIN_ENGAGEMENT_ORDRE_REVUE
+    destination_engagement.parent.mkdir(parents=True, exist_ok=True)
+    destination_engagement.write_bytes(octets_canoniques(engagement_ordre))
+    # Le sous-répertoire des dossiers générés doit correspondre exactement
+    # au manifeste courant : tout contenu inattendu est refusé, jamais
+    # supprimé silencieusement
+    try:
+        dossiers_presents = _fichiers_dossiers_generes(racine)
+    except ErreurRestitution as erreur:
+        return _refus_dossiers(str(erreur))
+    # Contrôle d'absence de fuite sur les contenus construits, avant toute
+    # écriture de dossier : une fuite refuse le lot sans réécrire la sortie
+    try:
+        jetons = _jetons_fuites_interdits(
+            racine,
+            verrou,
+            registre,
+            latences,
+            chemin_sel.read_bytes(),
+            engagement_verrou["commitment"],
+        )
+    except (ErreurRestitution, ErreurSourcesPlans) as erreur:
+        return _refus_dossiers(f"jetons de contrôle indisponibles : {erreur}")
+    for dossier in selection:
+        for categorie, valeurs in jetons.items():
+            if any(
+                jeton.encode("utf-8") in dossier["contenu"] for jeton in valeurs
+            ):
+                # Aucun état antérieur ne reste présentable comme courant :
+                # les dossiers générés sont purgés, l'ancien manifeste
+                # devient incohérent et la restitution le refuse
+                for ancien in dossiers_presents:
+                    ancien.unlink()
+                return _refus_dossiers(
+                    f"fuite interdite détectée : catégorie '{categorie}' dans "
+                    f"le dossier {dossier['item']} — aucun dossier écrit"
+                )
+    # Purge des seuls dossiers générés absents du lot courant
+    items_courants = {dossier["item"] for dossier in selection}
+    for ancien in dossiers_presents:
+        if ancien.stem not in items_courants:
+            ancien.unlink()
+    entrees_manifeste: list[dict] = []
+    for dossier in selection:
+        relatif = (
+            REPERTOIRE_DOSSIERS_REVUE
+            / NOM_SOUS_REPERTOIRE_DOSSIERS
+            / f"{dossier['item']}.md"
+        )
+        destination_dossier = racine / relatif
+        destination_dossier.parent.mkdir(parents=True, exist_ok=True)
+        destination_dossier.write_bytes(dossier["contenu"])
+        entrees_manifeste.append(
+            {
+                "item": dossier["item"],
+                "position": dossier["position"],
+                "fichier": relatif.as_posix(),
+                "sha256": hashlib.sha256(dossier["contenu"]).hexdigest(),
+            }
+        )
+    # Chaque catégorie porte un état explicite : COUVERTE avec le nombre de
+    # jetons recherchés, NON_COUVERTE lorsqu'aucune valeur exploitable
+    # n'existe (INCONNU) — une absence de preuve n'est jamais annoncée
+    # conforme. Les valeurs privées (sel, engagement du manifeste d'ordre)
+    # sont recherchées en mémoire mais jamais sérialisées : seule une preuve
+    # non réversible est publiée, la re-vérification exige la racine privée.
+    categories_publiees: dict[str, dict] = {}
+    for categorie in CATEGORIES_FUITES:
+        valeurs = jetons[categorie]
+        if not valeurs:
+            categories_publiees[categorie] = {
+                "statut": "NON_COUVERTE",
+                "jetons_recherches": 0,
+                "cause": (
+                    "aucune valeur exploitable (INCONNU) — absence de "
+                    "preuve conservée"
+                ),
+            }
+        elif categorie == "materiel_prive":
+            categories_publiees[categorie] = {
+                "statut": "COUVERTE",
+                "jetons_recherches": len(valeurs),
+                "reverification": "RACINE_PRIVEE_REQUISE",
+            }
+        else:
+            categories_publiees[categorie] = {
+                "statut": "COUVERTE",
+                "jetons_recherches": len(valeurs),
+                "jetons": valeurs,
+            }
+    couverture_complete = all(
+        entree["statut"] == "COUVERTE"
+        for entree in categories_publiees.values()
+    )
+    controle_fuites = {
+        "schema": SCHEMA_CONTROLE_FUITES,
+        "resultat": (
+            "CONFORME"
+            if couverture_complete
+            else "CONFORME_SUR_CATEGORIES_COUVERTES"
+        ),
+        "categories": categories_publiees,
+        "dossiers": [
+            {
+                "item": dossier["item"],
+                "jeton_inclus": {
+                    categorie: (
+                        False
+                        if categories_publiees[categorie]["statut"]
+                        == "COUVERTE"
+                        else None
+                    )
+                    for categorie in CATEGORIES_FUITES
+                },
+            }
+            for dossier in selection
+        ],
+    }
+    (racine / CHEMIN_CONTROLE_FUITES).write_bytes(
+        octets_canoniques(controle_fuites)
+    )
+    manifeste = {
+        "schema_version": SCHEMA_MANIFESTE_DOSSIERS,
+        "rubrique": {
+            "id": ID_RUBRIQUE_REVUE,
+            "sha256": hashlib.sha256(rubrique).hexdigest(),
+            "source": {
+                "chemin": (_RACINE_PAQUET / "registre-verite.md").as_posix(),
+                "sha256": sha_registre_verite,
+            },
+        },
+        "dossiers": entrees_manifeste,
+    }
+    if not selection:
+        # Lot éligible vide : cause exacte dérivée du registre, sans aucun
+        # verdict de qualité — les statuts automatiques sont des faits du
+        # registre, pas une appréciation
+        comptage: dict[str, int] = {}
+        for entree in registre["entrees"]:
+            statut = (
+                entree["verdict"]["statut"]
+                if entree["verdict"] is not None
+                else "ABSENTE"
+            )
+            comptage[statut] = comptage.get(statut, 0) + 1
+        manifeste["lot_vide"] = {
+            "cause": "aucune_sortie_pass",
+            "comptage_statuts": comptage,
+        }
+    destination = racine / CHEMIN_MANIFESTE_DOSSIERS
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(octets_canoniques(manifeste))
+    print(f"manifeste de dossiers écrit : {CHEMIN_MANIFESTE_DOSSIERS.as_posix()}")
+    # RG-07 : la sortie est lisible et nomme les exclusions avec leur cause
+    print(
+        f"dossiers de revue aveugle : {len(selection)} dossier(s), "
+        f"{len(exclusions)} exclusion(s)"
+    )
+    for exclusion in exclusions:
+        print(
+            f"exclusion : {exclusion['configuration_id']} — "
+            f"{exclusion['cause']}"
+        )
+    if not selection:
+        print(
+            "lot éligible vide : aucune sortie au verdict automatique PASS "
+            f"({manifeste['lot_vide']['comptage_statuts']})"
+        )
+    return 0
+
+
+SECTION_DOSSIERS_REVUE = "manifeste de dossiers de revue aveugle V1 versionné"
+SECTION_ENGAGEMENT_ORDRE = "engagement d'ordre de revue aveugle V1 versionné"
+SECTION_CONTROLE_FUITES = "contrôle d'absence de fuite des dossiers V1 versionné"
+
+# Libellés lisibles des catégories de fuite, cités dans la restitution
+_LIBELLES_CATEGORIES_FUITES = {
+    "configuration_id": "identifiants de configuration",
+    "acquisition_id": "identifiants d'acquisition",
+    "empreinte_candidate": "empreintes candidates",
+    "adresse_recu": "adresses de reçus",
+    "produit": "produit",
+    "plan": "plan",
+    "modele": "modèle",
+    "interface": "interface",
+    "cout": "coût",
+    "quota": "quota",
+    "latence": "latence",
+    "source_url": "sources",
+    "materiel_prive": "matériel privé",
+}
+
+
+def _charger_json_artefact_dossiers(racine: Path, relatif: Path) -> tuple[str, dict, str]:
+    """Artefact JSON de revue aveugle : (chemin relatif, contenu, SHA-256)."""
+    chemin = racine / relatif
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurRestitution(
+            f"artefact de revue aveugle : fichier régulier non symbolique "
+            f"attendu : {relatif.as_posix()}"
+        )
+    try:
+        octets = chemin.read_bytes()
+        contenu = json.loads(octets.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurRestitution(
+            f"artefact de revue aveugle illisible : {relatif.as_posix()} "
+            f"({erreur})"
+        ) from erreur
+    if not isinstance(contenu, dict):
+        raise ErreurRestitution(
+            f"artefact de revue aveugle non objet : {relatif.as_posix()}"
+        )
+    return relatif.as_posix(), contenu, hashlib.sha256(octets).hexdigest()
+
+
+def _charger_artefacts_dossiers(
+    racine: Path,
+) -> tuple[tuple[str, dict, str], tuple[str, dict, str], tuple[str, dict, str]] | None:
+    """Manifeste, contrôle de fuites et engagement d'ordre pour le rendu.
+
+    Les trois artefacts sont produits ensemble par `dossiers` : une présence
+    partielle est une incohérence fail-closed, jamais réparée au rendu."""
+    chemins = (
+        CHEMIN_MANIFESTE_DOSSIERS,
+        CHEMIN_CONTROLE_FUITES,
+        CHEMIN_ENGAGEMENT_ORDRE_REVUE,
+    )
+    presents = [os.path.lexists(racine / chemin) for chemin in chemins]
+    if not any(presents):
+        return None
+    if not all(presents):
+        absents = [
+            chemin.as_posix()
+            for chemin, present in zip(chemins, presents)
+            if not present
+        ]
+        raise ErreurRestitution(
+            "artefacts de revue aveugle partiels, absents : "
+            + ", ".join(absents)
+        )
+    manifeste = _charger_json_artefact_dossiers(racine, CHEMIN_MANIFESTE_DOSSIERS)
+    controle = _charger_json_artefact_dossiers(racine, CHEMIN_CONTROLE_FUITES)
+    engagement = _charger_json_artefact_dossiers(
+        racine, CHEMIN_ENGAGEMENT_ORDRE_REVUE
+    )
+    if manifeste[1].get("schema_version") != SCHEMA_MANIFESTE_DOSSIERS:
+        raise ErreurRestitution(
+            f"manifeste de dossiers de schéma inattendu : {manifeste[0]}"
+        )
+    if controle[1].get("schema") != SCHEMA_CONTROLE_FUITES:
+        raise ErreurRestitution(
+            f"contrôle de fuites de schéma inattendu : {controle[0]}"
+        )
+    if engagement[1].get("schema_version") != SCHEMA_ENGAGEMENT_ORDRE_REVUE:
+        raise ErreurRestitution(
+            f"engagement d'ordre de schéma inattendu : {engagement[0]}"
+        )
+    return manifeste, controle, engagement
+
+
+def _verifier_coherence_dossiers(
+    racine: Path,
+    artefacts: tuple[
+        tuple[str, dict, str], tuple[str, dict, str], tuple[str, dict, str]
+    ],
+    registre_validation: tuple[str, dict, str] | None,
+    verrou_charge: tuple[str, dict, str] | None,
+) -> None:
+    """Cohérence fail-closed des artefacts de revue avec le registre de
+    verdicts, le verrou et les fichiers de dossiers effectivement écrits.
+    Aucune divergence n'est réparée au rendu."""
+    (_, manifeste, _), (_, controle, _), (_, engagement, _) = artefacts
+    if registre_validation is None:
+        raise ErreurRestitution(
+            "artefacts de revue aveugle présents sans registre de verdicts"
+        )
+    if verrou_charge is None:
+        raise ErreurRestitution(
+            "artefacts de revue aveugle présents sans verrou de campagne"
+        )
+    registre = registre_validation[1]
+    passes = [
+        entree
+        for entree in registre["entrees"]
+        if entree["verdict"] is not None
+        and entree["verdict"]["statut"] == "PASS"
+    ]
+    dossiers_manifeste = manifeste["dossiers"]
+    if len(dossiers_manifeste) != len(passes):
+        raise ErreurRestitution(
+            "manifeste de dossiers non aligné sur les verdicts PASS du "
+            f"registre : {len(passes)} attendu(s), "
+            f"{len(dossiers_manifeste)} déclaré(s)"
+        )
+    items = [entree["item"] for entree in dossiers_manifeste]
+    if len(set(items)) != len(items) or any(
+        not _MOTIF_ITEM_REVUE.match(item) for item in items
+    ):
+        raise ErreurRestitution(
+            "identifiants opaques invalides dans le manifeste de dossiers"
+        )
+    for entree in dossiers_manifeste:
+        chemin = racine / entree["fichier"]
+        try:
+            octets = chemin.read_bytes()
+        except OSError as erreur:
+            raise ErreurRestitution(
+                f"dossier déclaré illisible : {entree['fichier']} ({erreur})"
+            ) from erreur
+        if hashlib.sha256(octets).hexdigest() != entree["sha256"]:
+            raise ErreurRestitution(
+                f"dossier divergent de l'empreinte du manifeste : "
+                f"{entree['fichier']}"
+            )
+    # Égalité exacte entre fichiers présents et fichiers déclarés : aucun
+    # dossier périmé ou non déclaré n'est présentable comme courant
+    fichiers_presents = {
+        (
+            REPERTOIRE_DOSSIERS_REVUE / NOM_SOUS_REPERTOIRE_DOSSIERS / nom
+        ).as_posix()
+        for nom in [present.name for present in _fichiers_dossiers_generes(racine)]
+    }
+    fichiers_declares = {entree["fichier"] for entree in dossiers_manifeste}
+    if fichiers_presents != fichiers_declares:
+        raise ErreurRestitution(
+            "fichiers de dossiers présents non alignés sur le manifeste : "
+            f"{sorted(fichiers_presents)} présents, "
+            f"{sorted(fichiers_declares)} déclarés"
+        )
+    if not dossiers_manifeste:
+        lot_vide = manifeste.get("lot_vide")
+        if (
+            not isinstance(lot_vide, dict)
+            or lot_vide.get("cause") != "aucune_sortie_pass"
+        ):
+            raise ErreurRestitution(
+                "manifeste à zéro dossier sans cause exacte de lot vide"
+            )
+        comptage: dict[str, int] = {}
+        for entree in registre["entrees"]:
+            statut = (
+                entree["verdict"]["statut"]
+                if entree["verdict"] is not None
+                else "ABSENTE"
+            )
+            comptage[statut] = comptage.get(statut, 0) + 1
+        if lot_vide.get("comptage_statuts") != comptage:
+            raise ErreurRestitution(
+                "comptage de lot vide divergent du registre de verdicts"
+            )
+    elif "lot_vide" in manifeste:
+        raise ErreurRestitution(
+            "manifeste avec dossiers et déclaration de lot vide simultanés"
+        )
+    creneaux = verrou_charge[1]["creneaux"]
+    ordre = engagement["ordre_revue"]
+    if engagement["cardinalite_revue"] != len(creneaux) or len(ordre) != len(
+        creneaux
+    ):
+        raise ErreurRestitution(
+            "engagement d'ordre non aligné sur les créneaux verrouillés"
+        )
+    positions = [entree["position"] for entree in ordre]
+    if sorted(positions) != list(range(1, len(positions) + 1)):
+        raise ErreurRestitution(
+            "positions de l'engagement d'ordre non contiguës"
+        )
+    items_engagement = {entree["item"] for entree in ordre}
+    if not set(items) <= items_engagement:
+        raise ErreurRestitution(
+            "dossiers produits hors de l'ordre engagé au verrou"
+        )
+    if controle["resultat"] not in RESULTATS_CONTROLE_FUITES:
+        raise ErreurRestitution(
+            "contrôle d'absence de fuite non conforme dans les artefacts"
+        )
+    if [entree["item"] for entree in controle["dossiers"]] != items:
+        raise ErreurRestitution(
+            "contrôle d'absence de fuite non aligné sur les dossiers"
+        )
+
+
+def _exclusions_revue(registre: dict) -> list[dict]:
+    """Exclusions de la revue recalculées depuis le registre versionné."""
+    return [
+        {
+            "configuration_id": entree["configuration_id"],
+            "cause": _cause_exclusion_revue(entree),
+        }
+        for entree in registre["entrees"]
+        if entree["verdict"] is None or entree["verdict"]["statut"] != "PASS"
+    ]
+
+
+def _section_dossiers_revue(
+    manifeste: tuple[str, dict, str],
+    controle: tuple[str, dict, str],
+    engagement: tuple[str, dict, str],
+    registre: tuple[str, dict, str],
+) -> str:
+    """Section de restitution des dossiers de revue aveugle : nombre de
+    dossiers, nombre d'exclusions et leur cause, recalculés depuis les
+    artefacts versionnés ; jamais la correspondance item ↔ acquisition."""
+    relatif_manifeste, contenu_manifeste, sha_manifeste = manifeste
+    relatif_controle, contenu_controle, sha_controle = controle
+    relatif_engagement, contenu_engagement, sha_engagement = engagement
+    relatif_registre, contenu_registre, _ = registre
+    dossiers_manifeste = contenu_manifeste["dossiers"]
+    exclusions = _exclusions_revue(contenu_registre)
+    articles: list[str] = []
+    if dossiers_manifeste:
+        articles.append(
+            _article(
+                "fait",
+                f"<p>{len(dossiers_manifeste)} dossier(s) de revue aveugle "
+                f"produit(s) sous identifiants opaques, dans l'ordre engagé "
+                "avant leur écriture ; la correspondance avec les "
+                "acquisitions reste scellée jusqu'au gel des verdicts "
+                "humains.</p>"
+                + "<ul>"
+                + "".join(
+                    f'<li data-dossier-revue="{_echapper(entree["item"])}">'
+                    f"<code>{_echapper(entree['item'])}</code> · fichier "
+                    f"<code>{_echapper(entree['fichier'])}</code> · SHA-256 "
+                    f"<code>{entree['sha256']}</code></li>"
+                    for entree in dossiers_manifeste
+                )
+                + "</ul>"
+                + _span_source(
+                    relatif_manifeste, sha_manifeste, SECTION_DOSSIERS_REVUE
+                )
+                + _span_source(
+                    relatif_engagement, sha_engagement, SECTION_ENGAGEMENT_ORDRE
+                ),
+            )
+        )
+    else:
+        lot_vide = contenu_manifeste["lot_vide"]
+        articles.append(
+            _article(
+                "fait",
+                "<p>Lot éligible vide : aucun dossier de revue produit. "
+                f"Cause exacte : <code>{_echapper(lot_vide['cause'])}</code> "
+                f"(comptage des statuts automatiques : "
+                f"{_echapper(json.dumps(lot_vide['comptage_statuts'], sort_keys=True))}"
+                "). Aucun verdict de qualité n'est rendu.</p>"
+                + _span_source(
+                    relatif_manifeste, sha_manifeste, SECTION_DOSSIERS_REVUE
+                )
+                + _span_source(
+                    relatif_engagement, sha_engagement, SECTION_ENGAGEMENT_ORDRE
+                ),
+            )
+        )
+    if exclusions:
+        articles.append(
+            _article(
+                "fait",
+                f"<p>{len(exclusions)} exclusion(s) de la revue, condition "
+                "d'entrée <code>PASS</code> automatique non remplie :</p>"
+                + "<ul>"
+                + "".join(
+                    f'<li data-exclusion-revue="{_echapper(exclusion["configuration_id"])}">'
+                    f"<code>{_echapper(exclusion['configuration_id'])}</code> "
+                    f"— {_echapper(exclusion['cause'])}</li>"
+                    for exclusion in exclusions
+                )
+                + "</ul>"
+                + _span_source(relatif_registre, registre[2], SECTION_REGISTRE_VALIDATION),
+            )
+        )
+    else:
+        articles.append(
+            _article(
+                "fait",
+                "<p>0 exclusion : toutes les sorties candidates du registre "
+                "sont au verdict automatique <code>PASS</code>.</p>"
+                + _span_source(relatif_registre, registre[2], SECTION_REGISTRE_VALIDATION),
+            )
+        )
+    categories_controle = contenu_controle["categories"]
+    libelles_couverts = [
+        _LIBELLES_CATEGORIES_FUITES[nom]
+        for nom in CATEGORIES_FUITES
+        if categories_controle[nom]["statut"] == "COUVERTE"
+    ]
+    noms_non_couverts = [
+        nom
+        for nom in CATEGORIES_FUITES
+        if categories_controle[nom]["statut"] == "NON_COUVERTE"
+    ]
+    phrase_controle = (
+        "<p>Contrôle d'absence de fuite : résultat "
+        f"<code>{_echapper(contenu_controle['resultat'])}</code> — "
+        "aucun jeton interdit des catégories couvertes ("
+        + _echapper(", ".join(libelles_couverts))
+        + ") n'apparaît dans aucun dossier."
+    )
+    if noms_non_couverts:
+        phrase_controle += (
+            " Catégories non couvertes, faute de valeurs exploitables "
+            f"(<code>INCONNU</code>) : {_echapper(', '.join(noms_non_couverts))}"
+            " — absence de preuve conservée, aucune conclusion favorable "
+            "n'en est tirée."
+        )
+    phrase_controle += "</p>"
+    articles.append(
+        _article(
+            "fait",
+            phrase_controle
+            + _span_source(relatif_controle, sha_controle, SECTION_CONTROLE_FUITES),
+        )
+    )
+    return (
+        '<section id="dossiers-revue-aveugle" data-dossiers-revue="section">'
+        "<h2>Dossiers de revue aveugle</h2>"
+        "<p>Cette section reprend les artefacts produits par "
+        "<code>dossiers</code> : manifeste de dossiers, engagement d'ordre "
+        "écrit avant tout dossier et contrôle d'absence de fuite. Les "
+        "dossiers sont opaques ; la correspondance avec les acquisitions "
+        "n'est pas publiée.</p>"
+        + "".join(articles)
+        + "</section>"
+    )
+
+
 def _charger_verrou_restitution(racine: Path) -> tuple[str, dict, str] | None:
     """Verrou public validé pour le rendu : (chemin relatif, verrou, SHA-256),
     ou None lorsque le verrou n'est pas matérialisé."""
@@ -9788,6 +10741,11 @@ def _rendre_page(racine: Path) -> bytes:
     autorisation_recuperation = _charger_autorisation_recuperation_restitution(
         racine
     )
+    artefacts_dossiers = _charger_artefacts_dossiers(racine)
+    if artefacts_dossiers is not None:
+        _verifier_coherence_dossiers(
+            racine, artefacts_dossiers, registre_validation, verrou_charge
+        )
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -9804,6 +10762,9 @@ def _rendre_page(racine: Path) -> bytes:
         empreintes[autorisation[0]] = autorisation[2]
     if registre_validation is not None:
         empreintes[registre_validation[0]] = registre_validation[2]
+    if artefacts_dossiers is not None:
+        for relatif, _, sha in artefacts_dossiers:
+            empreintes[relatif] = sha
     if recuperation is not None:
         empreintes[recuperation[0]] = recuperation[2]
     if autorisation_recuperation is not None:
@@ -10153,6 +11114,16 @@ def _rendre_page(racine: Path) -> bytes:
             + "</section>"
         )
 
+    if artefacts_dossiers is not None:
+        sections.append(
+            _section_dossiers_revue(
+                artefacts_dossiers[0],
+                artefacts_dossiers[1],
+                artefacts_dossiers[2],
+                registre_validation,
+            )
+        )
+
     if recuperation is not None:
         sections.append(
             "<section id=\"recuperation-harnais\"><h2>Récupération "
@@ -10448,6 +11419,15 @@ def _rendre_page(racine: Path) -> bytes:
                 else ()
             ),
             *(
+                (
+                    (artefacts_dossiers[0][0], SECTION_DOSSIERS_REVUE),
+                    (artefacts_dossiers[1][0], SECTION_CONTROLE_FUITES),
+                    (artefacts_dossiers[2][0], SECTION_ENGAGEMENT_ORDRE),
+                )
+                if artefacts_dossiers is not None
+                else ()
+            ),
+            *(
                 ((qualification[0], SECTION_QUALIFICATION),)
                 if qualification is not None
                 else ()
@@ -10568,6 +11548,11 @@ def verifier_restitution(racine: Path) -> int:
     autorisation_recuperation = _charger_autorisation_recuperation_restitution(
         racine
     )
+    artefacts_dossiers = _charger_artefacts_dossiers(racine)
+    if artefacts_dossiers is not None:
+        _verifier_coherence_dossiers(
+            racine, artefacts_dossiers, registre_validation, verrou_charge
+        )
     jetons_factuels = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -10584,6 +11569,9 @@ def verifier_restitution(racine: Path) -> int:
         empreintes[autorisation[0]] = autorisation[2]
     if registre_validation is not None:
         empreintes[registre_validation[0]] = registre_validation[2]
+    if artefacts_dossiers is not None:
+        for relatif, _, sha in artefacts_dossiers:
+            empreintes[relatif] = sha
     if verrou_charge is not None:
         empreintes[verrou_charge[0]] = verrou_charge[2]
         try:
@@ -10754,6 +11742,47 @@ def verifier_restitution(racine: Path) -> int:
             f"attendue dans la page, {nombre_couvertures} trouvée"
         )
 
+    if artefacts_dossiers is not None:
+        attendu_section = _section_dossiers_revue(
+            artefacts_dossiers[0],
+            artefacts_dossiers[1],
+            artefacts_dossiers[2],
+            registre_validation,
+        )
+        if attendu_section not in page:
+            echecs.append(
+                "section de dossiers de revue aveugle infidèle ou absente"
+            )
+    nombre_sections_dossiers = page.count(' data-dossiers-revue="section"')
+    attendu_sections_dossiers = 0 if artefacts_dossiers is None else 1
+    if nombre_sections_dossiers != attendu_sections_dossiers:
+        echecs.append(
+            f"{attendu_sections_dossiers} section de dossiers de revue "
+            f"attendue dans la page, {nombre_sections_dossiers} trouvée"
+        )
+    nombre_dossiers_revue = page.count(' data-dossier-revue="')
+    attendu_dossiers_revue = (
+        len(artefacts_dossiers[0][1]["dossiers"])
+        if artefacts_dossiers is not None
+        else 0
+    )
+    if nombre_dossiers_revue != attendu_dossiers_revue:
+        echecs.append(
+            f"{attendu_dossiers_revue} entrées de dossier de revue attendues "
+            f"dans la page, {nombre_dossiers_revue} trouvées"
+        )
+    nombre_exclusions_revue = page.count(' data-exclusion-revue="')
+    attendu_exclusions_revue = (
+        len(_exclusions_revue(registre_validation[1]))
+        if artefacts_dossiers is not None
+        else 0
+    )
+    if nombre_exclusions_revue != attendu_exclusions_revue:
+        echecs.append(
+            f"{attendu_exclusions_revue} entrées d'exclusion de revue "
+            f"attendues dans la page, {nombre_exclusions_revue} trouvées"
+        )
+
     for relatif, enveloppe, sha in recus_officiels:
         attendu = _article_acquisition_officielle(relatif, sha, enveloppe)
         if attendu not in page:
@@ -10878,8 +11907,8 @@ _USAGE = (
     "| acquerir --officiel --configuration <id> "
     "| acquerir --recuperation --configuration <id> "
     "| preflight --configuration <id> "
-    "| qualifier | verrouiller | valider | restituer | verifier-restitution "
-    "| preparer-recuperation"
+    "| qualifier | verrouiller | valider | dossiers | restituer "
+    "| verifier-restitution | preparer-recuperation"
 )
 
 
@@ -10898,6 +11927,10 @@ def principal(
         return verrouiller(racine, racine_privee)
     if arguments == ["valider"]:
         return valider(racine)
+    if arguments == ["dossiers"]:
+        # racine_privee n'existe que pour les tests Python : la CLI de
+        # production conserve la racine privée obligatoire exacte
+        return dossiers(racine, racine_privee)
     if arguments == ["restituer"]:
         try:
             return restituer(racine)
