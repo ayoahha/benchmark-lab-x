@@ -31,6 +31,8 @@ sys.path.insert(0, str(RACINE / "tools"))
 
 import campagne_v1 as M  # noqa: E402
 
+from tests._helpers_v1 import retirer_couverture_publiee  # noqa: E402
+
 CHEMIN_PREFLIGHTS = (
     "tasks/dev/pre-cadrage-entretien-client/campagne-v1/preflights-v1"
 )
@@ -131,6 +133,7 @@ class BaseXS06C(unittest.TestCase):
         destination = self.racine / etat
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(RACINE / etat, destination)
+        retirer_couverture_publiee(destination)
         shutil.copytree(
             RACINE / M.REGISTRE_OFFICIEL, self.racine / M.REGISTRE_OFFICIEL
         )

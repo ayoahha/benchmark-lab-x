@@ -18,6 +18,8 @@ sys.path.insert(0, str(RACINE / "tools"))
 
 import campagne_v1 as M  # noqa: E402
 
+from tests._helpers_v1 import retirer_couverture_publiee  # noqa: E402
+
 CONFIGURATIONS_OFFICIELLES = (
     RACINE / "tasks/dev/pre-cadrage-entretien-client/campagne-v1/configurations"
 )
@@ -465,6 +467,7 @@ class RestitutionPanelTests(BaseXS02):
             destination = self.racine / relatif
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(RACINE / relatif, destination)
+        retirer_couverture_publiee(self.racine / M.CHEMIN_ETAT)
         self._enregistrer_les_sept()
         self.page = self.racine / M.CHEMIN_PAGE
 

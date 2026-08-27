@@ -5119,10 +5119,14 @@ def _jetons_attendus(
             "le champ panel de l'état V1 doit rester vide : le panel déclaré vit "
             "dans le registre officiel versionné"
         )
+    canon = _canon_panel(etat.get("couverture"))
     if nombre_configurations:
-        jeton_panel = (
-            f"panel: {nombre_configurations} configurations déclarées, non mesurées"
-        )
+        if canon is not None:
+            jeton_panel = canon
+        else:
+            jeton_panel = (
+                f"panel: {nombre_configurations} configurations déclarées, non mesurées"
+            )
     else:
         jeton_panel = "panel: vide"
     return jeton_panel, f"acquisitions: {nombre_recus}", "conclusion: ABSTENTION"
@@ -5141,6 +5145,53 @@ def _configurations_officielles(racine: Path) -> list[tuple[str, dict]]:
         ((REGISTRE_OFFICIEL / chemin.name).as_posix(), donnees)
         for chemin, donnees in entrees
     ]
+
+
+def _verifier_triplets_configuration(
+    racine: Path,
+    recus_officiels: list[tuple[str, dict, str]],
+    configurations: list[tuple[str, dict]],
+) -> None:
+    """Recoupement fail-closed du triplet configuration embarqué dans chaque
+    reçu officiel avec le fichier courant du registre officiel.
+
+    Toute substitution de configuration entre l'acquisition et la lecture
+    est refusée nommément, aucune réparation."""
+    chemins_declares = {
+        chemin for chemin, _ in configurations
+    }
+    identifiants_declares = {
+        chemin: donnees["configuration_id"]
+        for chemin, donnees in configurations
+    }
+    empreintes_declares = {
+        chemin: _sha256_fichier(racine / chemin)
+        for chemin, _ in configurations
+    }
+    for relatif, enveloppe, _ in recus_officiels:
+        configuration = enveloppe["payload"]["configuration"]
+        if configuration["chemin"] not in chemins_declares:
+            raise ErreurRestitution(
+                f"reçu officiel {relatif} : chemin de configuration "
+                "divergent du registre officiel courant : "
+                f"{configuration['chemin']}"
+            )
+        if configuration["identifiant"] != identifiants_declares[
+            configuration["chemin"]
+        ]:
+            raise ErreurRestitution(
+                f"reçu officiel {relatif} : identifiant de configuration "
+                "divergent du registre officiel courant : "
+                f"{configuration['identifiant']}"
+            )
+        if configuration["sha256"] != empreintes_declares[
+            configuration["chemin"]
+        ]:
+            raise ErreurRestitution(
+                f"reçu officiel {relatif} : SHA-256 de configuration "
+                "divergent du fichier courant du registre officiel : "
+                f"{configuration['chemin']}"
+            )
 
 
 SECTION_REGISTRE = "configuration déclarée du registre officiel"
@@ -10963,6 +11014,32 @@ def _valider_couverture_etat(couverture: object) -> None:
         )
 
 
+def _canon_panel(couverture: object) -> str | None:
+    """Canon exact de couverture du panel, dérivé du seul registre publié
+    dans l'état V1 ; None quand aucune couverture n'est publiée.
+
+    Le canon sépare explicitement décisions disponibles et acceptabilité ;
+    une sortie officiellement acceptable rendrait sa seconde moitié fausse
+    et exige une décision propriétaire, jamais une réécriture silencieuse."""
+    if couverture is None:
+        return None
+    _valider_couverture_etat(couverture)
+    if any(
+        creneau["decision"] == ETAT_OFFICIELLEMENT_ACCEPTABLE
+        for creneau in couverture["creneaux"]
+    ):
+        raise ErreurRestitution(
+            "sortie officiellement acceptable présente dans la couverture "
+            "publiée : le canon « aucune sortie officiellement acceptable » "
+            "ne s'applique plus, décision propriétaire requise"
+        )
+    return (
+        f"Panel abonnement : {couverture['numerateur']} décisions "
+        f"disponibles sur {couverture['denominateur']} ; aucune sortie "
+        "officiellement acceptable"
+    )
+
+
 def _rapport_etat(
     recus_locaux: list[tuple[str, dict, str]],
     recus_officiels: list[tuple[str, dict, str]],
@@ -11096,8 +11173,22 @@ def etat(racine: Path) -> int:
     _compter_recus(repertoire)
     recus_locaux, recus_officiels = _partitionner_recus(racine, etat_v1)
     configurations = _configurations_officielles(racine)
+    _verifier_triplets_configuration(
+        racine, recus_officiels, configurations
+    )
     registre_charge = _charger_registre_validation(racine)
+    artefacts_dossiers = _charger_artefacts_dossiers(racine)
+    verrou_charge = _charger_verrou_restitution(racine)
     artefacts_verdicts = _charger_artefacts_verdicts(racine)
+    if artefacts_verdicts is not None:
+        # Redérivation des états officiels depuis les preuves sous-jacentes
+        # via _etat_officiel, comparée à la révélation stockée
+        _verifier_coherence_verdicts(
+            artefacts_verdicts,
+            artefacts_dossiers,
+            registre_charge,
+            verrou_charge,
+        )
     preflights = _charger_recus_preflight(racine)
     couverture = _calculer_couverture(
         configurations,
@@ -12431,6 +12522,9 @@ def _rendre_page(racine: Path) -> bytes:
     # conclusion ABSTENTION du panel, faute d'acceptabilité officielle.
     recus_locaux, recus_officiels = _partitionner_recus(racine, etat)
     configurations = _configurations_officielles(racine)
+    _verifier_triplets_configuration(
+        racine, recus_officiels, configurations
+    )
     qualification = _charger_recu_qualification(racine)
     preflights = _charger_recus_preflight(racine)
     verrou_charge = _charger_verrou_restitution(racine)
@@ -12453,6 +12547,8 @@ def _rendre_page(racine: Path) -> bytes:
             registre_validation,
             verrou_charge,
         )
+    couverture_etat = etat.get("couverture")
+    canon_panel = _canon_panel(couverture_etat)
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -12574,24 +12670,50 @@ def _rendre_page(racine: Path) -> bytes:
         premisse_recus = "zéro reçu dans le répertoire de reçus V1"
 
     if configurations:
-        article_panel_courant = _article(
-            "fait",
-            f"<p><code id=\"jeton-panel\">{jeton_panel}</code> — le registre officiel "
-            "versionné déclare ces configurations abonnement ; aucune n'est mesurée.</p>"
-            + spans_registre,
-        )
-        article_conclusion = _article(
-            "deduction",
-            f"<p><code id=\"jeton-conclusion\">{jeton_conclusion}</code> — déduction "
-            "raisonnée : des configurations sont déclarées mais aucune n'est mesurée "
-            f"et {absence_acquisition} ; une absence de preuve n'est jamais "
-            "transformée en résultat favorable, donc la seule conclusion dérivable "
-            "est l'abstention. Aucune valeur de remplacement n'est créée.</p>"
-            + src(rules, "U-018"),
-            ' data-premisses="configurations déclarées et non mesurées selon le '
-            f"registre officiel versionné ; {premisse_recus} ; "
-            'règle U-018 de docs/RULES.md"',
-        )
+        if canon_panel is not None:
+            article_panel_courant = _article(
+                "fait",
+                f"<p><code id=\"jeton-panel\">{jeton_panel}</code> — le registre "
+                "officiel versionné déclare ces configurations abonnement ; le "
+                "registre de couverture publié porte "
+                f"{couverture_etat['numerateur']} décision(s) disponible(s) "
+                f"sur {couverture_etat['denominateur']} et aucune sortie "
+                "officiellement acceptable.</p>"
+                + spans_registre
+                + src(etat_relatif, SECTION_COUVERTURE_ETAT),
+            )
+            article_conclusion = _article(
+                "deduction",
+                f"<p><code id=\"jeton-conclusion\">{jeton_conclusion}</code> — "
+                "déduction raisonnée : "
+                f"{jeton_panel} et {absence_acquisition} ; une absence de "
+                "preuve n'est jamais transformée en résultat favorable, donc "
+                "la seule conclusion dérivable est l'abstention. Aucune "
+                "valeur de remplacement n'est créée.</p>"
+                + src(rules, "U-018"),
+                f' data-premisses="{jeton_panel} selon le registre de '
+                f"couverture publié ; {premisse_recus} ; "
+                'règle U-018 de docs/RULES.md"',
+            )
+        else:
+            article_panel_courant = _article(
+                "fait",
+                f"<p><code id=\"jeton-panel\">{jeton_panel}</code> — le registre officiel "
+                "versionné déclare ces configurations abonnement ; aucune n'est mesurée.</p>"
+                + spans_registre,
+            )
+            article_conclusion = _article(
+                "deduction",
+                f"<p><code id=\"jeton-conclusion\">{jeton_conclusion}</code> — déduction "
+                "raisonnée : des configurations sont déclarées mais aucune n'est mesurée "
+                f"et {absence_acquisition} ; une absence de preuve n'est jamais "
+                "transformée en résultat favorable, donc la seule conclusion dérivable "
+                "est l'abstention. Aucune valeur de remplacement n'est créée.</p>"
+                + src(rules, "U-018"),
+                ' data-premisses="configurations déclarées et non mesurées selon le '
+                f"registre officiel versionné ; {premisse_recus} ; "
+                'règle U-018 de docs/RULES.md"',
+            )
     else:
         article_panel_courant = _article(
             "fait",
@@ -12852,7 +12974,6 @@ def _rendre_page(racine: Path) -> bytes:
             + "</section>"
         )
 
-    couverture_etat = etat.get("couverture")
     if couverture_etat is not None:
         # Le registre de couverture versionné est restitué tel quel,
         # jamais recalculé au rendu
@@ -13195,9 +13316,15 @@ def _rendre_page(racine: Path) -> bytes:
         )
     )
     if configurations:
-        titre = (
-            "Restitution humaine V1 — profil abonnement — panel déclaré, aucune mesure"
-        )
+        if canon_panel is not None:
+            titre = (
+                "Restitution humaine V1 — profil abonnement — "
+                f"{canon_panel}"
+            )
+        else:
+            titre = (
+                "Restitution humaine V1 — profil abonnement — panel déclaré"
+            )
     else:
         titre = "Restitution humaine V1 — profil abonnement — état vide"
     page = (
@@ -13284,6 +13411,9 @@ def verifier_restitution(racine: Path) -> int:
     _compter_recus(repertoire)
     recus_locaux, recus_officiels = _partitionner_recus(racine, etat)
     configurations = _configurations_officielles(racine)
+    _verifier_triplets_configuration(
+        racine, recus_officiels, configurations
+    )
     qualification = _charger_recu_qualification(racine)
     preflights = _charger_recus_preflight(racine)
     verrou_charge = _charger_verrou_restitution(racine)
@@ -13306,6 +13436,16 @@ def verifier_restitution(racine: Path) -> int:
             registre_validation,
             verrou_charge,
         )
+    # Contrôle de fidélité uniquement : la couverture est redérivée depuis
+    # le registre, les reçus et les verdicts, puis comparée à la source
+    # publiée etat-v1.json, qui demeure l'unique source restituée
+    couverture_rederivee = _calculer_couverture(
+        configurations,
+        recus_officiels,
+        registre_validation,
+        artefacts_verdicts,
+        preflights,
+    )
     jetons_factuels = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -13589,6 +13729,14 @@ def verifier_restitution(racine: Path) -> int:
     couverture_etat = etat.get("couverture")
     if couverture_etat is not None:
         _valider_couverture_etat(couverture_etat)
+        if couverture_etat != couverture_rederivee:
+            echecs.append(
+                "couverture stockée divergente de la redérivation "
+                "indépendante : "
+                f"{couverture_rederivee['fraction']} attendu, "
+                f"{couverture_etat['fraction']} stocké dans "
+                f"{CHEMIN_ETAT.as_posix()} — aucune réparation"
+            )
         attendu_section_couverture = _section_couverture_etat(
             etat_relatif, empreintes[etat_relatif], couverture_etat
         )

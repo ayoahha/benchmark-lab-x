@@ -30,6 +30,8 @@ sys.path.insert(0, str(RACINE / "tools"))
 
 import campagne_v1 as M  # noqa: E402
 
+from tests._helpers_v1 import retirer_couverture_publiee  # noqa: E402
+
 _CAMPAGNE = Path("tasks/dev/pre-cadrage-entretien-client/campagne-v1")
 _REPERTOIRES_ENTREE = (
     _CAMPAGNE / "registre-panel-v1",
@@ -73,6 +75,7 @@ class VerrouCampagneTests(unittest.TestCase):
             destination = self.racine / relatif
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(RACINE / relatif, destination)
+        retirer_couverture_publiee(self.racine / M.CHEMIN_ETAT)
         for repertoire in _REPERTOIRES_ENTREE:
             shutil.copytree(RACINE / repertoire, self.racine / repertoire)
         self.chemin_verrou = self.racine / M.CHEMIN_VERROU

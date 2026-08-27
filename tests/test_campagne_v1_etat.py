@@ -86,12 +86,17 @@ def _enveloppe_recu(
     predecesseur: str | None,
     stimulus_sha: str,
 ) -> tuple[str, dict]:
+    chemin_configuration = (
+        f"{M.REGISTRE_OFFICIEL.as_posix()}/{identifiant}.toml"
+    )
     charge = {
         "carte": {"chemin": M.CHEMIN_CARTE, "sha256": "0" * 64},
         "configuration": {
             "identifiant": identifiant,
-            "chemin": f"{M.REGISTRE_OFFICIEL.as_posix()}/{identifiant}.toml",
-            "sha256": "1" * 64,
+            "chemin": chemin_configuration,
+            "sha256": hashlib.sha256(
+                (RACINE / chemin_configuration).read_bytes()
+            ).hexdigest(),
         },
         "creneau": f"{identifiant}:{stimulus_sha}",
         "execution": execution,
@@ -146,9 +151,7 @@ class _EtatBase:
         return etat["couverture"]
 
 
-class EtatPreuvesReellesTests(_EtatBase, unittest.TestCase):
-    """Arbre de preuves réel copié : le lot versionné tel quel."""
-
+class _ArbrePreuvesReelles(_EtatBase):
     def setUp(self):
         self._temporaire = tempfile.TemporaryDirectory()
         self.addCleanup(self._temporaire.cleanup)
@@ -166,6 +169,94 @@ class EtatPreuvesReellesTests(_EtatBase, unittest.TestCase):
             shutil.copyfile(_SOURCES_PAQUET / nom, destination)
         self.chemin_etat = self.racine / M.CHEMIN_ETAT
         self.page = self.racine / M.CHEMIN_PAGE
+
+    def _substituer_triplet(
+        self, identifiant_cible: str, **mutations: str
+    ) -> None:
+        """Injecte une substitution de triplet configuration dans un reçu
+        officiel -001, puis réaligne chaînage et registre de validation :
+        la seule divergence restante porte sur le triplet lui-même."""
+        repertoire = self.racine / _CAMPAGNE / "recus-v1"
+        enveloppes = {
+            chemin.name: json.loads(chemin.read_text(encoding="utf-8"))
+            for chemin in repertoire.iterdir()
+        }
+        cible = next(
+            nom
+            for nom, enveloppe in enveloppes.items()
+            if enveloppe["payload"]["configuration"]["identifiant"]
+            == identifiant_cible
+            and "recuperation" not in enveloppe["payload"]
+        )
+        cible_configuration = enveloppes[cible]["payload"]["configuration"]
+        ancien_creneau = enveloppes[cible]["payload"]["creneau"]
+        cible_configuration.update(mutations)
+        if "identifiant" in mutations:
+            stimulus = enveloppes[cible]["payload"]["stimulus"]["sha256"]
+            enveloppes[cible]["payload"]["creneau"] = (
+                f"{cible_configuration['identifiant']}:{stimulus}"
+            )
+        successeurs = {
+            enveloppe["payload"]["predecesseur_adresse_contenu"]: nom
+            for nom, enveloppe in enveloppes.items()
+        }
+        ordre = [
+            next(
+                nom
+                for nom, enveloppe in enveloppes.items()
+                if enveloppe["payload"]["predecesseur_adresse_contenu"] is None
+            )
+        ]
+        while enveloppes[ordre[-1]]["content_address"]["sha256"] in successeurs:
+            ordre.append(
+                successeurs[
+                    enveloppes[ordre[-1]]["content_address"]["sha256"]
+                ]
+            )
+        nouvelles_adresses: dict[str, str] = {}
+        reecritures: dict[str, tuple[str, str]] = {}
+        rang_cible = ordre.index(cible)
+        for nom in ordre[rang_cible:]:
+            enveloppe = enveloppes[nom]
+            predecesseur = enveloppe["payload"][
+                "predecesseur_adresse_contenu"
+            ]
+            if predecesseur in nouvelles_adresses:
+                enveloppe["payload"]["predecesseur_adresse_contenu"] = (
+                    nouvelles_adresses[predecesseur]
+                )
+            adresse = M.adresse_canonique(enveloppe["payload"])
+            enveloppe["content_address"]["sha256"] = adresse
+            octets = M.octets_canoniques(enveloppe)
+            anciene_adresse = nom[: -len(".json")]
+            (repertoire / nom).unlink()
+            (repertoire / f"{adresse}.json").write_bytes(octets)
+            nouvelles_adresses[anciene_adresse] = adresse
+            relatif = f"{_CAMPAGNE.as_posix()}/recus-v1/{nom}"
+            reecritures[relatif] = (
+                f"{_CAMPAGNE.as_posix()}/recus-v1/{adresse}.json",
+                hashlib.sha256(octets).hexdigest(),
+            )
+        registre_chemin = self.racine / M.CHEMIN_REGISTRE_VALIDATION
+        registre = json.loads(registre_chemin.read_text(encoding="utf-8"))
+        for entree in registre["entrees"]:
+            if entree["recu"] in reecritures:
+                entree["recu"], entree["recu_sha256"] = reecritures[
+                    entree["recu"]
+                ]
+                if (
+                    "identifiant" in mutations
+                    and entree["configuration_id"] == identifiant_cible
+                    and entree["creneau"] == ancien_creneau
+                ):
+                    entree["creneau"] = enveloppes[cible]["payload"][
+                        "creneau"
+                    ]
+        registre_chemin.write_bytes(M.octets_canoniques(registre))
+
+
+class EtatPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
+    """Arbre de preuves réel copié : le lot versionné tel quel."""
 
     def _instantane(self) -> dict[str, str]:
         return {
@@ -305,6 +396,72 @@ class EtatPreuvesReellesTests(_EtatBase, unittest.TestCase):
             0, M.principal(["verifier-restitution"], racine=self.racine)
         )
 
+    def test_restitution_porte_le_canon_exact_de_couverture(self):
+        code, _ = self._etat()
+        self.assertEqual(0, code)
+        self.assertEqual(0, M.principal(["restituer"], racine=self.racine))
+        page = self.page.read_text(encoding="utf-8")
+        # Canon exact du contrat, valeurs attendues indépendantes 2/7
+        self.assertIn(
+            "Panel abonnement : 2 décisions disponibles sur 7 ; "
+            "aucune sortie officiellement acceptable",
+            page,
+        )
+        # Les formulations globales devenues fausses ont disparu
+        self.assertNotIn("panel déclaré, aucune mesure", page)
+        self.assertNotIn(
+            "panel: 7 configurations déclarées, non mesurées", page
+        )
+        self.assertNotIn("aucune n'est mesurée", page)
+        # Le marquage des cinq configurations sans observation est conservé
+        self.assertEqual(
+            5,
+            page.count(
+                'non couvert : cause prouvée <code>MISSING_OBSERVATION</code>'
+            ),
+        )
+        self.assertEqual(
+            2,
+            page.count("couvert : décision <code>CANDIDATE_NOT_ACCEPTABLE</code>"),
+        )
+        self.assertEqual(
+            0, M.principal(["verifier-restitution"], racine=self.racine)
+        )
+
+    def test_lot_humain_vide_reste_un_cas_valide(self):
+        # L'arbre réel porte le gel du lot éligible vide : aucune sortie
+        # PASS, aucune intervention humaine, aucune révélation
+        code, sortie = self._etat()
+        self.assertEqual(0, code, sortie)
+        self.assertIn(
+            "- revue humaine : lot éligible vide — 0 verdict humain "
+            "requis, aucune intervention du relecteur",
+            sortie,
+        )
+        self.assertEqual(0, M.principal(["restituer"], racine=self.racine))
+        self.assertEqual(
+            0, M.principal(["verifier-restitution"], racine=self.racine)
+        )
+
+    def test_canon_refuse_une_sortie_officiellement_acceptable(self):
+        code, _ = self._etat()
+        self.assertEqual(0, code)
+        contenu = json.loads(self.chemin_etat.read_text(encoding="utf-8"))
+        antigravity = next(
+            creneau
+            for creneau in contenu["couverture"]["creneaux"]
+            if creneau["configuration_id"] == "antigravity-gemini-3-7-flash"
+        )
+        antigravity["decision"] = "OFFICIALLY_ACCEPTABLE"
+        self.chemin_etat.write_bytes(M.octets_canoniques(contenu))
+        avec_contexte = io.StringIO()
+        with contextlib.redirect_stdout(avec_contexte):
+            code = M.principal(["restituer"], racine=self.racine)
+        self.assertEqual(1, code)
+        self.assertIn(
+            "sortie officiellement acceptable présente", avec_contexte.getvalue()
+        )
+
     def test_verifier_restitution_detecte_conversion_dans_la_couverture(self):
         code, sortie = self._etat()
         self.assertEqual(0, code, sortie)
@@ -338,6 +495,89 @@ class EtatPreuvesReellesTests(_EtatBase, unittest.TestCase):
         self.page.write_text(page, encoding="utf-8")
         code, _ = verifier()
         self.assertEqual(0, code)
+
+
+class EtatTripletRegistreRecuTests(_ArbrePreuvesReelles, unittest.TestCase):
+    """Recoupement fail-closed du triplet {chemin, identifiant, sha256}
+    embarqué dans chaque reçu officiel avec le fichier courant du registre."""
+
+    def test_divergence_chemin_refusee_de_facon_nommee(self):
+        self._substituer_triplet(
+            "antigravity-gemini-3-7-flash",
+            chemin=(
+                f"{M.REGISTRE_OFFICIEL.as_posix()}/"
+                "antigravity-gemini-3-7-flash.renomme.toml"
+            ),
+        )
+        code, sortie = self._etat()
+        self.assertEqual(1, code)
+        self.assertIn("chemin de configuration divergent", sortie)
+
+    def test_divergence_identifiant_refusee_de_facon_nommee(self):
+        self._substituer_triplet(
+            "antigravity-gemini-3-7-flash",
+            identifiant="claude-code-fable-5",
+        )
+        code, sortie = self._etat()
+        self.assertEqual(1, code)
+        self.assertIn("identifiant de configuration divergent", sortie)
+
+    def test_divergence_sha256_refusee_de_facon_nommee(self):
+        self._substituer_triplet(
+            "antigravity-gemini-3-7-flash",
+            sha256="b" * 64,
+        )
+        code, sortie = self._etat()
+        self.assertEqual(1, code)
+        self.assertIn(
+            "SHA-256 de configuration divergent du fichier courant", sortie
+        )
+
+    def test_substitution_refusee_avant_restitution_et_publication(self):
+        self._substituer_triplet(
+            "antigravity-gemini-3-7-flash",
+            identifiant="claude-code-fable-5",
+        )
+        for arguments in ("restituer", "verifier-restitution"):
+            avec_contexte = io.StringIO()
+            with contextlib.redirect_stdout(avec_contexte):
+                code = M.principal([arguments], racine=self.racine)
+            self.assertEqual(1, code, arguments)
+            self.assertIn(
+                "identifiant de configuration divergent",
+                avec_contexte.getvalue(),
+            )
+
+    def test_couverture_stockee_divergente_detectee_par_verifier(self):
+        code, _ = self._etat()
+        self.assertEqual(0, code)
+        contenu = json.loads(self.chemin_etat.read_text(encoding="utf-8"))
+        couverture = contenu["couverture"]
+        antigravity = next(
+            creneau
+            for creneau in couverture["creneaux"]
+            if creneau["configuration_id"] == "antigravity-gemini-3-7-flash"
+        )
+        antigravity.update(
+            couvert=False, decision=None, cause="MISSING_OBSERVATION"
+        )
+        couverture["numerateur"] = 1
+        couverture["fraction"] = "1/7"
+        self.chemin_etat.write_bytes(M.octets_canoniques(contenu))
+        # La page est rendue depuis la couverture stockée altérée : seule la
+        # redérivation indépendante peut détecter la divergence
+        self.assertEqual(0, M.principal(["restituer"], racine=self.racine))
+        code, sortie = self._verifier()
+        self.assertEqual(1, code)
+        self.assertIn("couverture stockée divergente", sortie)
+
+    def _verifier(self) -> tuple[int, str]:
+        avec_contexte = io.StringIO()
+        with contextlib.redirect_stdout(avec_contexte):
+            code = M.principal(
+                ["verifier-restitution"], racine=self.racine
+            )
+        return code, avec_contexte.getvalue()
 
 
 class EtatDoublesLocauxTests(_EtatBase, unittest.TestCase):
@@ -687,6 +927,142 @@ class EtatChaineVerdictsTests(_EtatBase, unittest.TestCase):
                     "OFFICIALLY_ACCEPTABLE", creneaux[ident]["decision"]
                 )
         self.assertEqual("1/7", self._couverture()["fraction"])
+
+
+class EtatRederivationRevelationTests(_EtatBase, unittest.TestCase):
+    """Redérivation indépendante des états révélés dans le chemin etat."""
+
+    def setUp(self):
+        self._temporaire = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporaire.cleanup)
+        self.racine = Path(self._temporaire.name)
+        for nom in _FICHIERS_PAQUET:
+            destination = (
+                self.racine / _SOURCES_PAQUET.relative_to(RACINE) / nom
+            )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(_SOURCES_PAQUET / nom, destination)
+        validateur = self.racine / M.CHEMIN_VALIDATEUR
+        validateur.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(RACINE / M.CHEMIN_VALIDATEUR, validateur)
+        for relatif in (
+            M.CHEMIN_ETAT,
+            M.CHEMIN_SOURCES_PLANS,
+            *[Path(chemin) for chemin in _SOURCES_AUTORISEES],
+        ):
+            destination = self.racine / relatif
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(RACINE / relatif, destination)
+        shutil.copytree(
+            RACINE / _CAMPAGNE / "registre-panel-v1",
+            self.racine / _CAMPAGNE / "registre-panel-v1",
+        )
+        shutil.copytree(
+            RACINE / _CAMPAGNE / "preflights-v1",
+            self.racine / _CAMPAGNE / "preflights-v1",
+        )
+        self.recus = self.racine / _CAMPAGNE / "recus-v1"
+        self.recus.mkdir(parents=True, exist_ok=True)
+        self.stimulus_sha = hashlib.sha256(
+            (self.racine / M.CHEMIN_STIMULUS).read_bytes()
+        ).hexdigest()
+        self._prive = tempfile.TemporaryDirectory()
+        self.addCleanup(self._prive.cleanup)
+        self.privee = Path(self._prive.name)
+        self.assertEqual(
+            0,
+            M.principal(
+                ["verrouiller"], racine=self.racine, racine_privee=self.privee
+            ),
+        )
+        self.chemin_manifeste = self.racine / M.CHEMIN_MANIFESTE_DOSSIERS
+        self.chemin_revelation = (
+            self.racine / M.CHEMIN_REVELATION_CORRESPONDANCE
+        )
+
+    def _acquerir_valider_dossiers_geler(self) -> None:
+        adresse, enveloppe = _enveloppe_recu(
+            "zai-glm-5-3",
+            _execution_observee(_sortie_acceptable()),
+            None,
+            self.stimulus_sha,
+        )
+        (self.recus / f"{adresse}.json").write_text(
+            json.dumps(enveloppe, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        sortie = io.StringIO()
+        with (
+            contextlib.redirect_stdout(sortie),
+            mock.patch.object(
+                M.platform, "python_implementation", return_value="CPython"
+            ),
+            mock.patch.object(
+                M.platform, "python_version", return_value="3.12.13"
+            ),
+            mock.patch.object(
+                M.platform,
+                "python_version_tuple",
+                return_value=("3", "12", "13"),
+            ),
+        ):
+            self.assertEqual(
+                0,
+                M.principal(["valider"], racine=self.racine),
+                sortie.getvalue(),
+            )
+        avec_contexte = io.StringIO()
+        with contextlib.redirect_stdout(avec_contexte):
+            self.assertEqual(
+                0,
+                M.principal(
+                    ["dossiers"], racine=self.racine, racine_privee=self.privee
+                ),
+                avec_contexte.getvalue() + "<SORTIE>" + sortie.getvalue(),
+            )
+        manifeste = json.loads(self.chemin_manifeste.read_text(encoding="utf-8"))
+        item = manifeste["dossiers"][0]["item"]
+        saisie = self.racine / M.REPERTOIRE_SAISIE_VERDICTS / f"{item}.json"
+        saisie.parent.mkdir(parents=True, exist_ok=True)
+        saisie.write_text(
+            json.dumps(
+                {
+                    "schema_version": M.SCHEMA_SAISIE_VERDICT_HUMAIN,
+                    "item": item,
+                    "verdict": "ACCEPTABLE",
+                    "justification": "Le dossier permet de trancher",
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        avec_contexte = io.StringIO()
+        with contextlib.redirect_stdout(avec_contexte):
+            self.assertEqual(
+                0,
+                M.principal(
+                    ["geler"], racine=self.racine, racine_privee=self.privee
+                ),
+            )
+
+    def test_etat_refuse_etat_revele_divergent_de_sa_rederivation(self):
+        self._acquerir_valider_dossiers_geler()
+        revelation = json.loads(
+            self.chemin_revelation.read_text(encoding="utf-8")
+        )
+        for entree in revelation["etats_officiels"]:
+            if entree["etat_officiel"] == "OFFICIALLY_ACCEPTABLE":
+                entree["etat_officiel"] = "CANDIDATE_NOT_ACCEPTABLE"
+        self.chemin_revelation.write_bytes(M.octets_canoniques(revelation))
+        code, sortie = self._etat()
+        self.assertEqual(1, code)
+        self.assertIn(
+            "états officiels de la révélation divergents", sortie
+        )
 
 
 if __name__ == "__main__":

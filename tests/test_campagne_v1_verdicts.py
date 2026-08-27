@@ -31,6 +31,8 @@ sys.path.insert(0, str(RACINE / "tools"))
 
 import campagne_v1 as M  # noqa: E402
 
+from tests._helpers_v1 import retirer_couverture_publiee  # noqa: E402
+
 _CAMPAGNE = Path("tasks/dev/pre-cadrage-entretien-client/campagne-v1")
 _SOURCES_PAQUET = RACINE / "tasks/dev/pre-cadrage-entretien-client"
 _FICHIERS_PAQUET = (
@@ -73,7 +75,10 @@ def _enveloppe_recu(
         "configuration": {
             "identifiant": identifiant,
             "chemin": f"{M.REGISTRE_OFFICIEL.as_posix()}/{identifiant}.toml",
-            "sha256": "1" * 64,
+            "sha256": hashlib.sha256(
+                (RACINE / M.REGISTRE_OFFICIEL / f"{identifiant}.toml")
+                .read_bytes()
+            ).hexdigest(),
         },
         "creneau": f"{identifiant}:{stimulus_sha}",
         "execution": execution,
@@ -134,6 +139,7 @@ class GelVerdictsHumainsTests(unittest.TestCase):
             destination = self.racine / relatif
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(RACINE / relatif, destination)
+        retirer_couverture_publiee(self.racine / M.CHEMIN_ETAT)
         for repertoire in _REPERTOIRES_ENTREE:
             shutil.copytree(RACINE / repertoire, self.racine / repertoire)
         self.recus = self.racine / _CAMPAGNE / "recus-v1"
