@@ -1,0 +1,51 @@
+{
+  "couverture": {
+    "acquisitions_officielles": 2,
+    "sorties_candidates": 0,
+    "verdicts": {
+      "FAIL": 0,
+      "HARNESS_ERROR": 0,
+      "PASS": 0
+    }
+  },
+  "entrees": [
+    {
+      "cause_recue": "HARNESS_ERROR",
+      "configuration_id": "antigravity-gemini-3-7-flash",
+      "creneau": "antigravity-gemini-3-7-flash:20f0be450640704b0c467eee57ca2ea58a4d629e63eba3efccbc6f68440e07e4",
+      "recu": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/recus-v1/80046afee6e56ab9dcbdbbda4d5a4190d0d77cad2449b900ae16861e14cad839.json",
+      "recu_sha256": "6772a92c52dcb6affeb0a55af743609833bb4f4d12068e8149f74d84675bee41",
+      "sortie_candidate": "ABSENTE",
+      "verdict": null
+    },
+    {
+      "cause_recue": "HARNESS_ERROR",
+      "configuration_id": "zai-glm-5-3",
+      "creneau": "zai-glm-5-3:20f0be450640704b0c467eee57ca2ea58a4d629e63eba3efccbc6f68440e07e4",
+      "recu": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/recus-v1/0964422c4970ed527846e5dce3f7f9fcc9640897424044aad3f7cbc146695f40.json",
+      "recu_sha256": "0f081930b493ae9b990d7422b15763fff9337ae99a1344362835c39cbf0c6481",
+      "sortie_candidate": "ABSENTE",
+      "verdict": null
+    }
+  ],
+  "interpreteur": {
+    "observe": "CPython 3.12.13",
+    "pin": "CPython 3.12"
+  },
+  "paquet": {
+    "chemin": "tasks/dev/pre-cadrage-entretien-client/manifeste-paquet.json",
+    "sha256": "8030128d159e4203483b19f0e37692a53f01baecc38fbccaa321541c23e71a10"
+  },
+  "portes": [
+    "G-001",
+    "G-002",
+    "G-003",
+    "G-004",
+    "G-005"
+  ],
+  "schema_version": "campagne-v1-registre-validation/v1",
+  "validateur": {
+    "chemin": "tools/validateur_pre_cadrage_v0.py",
+    "sha256": "e631184b84270c4b3dbf931910436ad65b7d08c02016c94d2dfe53e27ead2056"
+  }
+}

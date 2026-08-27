@@ -11,6 +11,7 @@ Interface figée :
 - uv run tools/campagne_v1.py acquerir --officiel --configuration <id>
 - uv run tools/campagne_v1.py preflight --configuration <id>
 - uv run tools/campagne_v1.py verrouiller
+- uv run tools/campagne_v1.py valider
 - uv run tools/campagne_v1.py restituer
 - uv run tools/campagne_v1.py verifier-restitution
 """
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import importlib.util
 import json
 import os
 import platform
@@ -1044,6 +1046,515 @@ def qualifier_harnais(racine: Path) -> int:
     print("verdict : PASS")
     print(f"reçu écrit : {CHEMIN_RECU_QUALIFICATION.as_posix()}")
     return 0
+
+
+SCHEMA_REGISTRE_VALIDATION = "campagne-v1-registre-validation/v1"
+CHEMIN_REGISTRE_VALIDATION = (
+    _RACINE_CAMPAGNE_V1
+    / "validation-automatique-v1"
+    / "registre-couverture-verdicts.json"
+)
+# Contrôles mécaniques exacts du paquet approuvé, sans ajout ni retrait
+PORTES_PAQUET = ("G-001", "G-002", "G-003", "G-004", "G-005")
+VERDICTS_CANDIDATS = ("PASS", "FAIL", "HARNESS_ERROR")
+ORIGINES_ECHEC = ("CANDIDATE_ERROR", "HARNESS_ERROR")
+ETATS_SORTIE_CANDIDATE = ("PRESENTE", "ABSENTE")
+SECTION_REGISTRE_VALIDATION = "registre de couverture et de verdicts V1 versionné"
+
+
+def _refus_validation(fait: str) -> int:
+    """Refus fail-closed du dispositif de validation, fait fautif nommé."""
+    print(f"ECHEC {fait}")
+    return 1
+
+
+def _charger_module_validateur(chemin: Path) -> object:
+    """Charge le validateur qualifié depuis le fichier haché, jamais depuis
+    le dépôt de l'implémenteur."""
+    spec = importlib.util.spec_from_file_location(
+        "validateur_pre_cadrage_v0_qualifie", chemin
+    )
+    if spec is None or spec.loader is None:
+        raise ErreurRestitution(f"validateur non chargeable : {chemin}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def valider(racine: Path) -> int:
+    """Applique G-001 à G-005 aux sorties candidates des reçus officiels V1.
+
+    Seule une sortie candidate reçoit un verdict ; une acquisition sans
+    sortie conserve la cause de son reçu, inchangée. Les reçus locaux de
+    démonstration restent hors panel officiel et hors validation officielle.
+    """
+    # F-08 : une incompatibilité d'interpréteur n'est jamais un échec candidat
+    if not _interpreteur_compatible():
+        return _refus_validation(
+            f"incompatibilité d'interpréteur : pin '{PIN_INTERPRETEUR}', "
+            f"observé '{_interpreteur_observe()}' ; le pin n'est pas affaibli"
+        )
+    # Paquet approuvé byte-identique, vérifié avant toute validation
+    chemin_manifeste = racine / CHEMIN_PAQUET
+    if not chemin_manifeste.is_file():
+        return _refus_validation(
+            f"manifeste du paquet approuvé absent : {CHEMIN_PAQUET}"
+        )
+    sha_manifeste = _sha256_fichier(chemin_manifeste)
+    if sha_manifeste != EMPREINTE_MANIFESTE_APPROUVEE:
+        return _refus_validation(
+            f"manifeste du paquet divergent de l'empreinte approuvée : "
+            f"{CHEMIN_PAQUET} attendu {EMPREINTE_MANIFESTE_APPROUVEE}, "
+            f"observé {sha_manifeste}"
+        )
+    # Validateur qualifié byte-identique, chargé depuis le fichier haché
+    chemin_validateur = racine / CHEMIN_VALIDATEUR
+    if not chemin_validateur.is_file():
+        return _refus_validation(
+            f"validateur absent de la racine : {CHEMIN_VALIDATEUR}"
+        )
+    sha_validateur = _sha256_fichier(chemin_validateur)
+    if sha_validateur != EMPREINTE_VALIDATEUR_APPROUVEE:
+        return _refus_validation(
+            f"validateur divergent de l'empreinte qualifiée : "
+            f"{CHEMIN_VALIDATEUR} attendu {EMPREINTE_VALIDATEUR_APPROUVEE}, "
+            f"observé {sha_validateur}"
+        )
+    try:
+        module_validateur = _charger_module_validateur(chemin_validateur)
+    except ErreurRestitution as erreur:
+        return _refus_validation(str(erreur))
+    try:
+        etat = _charger_etat(racine)
+        _, recus_officiels = _partitionner_recus(racine, etat)
+    except ErreurRestitution as erreur:
+        return _refus_validation(f"reçus V1 illisibles : {erreur}")
+    paquet = module_validateur.PaquetApprouveV0(
+        manifeste=chemin_manifeste,
+        empreinte_manifeste_approuvee=EMPREINTE_MANIFESTE_APPROUVEE,
+        approbateur="Ayo",
+        verdict_approbation="APPROUVE",
+    )
+    entrees: list[dict] = []
+    for relatif, enveloppe, sha_recu in recus_officiels:
+        charge = enveloppe["payload"]
+        execution = charge["execution"]
+        entree = {
+            "recu": relatif,
+            "recu_sha256": sha_recu,
+            "configuration_id": charge["configuration"]["identifiant"],
+            "creneau": charge["creneau"],
+        }
+        if execution["etat"] != "OBSERVED":
+            # Aucune sortie candidate : aucun verdict candidat, cause du reçu
+            # conservée à l'identique, jamais convertie
+            entrees.append(
+                {
+                    **entree,
+                    "sortie_candidate": "ABSENTE",
+                    "cause_recue": execution["incident"],
+                    "verdict": None,
+                }
+            )
+            continue
+        with tempfile.TemporaryDirectory() as dossier:
+            sortie = Path(dossier) / "sortie-candidate.md"
+            sortie.write_text(execution["sortie"]["stdout"], encoding="utf-8")
+            # Empreinte des octets UTF-8 exacts du reçu, calculée avant
+            # l'appel : elle reste disponible si le validateur signale une
+            # erreur de lecture du harnais avant de renseigner la sienne
+            empreinte_recue = hashlib.sha256(
+                execution["sortie"]["stdout"].encode("utf-8")
+            ).hexdigest()
+            resultat = module_validateur.valider_pre_cadrage_v0(paquet, sortie)
+        porte_en_cause = next(
+            (nom for nom, franchie in resultat.gates if not franchie), None
+        )
+        if porte_en_cause is None and resultat.statut == "HARNESS_ERROR":
+            # Défaillance du dispositif entre G-005 et G-001 (lecture de la
+            # sortie) : la porte en cause est la dernière porte de harnais
+            # évaluée, G-005 ; jamais attribuée à une porte candidate
+            porte_en_cause = resultat.gates[-1][0] if resultat.gates else None
+        entrees.append(
+            {
+                **entree,
+                "sortie_candidate": "PRESENTE",
+                "cause_recue": None,
+                "verdict": {
+                    "statut": resultat.statut,
+                    "origine": resultat.origine,
+                    "porte_en_cause": porte_en_cause,
+                    "portes": [
+                        [nom, franchie] for nom, franchie in resultat.gates
+                    ],
+                    "empreinte_candidate": (
+                        resultat.preuve["empreinte_candidate"]
+                        if resultat.preuve["empreinte_candidate"] is not None
+                        else empreinte_recue
+                    ),
+                },
+            }
+        )
+    comptes = {verdict: 0 for verdict in VERDICTS_CANDIDATS}
+    for entree in entrees:
+        if entree["verdict"] is not None:
+            comptes[entree["verdict"]["statut"]] += 1
+    registre = {
+        "schema_version": SCHEMA_REGISTRE_VALIDATION,
+        "interpreteur": {
+            "pin": PIN_INTERPRETEUR,
+            "observe": _interpreteur_observe(),
+        },
+        "paquet": {"chemin": CHEMIN_PAQUET, "sha256": sha_manifeste},
+        "validateur": {"chemin": CHEMIN_VALIDATEUR, "sha256": sha_validateur},
+        "portes": list(PORTES_PAQUET),
+        "entrees": entrees,
+        "couverture": {
+            "acquisitions_officielles": len(entrees),
+            "sorties_candidates": sum(comptes.values()),
+            "verdicts": comptes,
+        },
+    }
+    destination = racine / CHEMIN_REGISTRE_VALIDATION
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(registre, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    for entree in entrees:
+        verdict = entree["verdict"]
+        if verdict is None:
+            print(
+                f"{entree['configuration_id']} : aucune sortie candidate, "
+                f"aucun verdict candidat ; cause du reçu conservée "
+                f"{entree['cause_recue']}"
+            )
+        elif verdict["statut"] == "PASS":
+            print(f"{entree['configuration_id']} : verdict PASS")
+        else:
+            print(
+                f"{entree['configuration_id']} : verdict "
+                f"{verdict['statut']} — porte en cause "
+                f"{verdict['porte_en_cause']} · origine {verdict['origine']}"
+            )
+    print(
+        f"couverture : {len(entrees)} acquisition(s) officielle(s), "
+        f"{sum(comptes.values())} sortie(s) candidate(s)"
+    )
+    print(f"registre écrit : {CHEMIN_REGISTRE_VALIDATION.as_posix()}")
+    return 0
+
+
+def _charger_registre_validation(
+    racine: Path,
+) -> tuple[str, dict, str] | None:
+    """Registre de validation validé : (chemin relatif, registre, SHA-256 du
+    fichier), ou None lorsque l'artefact n'existe pas."""
+    chemin = racine / CHEMIN_REGISTRE_VALIDATION
+    if not chemin.is_file():
+        return None
+    try:
+        registre = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurRestitution(
+            f"registre de validation illisible : {chemin} ({erreur})"
+        ) from erreur
+    if (
+        not isinstance(registre, dict)
+        or registre.get("schema_version") != SCHEMA_REGISTRE_VALIDATION
+    ):
+        raise ErreurRestitution(
+            f"schéma de registre de validation inattendu : {chemin}"
+        )
+    if registre.get("portes") != list(PORTES_PAQUET):
+        raise ErreurRestitution(
+            f"champ 'portes' : exactement {list(PORTES_PAQUET)} attendu, "
+            "sans ajout ni retrait"
+        )
+    paquet = registre.get("paquet")
+    if not isinstance(paquet, dict) or paquet.get("chemin") != CHEMIN_PAQUET:
+        raise ErreurRestitution(f"champ 'paquet.chemin' : '{CHEMIN_PAQUET}' attendu")
+    if paquet.get("sha256") != EMPREINTE_MANIFESTE_APPROUVEE:
+        raise ErreurRestitution(
+            "champ 'paquet.sha256' : empreinte approuvée "
+            f"{EMPREINTE_MANIFESTE_APPROUVEE} attendue"
+        )
+    validateur = registre.get("validateur")
+    if (
+        not isinstance(validateur, dict)
+        or validateur.get("chemin") != CHEMIN_VALIDATEUR
+    ):
+        raise ErreurRestitution(
+            f"champ 'validateur.chemin' : '{CHEMIN_VALIDATEUR}' attendu"
+        )
+    if validateur.get("sha256") != EMPREINTE_VALIDATEUR_APPROUVEE:
+        raise ErreurRestitution(
+            "champ 'validateur.sha256' : empreinte qualifiée "
+            f"{EMPREINTE_VALIDATEUR_APPROUVEE} attendue"
+        )
+    entrees = registre.get("entrees")
+    if not isinstance(entrees, list):
+        raise ErreurRestitution("champ 'entrees' : liste attendue")
+    for entree in entrees:
+        _valider_entree_registre_validation(entree)
+    couverture = registre.get("couverture")
+    if not isinstance(couverture, dict) or set(couverture) != {
+        "acquisitions_officielles",
+        "sorties_candidates",
+        "verdicts",
+    }:
+        raise ErreurRestitution(
+            "champ 'couverture' : clés exactes acquisitions_officielles, "
+            "sorties_candidates et verdicts attendues"
+        )
+    if couverture["acquisitions_officielles"] != len(entrees):
+        raise ErreurRestitution(
+            "champ 'couverture.acquisitions_officielles' : divergent du "
+            "nombre d'entrées"
+        )
+    comptes = couverture["verdicts"]
+    if not isinstance(comptes, dict) or set(comptes) != set(VERDICTS_CANDIDATS):
+        raise ErreurRestitution(
+            f"champ 'couverture.verdicts' : clés exactes "
+            f"{sorted(VERDICTS_CANDIDATS)} attendues"
+        )
+    recompte = {verdict: 0 for verdict in VERDICTS_CANDIDATS}
+    for entree in entrees:
+        if entree["verdict"] is not None:
+            recompte[entree["verdict"]["statut"]] += 1
+    if comptes != recompte:
+        raise ErreurRestitution(
+            "champ 'couverture.verdicts' : divergent du recompte des entrées"
+        )
+    if couverture["sorties_candidates"] != sum(recompte.values()):
+        raise ErreurRestitution(
+            "champ 'couverture.sorties_candidates' : divergent du recompte"
+        )
+    return (
+        CHEMIN_REGISTRE_VALIDATION.as_posix(),
+        registre,
+        _sha256_fichier(chemin),
+    )
+
+
+def _valider_entree_registre_validation(entree: object) -> None:
+    if not isinstance(entree, dict) or set(entree) != {
+        "recu",
+        "recu_sha256",
+        "configuration_id",
+        "creneau",
+        "sortie_candidate",
+        "cause_recue",
+        "verdict",
+    }:
+        raise ErreurRestitution(
+            "entrée de registre de validation : clés exactes recu, "
+            "recu_sha256, configuration_id, creneau, sortie_candidate, "
+            "cause_recue et verdict attendues"
+        )
+    if not isinstance(entree["recu"], str) or not entree["recu"]:
+        raise ErreurRestitution("entrée : champ 'recu' chaîne non vide attendu")
+    if (
+        not isinstance(entree["recu_sha256"], str)
+        or not _MOTIF_SHA256.match(entree["recu_sha256"])
+    ):
+        raise ErreurRestitution(
+            "entrée : champ 'recu_sha256' SHA-256 hexadécimal attendu"
+        )
+    if not isinstance(entree["configuration_id"], str) or not _MOTIF_SLUG.match(
+        entree["configuration_id"]
+    ):
+        raise ErreurRestitution(
+            "entrée : champ 'configuration_id' slug stable attendu"
+        )
+    if not isinstance(entree["creneau"], str) or not entree["creneau"]:
+        raise ErreurRestitution("entrée : champ 'creneau' chaîne non vide attendu")
+    if entree["sortie_candidate"] not in ETATS_SORTIE_CANDIDATE:
+        raise ErreurRestitution(
+            f"entrée : champ 'sortie_candidate' hors vocabulaire "
+            f"({' | '.join(ETATS_SORTIE_CANDIDATE)})"
+        )
+    verdict = entree["verdict"]
+    if entree["sortie_candidate"] == "ABSENTE":
+        # Aucun verdict candidat sans sortie ; la cause du reçu est conservée
+        # inchangée, dans le vocabulaire d'incident du profil abonnement
+        if verdict is not None:
+            raise ErreurRestitution(
+                f"entrée '{entree['configuration_id']}' : verdict candidat "
+                "attribué à une acquisition sans sortie candidate"
+            )
+        if entree["cause_recue"] not in INCIDENTS_V1:
+            raise ErreurRestitution(
+                f"entrée '{entree['configuration_id']}' : cause du reçu hors "
+                f"vocabulaire ({' | '.join(INCIDENTS_V1)})"
+            )
+        return
+    if entree["cause_recue"] is not None:
+        raise ErreurRestitution(
+            f"entrée '{entree['configuration_id']}' : cause de reçu présente "
+            "sur une sortie candidate"
+        )
+    if not isinstance(verdict, dict) or set(verdict) != {
+        "statut",
+        "origine",
+        "porte_en_cause",
+        "portes",
+        "empreinte_candidate",
+    }:
+        raise ErreurRestitution(
+            f"entrée '{entree['configuration_id']}' : verdict avec clés "
+            "exactes statut, origine, porte_en_cause, portes et "
+            "empreinte_candidate attendu"
+        )
+    if verdict["statut"] not in VERDICTS_CANDIDATS:
+        raise ErreurRestitution(
+            f"entrée '{entree['configuration_id']}' : statut hors vocabulaire "
+            f"({' | '.join(VERDICTS_CANDIDATS)})"
+        )
+    if verdict["statut"] == "PASS":
+        if verdict["origine"] is not None or verdict["porte_en_cause"] is not None:
+            raise ErreurRestitution(
+                f"entrée '{entree['configuration_id']}' : PASS sans origine "
+                "ni porte en cause attendu"
+            )
+    else:
+        if verdict["origine"] not in ORIGINES_ECHEC:
+            raise ErreurRestitution(
+                f"entrée '{entree['configuration_id']}' : origine hors "
+                f"vocabulaire ({' | '.join(ORIGINES_ECHEC)})"
+            )
+        if verdict["porte_en_cause"] not in PORTES_PAQUET:
+            raise ErreurRestitution(
+                f"entrée '{entree['configuration_id']}' : porte en cause "
+                f"hors vocabulaire ({' | '.join(PORTES_PAQUET)})"
+            )
+        # HARNESS_ERROR n'existe que lorsque la preuve désigne le harnais
+        if verdict["statut"] == "HARNESS_ERROR" and verdict["origine"] != (
+            "HARNESS_ERROR"
+        ):
+            raise ErreurRestitution(
+                f"entrée '{entree['configuration_id']}' : HARNESS_ERROR sans "
+                "origine HARNESS_ERROR"
+            )
+    portes = verdict["portes"]
+    if (
+        not isinstance(portes, list)
+        or not portes
+        or any(
+            not isinstance(porte, list)
+            or len(porte) != 2
+            or porte[0] not in PORTES_PAQUET
+            or not isinstance(porte[1], bool)
+            for porte in portes
+        )
+    ):
+        raise ErreurRestitution(
+            f"entrée '{entree['configuration_id']}' : portes [[porte, booléen]] "
+            "attendues"
+        )
+    if not isinstance(verdict["empreinte_candidate"], str) or not (
+        _MOTIF_SHA256.match(verdict["empreinte_candidate"])
+    ):
+        raise ErreurRestitution(
+            f"entrée '{entree['configuration_id']}' : empreinte_candidate "
+            "SHA-256 hexadécimal attendu"
+        )
+
+
+def _article_validation(
+    entree: dict, relatif_registre: str, sha_registre: str
+) -> str:
+    """Article régénérable à l'identique depuis une entrée du registre."""
+    lignes_communes = (
+        f"<p><strong>{_echapper(entree['configuration_id'])}</strong> — "
+        f"reçu <code>{_echapper(entree['recu'])}</code> · SHA-256 du fichier "
+        f"<code>{entree['recu_sha256']}</code></p>"
+        f"<p>créneau <code>{_echapper(entree['creneau'])}</code></p>"
+    )
+    verdict = entree["verdict"]
+    if verdict is None:
+        contenu = (
+            lignes_communes
+            + "<p>aucune sortie candidate : <strong>aucun verdict candidat</strong> "
+            "n'est attribué ; la cause du reçu d'acquisition est conservée "
+            f"inchangée : <code>{_echapper(entree['cause_recue'])}</code>.</p>"
+            + _span_source(
+                relatif_registre, sha_registre, SECTION_REGISTRE_VALIDATION
+            )
+            + _span_source(
+                entree["recu"], entree["recu_sha256"], SECTION_RECU_OFFICIEL
+            )
+        )
+    else:
+        detail_portes = " · ".join(
+            f"<code>{_echapper(nom)}</code> "
+            + ("franchie" if franchie else "en échec")
+            for nom, franchie in verdict["portes"]
+        )
+        if verdict["statut"] == "PASS":
+            lignes_verdict = (
+                f"<p>verdict <code>PASS</code> — les portes "
+                f"<code>G-001</code> à <code>G-005</code> sont franchies, "
+                "sans porte en cause ni origine d'échec.</p>"
+            )
+        else:
+            lignes_verdict = (
+                f"<p>verdict <code>{_echapper(verdict['statut'])}</code> — "
+                f"porte en cause <code>{_echapper(verdict['porte_en_cause'])}"
+                f"</code> · origine <code>{_echapper(verdict['origine'])}</code></p>"
+            )
+        contenu = (
+            lignes_communes
+            + lignes_verdict
+            + f"<p>portes évaluées : {detail_portes}</p>"
+            f"<p>empreinte de la sortie candidate "
+            f"<code>{verdict['empreinte_candidate']}</code></p>"
+            + _span_source(
+                relatif_registre, sha_registre, SECTION_REGISTRE_VALIDATION
+            )
+            + _span_source(
+                entree["recu"], entree["recu_sha256"], SECTION_RECU_OFFICIEL
+            )
+        )
+    return _article(
+        "fait",
+        contenu,
+        f' data-validation="{entree["configuration_id"]}"',
+    )
+
+
+def _article_couverture_validation(
+    relatif: str, sha_fichier: str, registre: dict
+) -> str:
+    """Article de couverture régénérable à l'identique depuis le registre."""
+    couverture = registre["couverture"]
+    comptes = couverture["verdicts"]
+    contenu = (
+        "<p><strong>Couverture et verdicts</strong> — la validation applique "
+        "exclusivement les contrôles mécaniques <code>G-001</code> à "
+        "<code>G-005</code> du paquet approuvé, au moyen du validateur "
+        "qualifié, sans modification du paquet et sans contrôle sémantique. "
+        "Seule une sortie candidate reçoit un verdict ; une acquisition sans "
+        "sortie candidate conserve la cause de son reçu, inchangée. Le reçu "
+        "local de démonstration reste hors panel officiel et hors validation "
+        "officielle.</p>"
+        f"<p>acquisitions officielles : "
+        f"<code>{couverture['acquisitions_officielles']}</code> · sorties "
+        f"candidates : <code>{couverture['sorties_candidates']}</code></p>"
+        f"<p>verdicts : <code>PASS</code> {comptes['PASS']} · "
+        f"<code>FAIL</code> {comptes['FAIL']} · <code>HARNESS_ERROR</code> "
+        f"{comptes['HARNESS_ERROR']}</p>"
+        f"<p>paquet <code>{_echapper(registre['paquet']['chemin'])}</code> · "
+        f"SHA-256 <code>{registre['paquet']['sha256']}</code></p>"
+        f"<p>validateur <code>{_echapper(registre['validateur']['chemin'])}"
+        f"</code> · SHA-256 <code>{registre['validateur']['sha256']}</code></p>"
+        f"<p>interpréteur : pin "
+        f"<code>{_echapper(registre['interpreteur']['pin'])}</code> · observé "
+        f"<code>{_echapper(registre['interpreteur']['observe'])}</code></p>"
+        + _span_source(relatif, sha_fichier, SECTION_REGISTRE_VALIDATION)
+    )
+    return _article("fait", contenu, ' data-registre-validation="couverture"')
 
 
 SCHEMA_RECU_PREFLIGHT = "campagne-v1-preflight/v1"
@@ -7547,6 +8058,7 @@ def _rendre_page(racine: Path) -> bytes:
     preflights = _charger_recus_preflight(racine)
     verrou_charge = _charger_verrou_restitution(racine)
     autorisation = _charger_autorisation_restitution(racine)
+    registre_validation = _charger_registre_validation(racine)
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -7561,6 +8073,8 @@ def _rendre_page(racine: Path) -> bytes:
         empreintes[qualification[0]] = qualification[2]
     if autorisation is not None:
         empreintes[autorisation[0]] = autorisation[2]
+    if registre_validation is not None:
+        empreintes[registre_validation[0]] = registre_validation[2]
     relatif_sources_plans = CHEMIN_SOURCES_PLANS.as_posix()
     if verrou_charge is not None:
         empreintes[verrou_charge[0]] = verrou_charge[2]
@@ -7880,6 +8394,32 @@ def _rendre_page(racine: Path) -> bytes:
             + "</section>"
         )
 
+    if registre_validation is not None:
+        relatif_registre, registre, sha_registre = registre_validation
+        sections.append(
+            '<section id="validation-automatique"><h2>Validation automatique '
+            "des sorties candidates</h2>"
+            "<p>Cette section reprend le registre de couverture et de "
+            "verdicts versionné, produit par <code>valider</code> : chaque "
+            "sortie candidate, et elle seule, reçoit un verdict "
+            "<code>PASS</code>, <code>FAIL</code> ou "
+            "<code>HARNESS_ERROR</code> ; un échec porte la porte en cause et "
+            "l'origine <code>CANDIDATE_ERROR</code> ou "
+            "<code>HARNESS_ERROR</code>. Une acquisition sans sortie "
+            "candidate ne reçoit aucun verdict candidat et la cause de son "
+            "reçu reste inchangée. Ces verdicts automatiques n'établissent "
+            "aucune acceptabilité officielle : celle-ci exige la revue "
+            "humaine aveugle, à venir.</p>"
+            + _article_couverture_validation(
+                relatif_registre, sha_registre, registre
+            )
+            + "".join(
+                _article_validation(entree, relatif_registre, sha_registre)
+                for entree in registre["entrees"]
+            )
+            + "</section>"
+        )
+
     if configurations:
         article_identites_inconnues = _article(
             "fait",
@@ -8155,6 +8695,11 @@ def _rendre_page(racine: Path) -> bytes:
                 else ()
             ),
             *(
+                ((registre_validation[0], SECTION_REGISTRE_VALIDATION),)
+                if registre_validation is not None
+                else ()
+            ),
+            *(
                 ((qualification[0], SECTION_QUALIFICATION),)
                 if qualification is not None
                 else ()
@@ -8265,6 +8810,7 @@ def verifier_restitution(racine: Path) -> int:
     preflights = _charger_recus_preflight(racine)
     verrou_charge = _charger_verrou_restitution(racine)
     autorisation = _charger_autorisation_restitution(racine)
+    registre_validation = _charger_registre_validation(racine)
     jetons_factuels = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -8279,6 +8825,8 @@ def verifier_restitution(racine: Path) -> int:
         empreintes[qualification[0]] = qualification[2]
     if autorisation is not None:
         empreintes[autorisation[0]] = autorisation[2]
+    if registre_validation is not None:
+        empreintes[registre_validation[0]] = registre_validation[2]
     if verrou_charge is not None:
         empreintes[verrou_charge[0]] = verrou_charge[2]
         try:
@@ -8374,6 +8922,53 @@ def verifier_restitution(racine: Path) -> int:
             f"{attendu_autorisations_acquisition} entrée d'autorisation "
             "d'acquisition attendue dans la page, "
             f"{nombre_autorisations_acquisition} trouvée"
+        )
+
+    if registre_validation is not None:
+        relatif_registre, registre, _ = registre_validation
+        # Le registre couvre exactement les acquisitions officielles, dans
+        # l'ordre matériel du chaînage, sans jamais inclure un reçu local
+        recus_registre = [entree["recu"] for entree in registre["entrees"]]
+        recus_attendus = [relatif for relatif, _, _ in recus_officiels]
+        if recus_registre != recus_attendus:
+            echecs.append(
+                "registre de validation non aligné sur les acquisitions "
+                f"officielles : {recus_attendus} attendus, "
+                f"{recus_registre} trouvés"
+            )
+        attendu_couverture = _article_couverture_validation(
+            relatif_registre, registre_validation[2], registre
+        )
+        if attendu_couverture not in page:
+            echecs.append(
+                "entrée de couverture de validation infidèle ou absente"
+            )
+        for entree in registre["entrees"]:
+            attendu = _article_validation(
+                entree, relatif_registre, registre_validation[2]
+            )
+            if attendu not in page:
+                echecs.append(
+                    "entrée de validation infidèle ou absente : "
+                    f"{entree['configuration_id']}"
+                )
+    nombre_validations = page.count(' data-validation="')
+    attendu_validations = (
+        len(registre_validation[1]["entrees"])
+        if registre_validation is not None
+        else 0
+    )
+    if nombre_validations != attendu_validations:
+        echecs.append(
+            f"{attendu_validations} entrées de validation attendues dans la "
+            f"page, {nombre_validations} trouvées"
+        )
+    nombre_couvertures = page.count(' data-registre-validation="couverture"')
+    attendu_couvertures = 0 if registre_validation is None else 1
+    if nombre_couvertures != attendu_couvertures:
+        echecs.append(
+            f"{attendu_couvertures} entrée de couverture de validation "
+            f"attendue dans la page, {nombre_couvertures} trouvée"
         )
 
     for relatif, enveloppe, sha in recus_officiels:
@@ -8499,7 +9094,7 @@ _USAGE = (
     "| acquerir --local --configuration <id> "
     "| acquerir --officiel --configuration <id> "
     "| preflight --configuration <id> "
-    "| qualifier | verrouiller | restituer | verifier-restitution"
+    "| qualifier | verrouiller | valider | restituer | verifier-restitution"
 )
 
 
@@ -8516,6 +9111,8 @@ def principal(
         # racine_privee n'existe que pour les tests Python : la CLI de
         # production conserve la racine privée obligatoire exacte
         return verrouiller(racine, racine_privee)
+    if arguments == ["valider"]:
+        return valider(racine)
     if arguments == ["restituer"]:
         try:
             return restituer(racine)
