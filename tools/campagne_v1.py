@@ -9,11 +9,13 @@ Interface figée :
 - uv run tools/campagne_v1.py autorisations [--configuration <id>]
 - uv run tools/campagne_v1.py acquerir --local --configuration <id>
 - uv run tools/campagne_v1.py acquerir --officiel --configuration <id>
+- uv run tools/campagne_v1.py acquerir --recuperation --configuration <id>
 - uv run tools/campagne_v1.py preflight --configuration <id>
 - uv run tools/campagne_v1.py verrouiller
 - uv run tools/campagne_v1.py valider
 - uv run tools/campagne_v1.py restituer
 - uv run tools/campagne_v1.py verifier-restitution
+- uv run tools/campagne_v1.py preparer-recuperation
 """
 
 from __future__ import annotations
@@ -7290,6 +7292,655 @@ def _charger_autorisation_acquisition(racine: Path) -> dict:
     return donnees
 
 
+class ErreurRecuperation(Exception):
+    """Divergence nommée du contrat de récupération V1-R1."""
+
+
+# Contrat fermé de l'Issue #131 : récupération verrouillée des harnais
+# Antigravity et Z.AI, sans autorité d'exécution dans cette tranche.
+SCHEMA_VERROU_RECUPERATION = "campagne-v1-verrou-recuperation/v1"
+CHEMIN_VERROU_RECUPERATION = (
+    _RACINE_CAMPAGNE_V1 / "recuperation-harnais-v1" / "verrou-recuperation.json"
+)
+SECTION_VERROU_RECUPERATION = "verrou de récupération des harnais versionné"
+ISSUE_RECUPERATION = "https://github.com/ayoahha/benchmark-lab-x/issues/131"
+TRANCHE_RECUPERATION = "V1-R1"
+CONFIGURATION_ANTIGRAVITY_RECUPERATION = "antigravity-gemini-3-7-flash"
+CONFIGURATION_ZAI_RECUPERATION = "zai-glm-5-3"
+CRENEAU_ANTIGRAVITY_RECUPERATION = "ACQ-V1-ANTIGRAVITY-GEMINI-3-7-FLASH-002"
+CRENEAU_ZAI_RECUPERATION = "ACQ-V1-ZAI-GLM-5-3-002"
+
+# Descripteurs fermés par le contrat : aucune dérivation, aucune variante.
+DESCRIPTEUR_ANTIGRAVITY_RECUPERATION = (
+    "agy",
+    "--model",
+    "gemini-3.7-flash-high",
+    "--effort",
+    "high",
+    "--sandbox",
+    "--disable-slash-commands",
+    "--print=__STIMULUS_UTF8__",
+)
+DESCRIPTEUR_ZAI_RECUPERATION = (
+    "codex",
+    "exec",
+    "--skip-git-repo-check",
+    "--sandbox",
+    "read-only",
+    "--model",
+    "zai/glm-5.3",
+    "--cd",
+    "__ISOLATED_WORKSPACE__",
+    "--config",
+    'model_reasoning_effort="high"',
+    "-",
+)
+MODE_STIMULUS_ARGUMENT = "argument"
+MODE_STIMULUS_STDIN = "stdin"
+VARIANTES_INTERDITES_RECUPERATION = (
+    "fallback",
+    "retry",
+    "fast",
+    "priority",
+    "max",
+    "ultra",
+)
+CONDITION_OBSERVED_ZAI = (
+    "trace OpenCodex attribuable à la tentative : fournisseur zai, "
+    "modèle glm-5.3, effort effectif high, une tentative, aucun fallback"
+)
+CONDITION_OBSERVED_ANTIGRAVITY = (
+    "métadonnée attribuable à la tentative portant gemini-3.7-flash-high"
+)
+SINON_PROVENANCE_RECUPERATION = "provenance servie INCONNU et HOLD"
+JAMAIS_PREUVE_RECUPERATION = ("argv demandé", "code de sortie 0")
+
+# Jeton du stimulus UTF-8 dans le descripteur Antigravity.
+JETON_STIMULUS_UTF8 = "__STIMULUS_UTF8__"
+
+# Les sept sources historiques de la récupération, dans l'ordre figé du
+# verrou : chaque empreinte courante est croisée avec la constante figée et
+# avec son épinglage existant lorsqu'il existe.
+CHEMINS_SOURCES_HISTORIQUES_RECUPERATION = (
+    CHEMIN_AUTORISATION_ACQUISITION.as_posix(),
+    CHEMIN_VERROU.as_posix(),
+    CHEMIN_STIMULUS,
+    (
+        REGISTRE_OFFICIEL / f"{CONFIGURATION_ANTIGRAVITY_RECUPERATION}.toml"
+    ).as_posix(),
+    (REGISTRE_OFFICIEL / f"{CONFIGURATION_ZAI_RECUPERATION}.toml").as_posix(),
+    (
+        _RACINE_CAMPAGNE_V1
+        / "recus-v1"
+        / "80046afee6e56ab9dcbdbbda4d5a4190d0d77cad2449b900ae16861e14cad839.json"
+    ).as_posix(),
+    (
+        _RACINE_CAMPAGNE_V1
+        / "recus-v1"
+        / "0964422c4970ed527846e5dce3f7f9fcc9640897424044aad3f7cbc146695f40.json"
+    ).as_posix(),
+)
+
+# Constantes figées par le contrat : toute divergence de l'octet courant
+# rend 2 en nommant le chemin, sans réécriture.
+EMPREINTES_SOURCES_HISTORIQUES_RECUPERATION = {
+    CHEMIN_AUTORISATION_ACQUISITION.as_posix(): (
+        "40df1597765f57b3df00a02c4c47134df1af9d9c512183efeadaf6c3cdc63acf"
+    ),
+    CHEMIN_VERROU.as_posix(): (
+        "651f4eaee740e54e70b449b92d23be11a61ecdfea9443b875213cc563b50a17c"
+    ),
+    CHEMIN_STIMULUS: (
+        "20f0be450640704b0c467eee57ca2ea58a4d629e63eba3efccbc6f68440e07e4"
+    ),
+    (
+        REGISTRE_OFFICIEL / f"{CONFIGURATION_ANTIGRAVITY_RECUPERATION}.toml"
+    ).as_posix(): (
+        "3a84083be8a6a25e850fc2daf8ab2438cccd951df8f5c0167757e0f97dc01e99"
+    ),
+    (REGISTRE_OFFICIEL / f"{CONFIGURATION_ZAI_RECUPERATION}.toml").as_posix(): (
+        "6d009539b6aa704e442d69f3dc272d48cef153e73003243033239c0bbb5642a2"
+    ),
+    (
+        _RACINE_CAMPAGNE_V1
+        / "recus-v1"
+        / "80046afee6e56ab9dcbdbbda4d5a4190d0d77cad2449b900ae16861e14cad839.json"
+    ).as_posix(): (
+        "6772a92c52dcb6affeb0a55af743609833bb4f4d12068e8149f74d84675bee41"
+    ),
+    (
+        _RACINE_CAMPAGNE_V1
+        / "recus-v1"
+        / "0964422c4970ed527846e5dce3f7f9fcc9640897424044aad3f7cbc146695f40.json"
+    ).as_posix(): (
+        "0f081930b493ae9b990d7422b15763fff9337ae99a1344362835c39cbf0c6481"
+    ),
+}
+
+# Sentinelles de diagnostic reliées à l'Issue #109 : jamais des preuves
+# candidates, exclues fermement des reçus et verdicts V1.
+ISSUE_SENTINELLES_RECUPERATION = (
+    "https://github.com/ayoahha/benchmark-lab-x/issues/109"
+)
+SENTINELLE_DIAGNOSTIC_NON_CANDIDAT = "DIAGNOSTIC_NON_CANDIDAT"
+EXCLUSION_FERMEE_SENTINELLE = ["recus-v1", "verdicts-v1"]
+
+_CLES_VERROU_RECUPERATION = {
+    "schema_version",
+    "portee",
+    "configurations",
+    "autorite_execution",
+    "creneaux_executes",
+    "reprises_executees",
+    "fallback",
+    "variantes_interdites",
+    "preuves_identite_futures",
+    "jamais_preuve",
+    "sources_historiques",
+    "sentinelles",
+}
+_CLES_PORTEE_RECUPERATION = {"issue", "product_version", "tranche"}
+_CLES_CONFIGURATION_RECUPERATION = {
+    "configuration_id",
+    "acquisition_id",
+    "descripteur",
+}
+_CLES_DESCRIPTEUR_RECUPERATION = {"argv", "stimulus_utf8"}
+_CLES_PREUVE_IDENTITE_RECUPERATION = {
+    "configuration_id",
+    "observe_uniquement_par",
+    "sinon",
+}
+_CLES_SOURCE_HISTORIQUE_RECUPERATION = {"chemin", "sha256"}
+_CLES_SENTINELLE_RECUPERATION = {
+    "configuration_id",
+    "lien",
+    "marqueur",
+    "exclusion_fermee",
+}
+
+
+def _structure_verrou_recuperation(sources: list[dict]) -> dict:
+    """Parties fermées du verrou : seules les sources varient."""
+    return {
+        "schema_version": SCHEMA_VERROU_RECUPERATION,
+        "portee": {
+            "issue": ISSUE_RECUPERATION,
+            "product_version": "V1",
+            "tranche": TRANCHE_RECUPERATION,
+        },
+        "configurations": [
+            {
+                "configuration_id": CONFIGURATION_ANTIGRAVITY_RECUPERATION,
+                "acquisition_id": CRENEAU_ANTIGRAVITY_RECUPERATION,
+                "descripteur": {
+                    "argv": list(DESCRIPTEUR_ANTIGRAVITY_RECUPERATION),
+                    "stimulus_utf8": MODE_STIMULUS_ARGUMENT,
+                },
+            },
+            {
+                "configuration_id": CONFIGURATION_ZAI_RECUPERATION,
+                "acquisition_id": CRENEAU_ZAI_RECUPERATION,
+                "descripteur": {
+                    "argv": list(DESCRIPTEUR_ZAI_RECUPERATION),
+                    "stimulus_utf8": MODE_STIMULUS_STDIN,
+                },
+            },
+        ],
+        "autorite_execution": "NOT_GRANTED",
+        "creneaux_executes": 0,
+        "reprises_executees": 0,
+        "fallback": "NONE",
+        "variantes_interdites": list(VARIANTES_INTERDITES_RECUPERATION),
+        "preuves_identite_futures": [
+            {
+                "configuration_id": CONFIGURATION_ZAI_RECUPERATION,
+                "observe_uniquement_par": CONDITION_OBSERVED_ZAI,
+                "sinon": SINON_PROVENANCE_RECUPERATION,
+            },
+            {
+                "configuration_id": CONFIGURATION_ANTIGRAVITY_RECUPERATION,
+                "observe_uniquement_par": CONDITION_OBSERVED_ANTIGRAVITY,
+                "sinon": SINON_PROVENANCE_RECUPERATION,
+            },
+        ],
+        "jamais_preuve": list(JAMAIS_PREUVE_RECUPERATION),
+        "sources_historiques": sources,
+        "sentinelles": [
+            {
+                "configuration_id": CONFIGURATION_ANTIGRAVITY_RECUPERATION,
+                "lien": ISSUE_SENTINELLES_RECUPERATION,
+                "marqueur": SENTINELLE_DIAGNOSTIC_NON_CANDIDAT,
+                "exclusion_fermee": list(EXCLUSION_FERMEE_SENTINELLE),
+            },
+            {
+                "configuration_id": CONFIGURATION_ZAI_RECUPERATION,
+                "lien": ISSUE_SENTINELLES_RECUPERATION,
+                "marqueur": SENTINELLE_DIAGNOSTIC_NON_CANDIDAT,
+                "exclusion_fermee": list(EXCLUSION_FERMEE_SENTINELLE),
+            },
+        ],
+    }
+
+
+def _construire_verrou_recuperation(racine: Path) -> dict:
+    """Verrou additif exact : chaque octet courant de source historique est
+    croisé avec la constante figée du contrat et avec son épinglage existant
+    (autorisation, verrou de campagne, registre de validation) lorsqu'il
+    existe. N'exécute aucune commande."""
+    try:
+        autorisation = _charger_autorisation_acquisition(racine)
+    except ErreurAutorisation as erreur:
+        raise ErreurRecuperation(
+            "champ 'sources_historiques' : autorisation D-V1-04 absente ou "
+            f"divergente : {erreur}"
+        ) from erreur
+    try:
+        verrou_campagne = json.loads(
+            (racine / CHEMIN_VERROU).read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurRecuperation(
+            "champ 'sources_historiques' : verrou de campagne illisible : "
+            f"{erreur}"
+        ) from erreur
+    panel = (
+        verrou_campagne.get("panel")
+        if isinstance(verrou_campagne, dict)
+        else None
+    )
+    references_panel: dict[str, dict] = {}
+    if isinstance(panel, list):
+        for entree in panel:
+            if isinstance(entree, dict):
+                references_panel[entree.get("configuration_id")] = (
+                    entree.get("configuration")
+                )
+    try:
+        registre_charge = _charger_registre_validation(racine)
+    except ErreurRestitution as erreur:
+        raise ErreurRecuperation(
+            "champ 'sources_historiques' : registre de validation "
+            f"divergent : {erreur}"
+        ) from erreur
+    if registre_charge is None:
+        raise ErreurRecuperation(
+            "champ 'sources_historiques' : registre de validation absent, "
+            "reçus HARNESS_ERROR requis"
+        )
+    references_recus: dict[str, tuple[str, str]] = {}
+    for entree in registre_charge[1]["entrees"]:
+        if entree["configuration_id"] in (
+            CONFIGURATION_ANTIGRAVITY_RECUPERATION,
+            CONFIGURATION_ZAI_RECUPERATION,
+        ):
+            references_recus[entree["configuration_id"]] = (
+                entree["recu"],
+                entree["recu_sha256"],
+            )
+    # Épinglages existants : la fonction de chargement de l'autorisation a
+    # déjà vérifié le verrou et le stimulus contre les siens.
+    epingles: dict[str, str] = {
+        autorisation["verrou"]["chemin"]: autorisation["verrou"]["sha256"],
+        autorisation["stimulus"]["chemin"]: autorisation["stimulus"]["sha256"],
+    }
+    for identifiant in (
+        CONFIGURATION_ANTIGRAVITY_RECUPERATION,
+        CONFIGURATION_ZAI_RECUPERATION,
+    ):
+        reference = references_panel.get(identifiant)
+        if not isinstance(reference, dict):
+            raise ErreurRecuperation(
+                "champ 'sources_historiques' : entrée de panel absente pour "
+                f"'{identifiant}'"
+            )
+        epingles[reference["chemin"]] = reference["sha256"]
+        recu = references_recus.get(identifiant)
+        if recu is None:
+            raise ErreurRecuperation(
+                "champ 'sources_historiques' : reçu HARNESS_ERROR absent du "
+                f"registre pour '{identifiant}'"
+            )
+        epingles[recu[0]] = recu[1]
+    for chemin_epingle in epingles:
+        if chemin_epingle not in CHEMINS_SOURCES_HISTORIQUES_RECUPERATION:
+            raise ErreurRecuperation(
+                "champ 'sources_historiques' : épinglage hors de la chaîne "
+                f"historique figée pour '{chemin_epingle}'"
+            )
+    sources: list[dict] = []
+    for chemin in CHEMINS_SOURCES_HISTORIQUES_RECUPERATION:
+        constante = EMPREINTES_SOURCES_HISTORIQUES_RECUPERATION[chemin]
+        try:
+            sha_obtenu = _sha256_fichier(racine / chemin)
+        except OSError as erreur:
+            raise ErreurRecuperation(
+                "champ 'sources_historiques' : fichier illisible "
+                f"'{chemin}' : {erreur}"
+            ) from erreur
+        if sha_obtenu != constante:
+            raise ErreurRecuperation(
+                "champ 'sources_historiques' : constante figée divergente "
+                f"pour '{chemin}' : {constante} attendu, {sha_obtenu} obtenu"
+            )
+        if chemin in epingles and sha_obtenu != epingles[chemin]:
+            raise ErreurRecuperation(
+                "champ 'sources_historiques' : épinglage existant divergent "
+                f"pour '{chemin}' : {epingles[chemin]} attendu, "
+                f"{sha_obtenu} obtenu"
+            )
+        sources.append({"chemin": chemin, "sha256": sha_obtenu})
+    return _structure_verrou_recuperation(sources)
+
+
+def _nommer_divergence_entrees(
+    existant: object, attendu: list, cle: str, cle_identifiant: str
+) -> str:
+    attendues = {
+        entree.get(cle_identifiant): entree
+        for entree in attendu
+        if isinstance(entree, dict)
+    }
+    presentes = existant if isinstance(existant, list) else []
+    vues = set()
+    for entree in presentes:
+        if not isinstance(entree, dict):
+            return f"{cle}[entree_sans_{cle_identifiant}]"
+        identifiant = entree.get(cle_identifiant)
+        vues.add(identifiant)
+        attendue = attendues.get(identifiant)
+        if attendue is None:
+            return f"{cle}[{identifiant}]"
+        for sous_cle in sorted(set(entree) | set(attendue)):
+            if entree.get(sous_cle) == attendue.get(sous_cle):
+                continue
+            if isinstance(attendue.get(sous_cle), dict) and isinstance(
+                entree.get(sous_cle), dict
+            ):
+                for sous_sous_cle in sorted(
+                    set(entree[sous_cle]) | set(attendue[sous_cle])
+                ):
+                    if (
+                        entree[sous_cle].get(sous_sous_cle)
+                        != attendue[sous_cle].get(sous_sous_cle)
+                    ):
+                        return f"{cle}[{identifiant}].{sous_cle}.{sous_sous_cle}"
+            return f"{cle}[{identifiant}].{sous_cle}"
+    for identifiant in attendues:
+        if identifiant not in vues:
+            return f"{cle}[{identifiant}]"
+    return cle
+
+
+def _nommer_divergence_recuperation(existant: object, attendu: dict) -> str:
+    """Champ fautif exact d'un verrou de récupération divergent."""
+    if not isinstance(existant, dict):
+        return "schema_version"
+    for cle in sorted(set(attendu) | set(existant)):
+        if existant.get(cle) == attendu.get(cle):
+            continue
+        if cle in (
+            "configurations",
+            "preuves_identite_futures",
+            "sentinelles",
+        ):
+            return _nommer_divergence_entrees(
+                existant.get(cle), attendu[cle], cle, "configuration_id"
+            )
+        if cle == "sources_historiques":
+            return _nommer_divergence_entrees(
+                existant.get(cle), attendu[cle], cle, "chemin"
+            )
+        return cle
+    return "schema_version"
+
+
+def _verifier_verrou_recuperation(
+    chemin: Path, octets_attendus: bytes
+) -> None:
+    """Vérifie l'octet existant sans réécriture ; toute divergence nomme le
+    champ fautif."""
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurRecuperation(
+            "verrou de récupération : fichier régulier non symbolique attendu"
+        )
+    octets = chemin.read_bytes()
+    if octets == octets_attendus:
+        return
+    try:
+        existant = json.loads(octets.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        existant = None
+    champ = _nommer_divergence_recuperation(
+        existant, json.loads(octets_attendus.decode("utf-8"))
+    )
+    raise ErreurRecuperation(
+        "verrou de récupération divergent : champ fautif "
+        f"'{champ}' (LOCKED_ARTIFACT_CHANGED) : aucune réécriture"
+    )
+
+
+def preparer_recuperation(racine: Path) -> int:
+    """Matérialise une seule fois le verrou additif de récupération V1-R1,
+    ou vérifie l'octet existant sans le réécrire. N'exécute aucune commande
+    externe de fournisseur, de modèle ou de harnais."""
+    try:
+        attendu = _construire_verrou_recuperation(racine)
+    except ErreurRecuperation as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    except OSError as erreur:
+        print(
+            "ECHEC construction du verrou de récupération : erreur "
+            f"d'accès nommée : {erreur}"
+        )
+        return 2
+    octets_attendus = octets_canoniques(attendu)
+    chemin = racine / CHEMIN_VERROU_RECUPERATION
+    try:
+        if os.path.lexists(chemin):
+            _verifier_verrou_recuperation(chemin, octets_attendus)
+        else:
+            chemin.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                descripteur = os.open(
+                    chemin, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
+                )
+            except FileExistsError as erreur:
+                # Course de création distincte : aucune réparation ni
+                # réécriture dans la même invocation ; l'invocation
+                # suivante vérifiera l'octet existant.
+                raise ErreurRecuperation(
+                    "création concurrente détectée : le verrou de "
+                    "récupération existe déjà (LOCKED_ARTIFACT_CHANGED) : "
+                    "aucune réécriture, une nouvelle invocation vérifiera "
+                    "l'octet existant"
+                ) from erreur
+            with os.fdopen(descripteur, "wb") as flux:
+                flux.write(octets_attendus)
+    except ErreurRecuperation as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    except OSError as erreur:
+        nom = Path(erreur.filename).name if erreur.filename else "inconnu"
+        print(
+            "ECHEC artefact de récupération inaccessible : "
+            f"'{nom}' ({erreur.strerror})"
+        )
+        return 2
+    empreinte = hashlib.sha256(octets_attendus).hexdigest()
+    print(
+        "verrou de récupération vérifié : "
+        f"{CHEMIN_VERROU_RECUPERATION.as_posix()}"
+    )
+    print(
+        "créneaux : 2 · autorite_execution : NOT_GRANTED · "
+        "creneaux_executes : 0 · reprises_executees : 0 · fallback : NONE"
+    )
+    print(
+        "AUTORITE_ABSENTE : autorite_execution=NOT_GRANTED · créneaux "
+        f"{CRENEAU_ANTIGRAVITY_RECUPERATION} et {CRENEAU_ZAI_RECUPERATION}"
+    )
+    print(f"empreinte SHA-256 : {empreinte}")
+    return 0
+
+
+def _refus_recuperation(fait: str) -> int:
+    print(f"ECHEC {fait}")
+    return 2
+
+
+def acquerir_recuperation(racine: Path, identifiant: str) -> int:
+    """Refus unique de la tranche V1-R1 : aucune autorité d'exécution de
+    récupération n'existe. Rend 2 avec AUTORITE_ABSENTE avant tout
+    processus, espace de tentative, journal ou reçu ; ne résout et
+    n'exécute aucun fournisseur."""
+    if not _MOTIF_SLUG.match(identifiant):
+        return _refus_recuperation(
+            f"champ 'configuration_id' : '{identifiant}' n'est pas un slug "
+            "stable ; identifiant refusé avant toute résolution de chemin"
+        )
+    return _refus_recuperation(
+        "AUTORITE_ABSENTE : autorite_execution=NOT_GRANTED pour la "
+        f"récupération '{identifiant}' ; aucun processus fournisseur créé, "
+        "aucun espace de tentative, aucun journal, aucun reçu"
+    )
+
+
+_IDENTITE_EXACTE_ZAI = {
+    "fournisseur": "zai",
+    "modele": "glm-5.3",
+    "effort_effectif": "high",
+    "tentatives": 1,
+    "fallback": "NONE",
+}
+_IDENTITE_EXACTE_ANTIGRAVITY = {"modele": "gemini-3.7-flash-high"}
+_MARQUEUR_DEMANDE = "REQUESTED"
+
+
+def construire_tentative_recuperation(
+    identifiant: str, stimulus_utf8: bytes, espace_isole: str
+) -> dict:
+    """Adaptateur pur : construit la tentative de récupération fermée sans
+    résoudre d'exécutable, sans processus et sans écriture.
+
+    Antigravity reçoit le stimulus UTF-8 substitué dans l'argument --print,
+    sans stdin ; Z.AI reçoit l'argv exact avec --cd remplacé par l'espace
+    isolé et le stimulus UTF-8 sur stdin. Tout identifiant hors des deux
+    créneaux est refusé."""
+    if identifiant == CONFIGURATION_ANTIGRAVITY_RECUPERATION:
+        try:
+            stimulus = stimulus_utf8.decode("utf-8")
+        except UnicodeDecodeError as erreur:
+            raise ErreurRecuperation(
+                "champ 'stimulus_utf8' : octets UTF-8 attendus pour "
+                f"'{identifiant}' : {erreur}"
+            ) from erreur
+        argv = [
+            f"--print={stimulus}"
+            if argument == f"--print={JETON_STIMULUS_UTF8}"
+            else argument
+            for argument in DESCRIPTEUR_ANTIGRAVITY_RECUPERATION
+        ]
+        return {"argv": argv, "stdin": None, "cwd": espace_isole}
+    if identifiant == CONFIGURATION_ZAI_RECUPERATION:
+        argv = [
+            espace_isole if argument == JETON_ESPACE_ISOLE else argument
+            for argument in DESCRIPTEUR_ZAI_RECUPERATION
+        ]
+        return {"argv": argv, "stdin": stimulus_utf8, "cwd": espace_isole}
+    raise ErreurRecuperation(
+        "champ 'configuration_id' : "
+        f"'{identifiant}' hors des deux créneaux de récupération "
+        f"'{CRENEAU_ANTIGRAVITY_RECUPERATION}' et "
+        f"'{CRENEAU_ZAI_RECUPERATION}'"
+    )
+
+
+def evaluer_identite_servie_recuperation(identifiant: str, trace: object) -> dict:
+    """Évaluation pure de l'identité servie, alimentée seulement par une
+    trace locale fournie en argument. Ne crée aucun verdict candidat.
+
+    Une absence de trace, une trace non attribuable, ou une trace qui ne
+    porte qu'un modèle REQUESTED ou un code de sortie 0 rend INCONNU et
+    HOLD ; une divergence attribuable rend INCONNU, HOLD, incident
+    IDENTITY_MISMATCH et nomme les champs divergents ; seules les traces
+    exactes rendent OBSERVED."""
+    if identifiant == CONFIGURATION_ZAI_RECUPERATION:
+        exacte = _IDENTITE_EXACTE_ZAI
+        creneau = CRENEAU_ZAI_RECUPERATION
+    elif identifiant == CONFIGURATION_ANTIGRAVITY_RECUPERATION:
+        exacte = _IDENTITE_EXACTE_ANTIGRAVITY
+        creneau = CRENEAU_ANTIGRAVITY_RECUPERATION
+    else:
+        raise ErreurRecuperation(
+            "champ 'configuration_id' : "
+            f"'{identifiant}' hors des deux créneaux de récupération"
+        )
+    if not isinstance(trace, dict):
+        return {
+            "statut": INCONNU,
+            "disposition": "HOLD",
+            "incident": None,
+            "champs_divergents": [],
+            "cause": "absence de trace attribuable",
+        }
+    if trace.get("tentative_id") != creneau:
+        return {
+            "statut": INCONNU,
+            "disposition": "HOLD",
+            "incident": None,
+            "champs_divergents": [],
+            "cause": "trace non attribuable à la tentative",
+        }
+    # Un modèle REQUESTED ou un code de sortie 0 n'est jamais une
+    # observation servie : ce sont des échos de la demande.
+    observe = {
+        cle: trace[cle]
+        for cle in exacte
+        if cle in trace and trace[cle] != _MARQUEUR_DEMANDE
+    }
+    if not observe:
+        return {
+            "statut": INCONNU,
+            "disposition": "HOLD",
+            "incident": None,
+            "champs_divergents": [],
+            "cause": (
+                "aucune observation servie : un modèle REQUESTED ou un code "
+                "de sortie 0 ne constitue jamais une preuve"
+            ),
+        }
+    divergents = sorted(
+        cle for cle in observe if observe[cle] != exacte[cle]
+    )
+    if divergents:
+        return {
+            "statut": INCONNU,
+            "disposition": "HOLD",
+            "incident": "IDENTITY_MISMATCH",
+            "champs_divergents": divergents,
+            "cause": "divergence attribuable : " + ", ".join(divergents),
+        }
+    manquants = sorted(cle for cle in exacte if cle not in observe)
+    if manquants:
+        return {
+            "statut": INCONNU,
+            "disposition": "HOLD",
+            "incident": None,
+            "champs_divergents": [],
+            "cause": "observation incomplète : " + ", ".join(manquants),
+        }
+    return {
+        "statut": "OBSERVED",
+        "disposition": "OBSERVED",
+        "incident": None,
+        "champs_divergents": [],
+        "cause": None,
+    }
+
+
 def _charger_journal_execution(chemin: Path) -> dict | None:
     """Journal privé validé, ou None lorsqu'aucune tentative n'existe."""
     if not os.path.lexists(chemin):
@@ -8034,6 +8685,155 @@ def _articles_verrou(relatif_verrou: str, sha_verrou: str, verrou: dict) -> list
     return articles
 
 
+def _charger_verrou_recuperation(racine: Path) -> tuple[str, dict, str] | None:
+    """Verrou de récupération validé pour le rendu : (chemin relatif,
+    verrou, SHA-256), ou None lorsqu'il n'est pas matérialisé."""
+    chemin = racine / CHEMIN_VERROU_RECUPERATION
+    if not os.path.lexists(chemin):
+        return None
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurRestitution(
+            "verrou de récupération : fichier régulier non symbolique attendu"
+        )
+    try:
+        verrou = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurRestitution(
+            f"verrou de récupération illisible : {erreur}"
+        ) from erreur
+    if not isinstance(verrou, dict) or set(verrou) != _CLES_VERROU_RECUPERATION:
+        raise ErreurRestitution(
+            "verrou de récupération : clés hors schéma fermé"
+        )
+    if verrou["schema_version"] != SCHEMA_VERROU_RECUPERATION:
+        raise ErreurRestitution(
+            "verrou de récupération : schéma "
+            f"'{SCHEMA_VERROU_RECUPERATION}' attendu"
+        )
+    if not isinstance(verrou["portee"], dict) or set(
+        verrou["portee"]
+    ) != _CLES_PORTEE_RECUPERATION:
+        raise ErreurRestitution(
+            "verrou de récupération : portée hors schéma fermé"
+        )
+    configurations = verrou["configurations"]
+    if not isinstance(configurations, list) or len(configurations) != 2:
+        raise ErreurRestitution(
+            "verrou de récupération : exactement deux configurations fermées"
+        )
+    for configuration in configurations:
+        if (
+            not isinstance(configuration, dict)
+            or set(configuration) != _CLES_CONFIGURATION_RECUPERATION
+            or not isinstance(configuration["descripteur"], dict)
+            or set(configuration["descripteur"])
+            != _CLES_DESCRIPTEUR_RECUPERATION
+        ):
+            raise ErreurRestitution(
+                "verrou de récupération : configuration hors schéma fermé"
+            )
+    for preuve in verrou["preuves_identite_futures"]:
+        if (
+            not isinstance(preuve, dict)
+            or set(preuve) != _CLES_PREUVE_IDENTITE_RECUPERATION
+        ):
+            raise ErreurRestitution(
+                "verrou de récupération : preuve d'identité hors schéma fermé"
+            )
+    sentinelles = verrou["sentinelles"]
+    if not isinstance(sentinelles, list) or len(sentinelles) != 2:
+        raise ErreurRestitution(
+            "verrou de récupération : exactement deux sentinelles fermées"
+        )
+    for sentinelle in sentinelles:
+        if (
+            not isinstance(sentinelle, dict)
+            or set(sentinelle) != _CLES_SENTINELLE_RECUPERATION
+        ):
+            raise ErreurRestitution(
+                "verrou de récupération : sentinelle hors schéma fermé"
+            )
+    sources = verrou["sources_historiques"]
+    if (
+        not isinstance(sources, list)
+        or len(sources) != len(CHEMINS_SOURCES_HISTORIQUES_RECUPERATION)
+        or len({source.get("chemin") for source in sources}) != len(sources)
+    ):
+        raise ErreurRestitution(
+            "verrou de récupération : sources historiques hors schéma fermé"
+        )
+    for source in sources:
+        if (
+            not isinstance(source, dict)
+            or set(source) != _CLES_SOURCE_HISTORIQUE_RECUPERATION
+            or source["chemin"]
+            not in CHEMINS_SOURCES_HISTORIQUES_RECUPERATION
+            or not isinstance(source["sha256"], str)
+            or not _MOTIF_SHA256.match(source["sha256"])
+        ):
+            raise ErreurRestitution(
+                "verrou de récupération : source historique hors schéma fermé"
+            )
+    attendu = _structure_verrou_recuperation(sources)
+    for cle in (
+        "portee",
+        "configurations",
+        "autorite_execution",
+        "creneaux_executes",
+        "reprises_executees",
+        "fallback",
+        "variantes_interdites",
+        "preuves_identite_futures",
+        "jamais_preuve",
+        "sentinelles",
+    ):
+        if verrou[cle] != attendu[cle]:
+            raise ErreurRestitution(
+                f"verrou de récupération : champ '{cle}' divergent du "
+                "contrat fermé"
+            )
+    return (
+        CHEMIN_VERROU_RECUPERATION.as_posix(),
+        verrou,
+        _sha256_fichier(chemin),
+    )
+
+
+def _articles_recuperation(relatif: str, sha: str, verrou: dict) -> list[str]:
+    """État minimal de récupération, régénérable à l'identique."""
+    creneaux = " et ".join(
+        f"<code>{_echapper(configuration['acquisition_id'])}</code>"
+        for configuration in verrou["configurations"]
+    )
+    etat = _article(
+        "fait",
+        "<p>Un verrou additif de récupération des harnais Antigravity et "
+        f"Z.AI est matérialisé pour les créneaux {creneaux} : descripteurs "
+        "fermés, autorite_execution "
+        f"<code>{_echapper(verrou['autorite_execution'])}</code>, "
+        f"creneaux_executes {verrou['creneaux_executes']}, reprises_executees "
+        f"{verrou['reprises_executees']}, fallback "
+        f"<code>{_echapper(verrou['fallback'])}</code>, sans variante "
+        "fallback, retry, fast, priority, max ni ultra.</p>"
+        + _span_source(relatif, sha, SECTION_VERROU_RECUPERATION),
+        ' data-recuperation-harnais="etat"',
+    )
+    preuves = _article(
+        "fait",
+        "<p>Aucune identité servie ne peut devenir OBSERVED sans preuve "
+        "attribuable à la tentative : pour Z.AI, une trace OpenCodex avec "
+        "fournisseur zai, modèle glm-5.3, effort effectif high, une tentative "
+        "et aucun fallback ; pour Antigravity, une métadonnée attribuable "
+        "portant gemini-3.7-flash-high ; sinon la provenance servie reste "
+        "INCONNU et HOLD. Un argv demandé ou un code de sortie 0 ne constitue "
+        "jamais cette preuve.</p>"
+        + _span_source(relatif, sha, SECTION_VERROU_RECUPERATION),
+        ' data-recuperation-harnais="preuves-identite"',
+    )
+    return [etat, preuves]
+
+
 def _span_source(chemin: str, sha256: str, section: str) -> str:
     return (
         f'<span class="source" data-chemin="{chemin}" data-sha256="{sha256}">'
@@ -8059,6 +8859,7 @@ def _rendre_page(racine: Path) -> bytes:
     verrou_charge = _charger_verrou_restitution(racine)
     autorisation = _charger_autorisation_restitution(racine)
     registre_validation = _charger_registre_validation(racine)
+    recuperation = _charger_verrou_recuperation(racine)
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -8075,6 +8876,8 @@ def _rendre_page(racine: Path) -> bytes:
         empreintes[autorisation[0]] = autorisation[2]
     if registre_validation is not None:
         empreintes[registre_validation[0]] = registre_validation[2]
+    if recuperation is not None:
+        empreintes[recuperation[0]] = recuperation[2]
     relatif_sources_plans = CHEMIN_SOURCES_PLANS.as_posix()
     if verrou_charge is not None:
         empreintes[verrou_charge[0]] = verrou_charge[2]
@@ -8420,6 +9223,18 @@ def _rendre_page(racine: Path) -> bytes:
             + "</section>"
         )
 
+    if recuperation is not None:
+        sections.append(
+            "<section id=\"recuperation-harnais\"><h2>Récupération "
+            "verrouillée des harnais</h2>"
+            + "".join(
+                _articles_recuperation(
+                    recuperation[0], recuperation[2], recuperation[1]
+                )
+            )
+            + "</section>"
+        )
+
     if configurations:
         article_identites_inconnues = _article(
             "fait",
@@ -8713,6 +9528,11 @@ def _rendre_page(racine: Path) -> bytes:
                 if verrou_charge is not None
                 else ()
             ),
+            *(
+                ((recuperation[0], SECTION_VERROU_RECUPERATION),)
+                if recuperation is not None
+                else ()
+            ),
             (etat_relatif, "état V1 versionné"),
         )
     )
@@ -8811,6 +9631,7 @@ def verifier_restitution(racine: Path) -> int:
     verrou_charge = _charger_verrou_restitution(racine)
     autorisation = _charger_autorisation_restitution(racine)
     registre_validation = _charger_registre_validation(racine)
+    recuperation = _charger_verrou_recuperation(racine)
     jetons_factuels = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -8843,6 +9664,13 @@ def verifier_restitution(racine: Path) -> int:
         ):
             if attendu not in page:
                 echecs.append("entrée de verrou infidèle ou absente")
+    if recuperation is not None:
+        empreintes[recuperation[0]] = recuperation[2]
+        for attendu in _articles_recuperation(
+            recuperation[0], recuperation[2], recuperation[1]
+        ):
+            if attendu not in page:
+                echecs.append("entrée de récupération infidèle ou absente")
     nombre_entrees_verrou = page.count(' data-verrou-panel="')
     attendu_entrees_verrou = (
         len(verrou_charge[1]["panel"]) if verrou_charge is not None else 0
@@ -8858,6 +9686,17 @@ def verifier_restitution(racine: Path) -> int:
         echecs.append(
             f"{attendu_verrous} article de verrou attendu dans la page, "
             f"{nombre_verrous} trouvé"
+        )
+    nombre_recuperations = page.count(' data-recuperation-harnais="')
+    attendu_recuperations = 0 if recuperation is None else len(
+        _articles_recuperation(
+            recuperation[0], recuperation[2], recuperation[1]
+        )
+    )
+    if nombre_recuperations != attendu_recuperations:
+        echecs.append(
+            f"{attendu_recuperations} entrée(s) de récupération attendues "
+            f"dans la page, {nombre_recuperations} trouvée(s)"
         )
 
     for relatif, recu, sha in preflights:
@@ -9093,8 +9932,10 @@ _USAGE = (
     "| panel [--registre <chemin>] | autorisations [--configuration <id>] "
     "| acquerir --local --configuration <id> "
     "| acquerir --officiel --configuration <id> "
+    "| acquerir --recuperation --configuration <id> "
     "| preflight --configuration <id> "
-    "| qualifier | verrouiller | valider | restituer | verifier-restitution"
+    "| qualifier | verrouiller | valider | restituer | verifier-restitution "
+    "| preparer-recuperation"
 )
 
 
@@ -9125,6 +9966,8 @@ def principal(
         except ErreurRestitution as erreur:
             print(f"ECHEC {erreur}")
             return 1
+    if arguments == ["preparer-recuperation"]:
+        return preparer_recuperation(racine)
     if arguments[:1] == ["enregistrer"]:
         options = _analyser_options(arguments[1:], ("--registre", "--fichier"))
         if options is None or "--fichier" not in options:
@@ -9139,7 +9982,8 @@ def principal(
             return 2
         return afficher_autorisations(racine, options.get("--configuration"))
     if arguments[:1] == ["acquerir"]:
-        # Deux formes figées : locale de démonstration, officielle D-V1-04.
+        # Trois formes figées : locale de démonstration, officielle D-V1-04,
+        # récupération V1-R1 (autorité toujours absente dans cette tranche).
         if len(arguments) != 4 or arguments[2] != "--configuration":
             print(_USAGE)
             return 2
@@ -9149,6 +9993,8 @@ def principal(
             # racine_privee n'existe que pour les tests Python : la CLI de
             # production conserve la racine privée obligatoire exacte
             return acquerir_officiel(racine, arguments[3], racine_privee)
+        if arguments[1] == "--recuperation":
+            return acquerir_recuperation(racine, arguments[3])
         print(_USAGE)
         return 2
     if arguments[:1] == ["preflight"]:
