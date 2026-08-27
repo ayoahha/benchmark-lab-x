@@ -9895,6 +9895,575 @@ def dossiers(racine: Path, racine_privee: Path | None = None) -> int:
     return 0
 
 
+# --- V1-XS-11 : gel des verdicts humains aveugles, puis révélation ---
+
+SCHEMA_GEL_VERDICTS = "campagne-v1-gel-verdicts-humains/v1"
+SCHEMA_SAISIE_VERDICT_HUMAIN = "campagne-v1-saisie-verdict-humain/v1"
+SCHEMA_RECU_VERDICT_HUMAIN = "campagne-v1-recu-verdict-humain/v1"
+SCHEMA_REVELATION_CORRESPONDANCE = "campagne-v1-revelation-correspondance/v1"
+REPERTOIRE_VERDICTS_HUMAINS = _RACINE_CAMPAGNE_V1 / "verdicts-humains-v1"
+REPERTOIRE_SAISIE_VERDICTS = REPERTOIRE_VERDICTS_HUMAINS / "saisie"
+REPERTOIRE_RECUS_VERDICTS = REPERTOIRE_VERDICTS_HUMAINS / "recus"
+CHEMIN_GEL_VERDICTS = REPERTOIRE_VERDICTS_HUMAINS / "gel-verdicts.json"
+CHEMIN_REVELATION_CORRESPONDANCE = (
+    REPERTOIRE_VERDICTS_HUMAINS / "revelation-correspondance.json"
+)
+# Les trois seuls verdicts humains de la rubrique HR-001, figés par l'Issue
+VERDICTS_HUMAINS = ("ACCEPTABLE", "NOT_ACCEPTABLE", "UNABLE_TO_JUDGE")
+# Décision propriétaire D-V1-06 : identité et disponibilité du relecteur
+# humain aveugle, conservées comme provenance avec l'URL du commentaire
+DECISION_RELECTEUR_ID = "D-V1-06"
+RELECTEUR_AUTORISE = "ayoahha"
+DISPONIBILITE_RELECTEUR = "OWNER_CHECKPOINT_IF_ELIGIBLE_DOSSIERS_EXIST"
+URL_DECISION_RELECTEUR = (
+    "https://github.com/ayoahha/benchmark-lab-x/issues/111"
+    "#issuecomment-5441950621"
+)
+# Décision V0 héritée : aucun juge LLM fantôme n'intervient
+STATUT_JUGE_FANTOME = "DISABLED"
+# Lot éligible vide : aucune révélation ne prétend qu'une revue a eu lieu
+REVELATION_LOT_VIDE = "NON_APPLICABLE_LOT_VIDE"
+INTERVENTION_AUCUNE = "AUCUNE"
+INTERVENTION_EFFECTUEE = "EFFECTUEE"
+# États officiels du PRD section 8.1, dérivés par conjonction stricte
+ETAT_OFFICIELLEMENT_ACCEPTABLE = "OFFICIALLY_ACCEPTABLE"
+ETAT_CANDIDAT_NON_ACCEPTABLE = "CANDIDATE_NOT_ACCEPTABLE"
+ETAT_INJUGEABLE = "UNABLE_TO_JUDGE"
+ETAT_ERREUR_HARNAIS = "HARNESS_ERROR"
+
+
+def _refus_gel(fait: str) -> int:
+    """Refus fail-closed du gel des verdicts, fait nommé."""
+    print(f"ECHEC {fait}")
+    return 1
+
+
+def _horodatage_utc() -> str:
+    """Horodatage UTC à la microseconde : la chronologie relative gel puis
+    révélation reste démontrable dans une même invocation."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _horodatage_strictement_apres(precedent: str) -> str:
+    horodatage = _horodatage_utc()
+    while horodatage <= precedent:
+        horodatage = _horodatage_utc()
+    return horodatage
+
+
+def _etat_officiel(
+    verdict_automatique: str | None, verdict_humain: str | None
+) -> str:
+    """Conjonction stricte du PRD : `OFFICIALLY_ACCEPTABLE` si et seulement
+    si le verdict automatique est PASS et le verdict humain ACCEPTABLE."""
+    if verdict_automatique == "PASS" and verdict_humain == "ACCEPTABLE":
+        return ETAT_OFFICIELLEMENT_ACCEPTABLE
+    if verdict_automatique is None or verdict_automatique == "HARNESS_ERROR":
+        # aucune sortie candidate, ou verdict automatique HARNESS_ERROR :
+        # défaut du dispositif, jamais une pénalité de configuration
+        return ETAT_ERREUR_HARNAIS
+    if verdict_automatique == "PASS" and verdict_humain == "UNABLE_TO_JUDGE":
+        # la preuve humaine manque ; aucune pénalisation de la configuration
+        return ETAT_INJUGEABLE
+    return ETAT_CANDIDAT_NON_ACCEPTABLE
+
+
+def geler(racine: Path, racine_privee: Path | None = None) -> int:
+    """Gèle les verdicts humains aveugles du lot éligible, puis révèle la
+    correspondance strictement après le gel complet.
+
+    N'exécute aucune commande externe et ne fabrique aucun verdict : chaque
+    verdict provient d'une saisie humaine versionnée. Un lot éligible vide
+    produit zéro verdict, déclaré comme tel, sans fausse intervention humaine
+    et sans révélation d'identité.
+    """
+    if racine_privee is None:
+        racine_privee = RACINE_PRIVEE_PRODUCTION
+    try:
+        registre_validation = _charger_registre_validation(racine)
+        verrou_charge = _charger_verrou_restitution(racine)
+        artefacts = _charger_artefacts_dossiers(racine)
+    except ErreurRestitution as erreur:
+        return _refus_gel(f"entrées du gel invalides : {erreur}")
+    if artefacts is None:
+        return _refus_gel(
+            "artefacts de revue aveugle absents : la sous-commande dossiers "
+            "doit les produire avant geler"
+        )
+    try:
+        _verifier_coherence_dossiers(
+            racine, artefacts, registre_validation, verrou_charge
+        )
+    except ErreurRestitution as erreur:
+        return _refus_gel(f"état de revue incohérent : {erreur}")
+    (relatif_manifeste, manifeste, sha_manifeste) = artefacts[0]
+    (relatif_engagement, engagement, sha_engagement) = artefacts[2]
+    _, verrou, _ = verrou_charge
+    # Matériel privé vérifié au moment du gel : l'engagement scellé au verrou
+    # reste intact et vérifiable, sans jamais publier son contenu
+    repertoire_materiel = racine_privee / RELATIF_MATERIEL_VERROU
+    chemin_sel = repertoire_materiel / NOM_SEL_VERROU
+    chemin_manifeste_ordre = repertoire_materiel / NOM_MANIFESTE_ORDRE
+    try:
+        engagements = _verifier_materiel_prive(
+            repertoire_materiel, chemin_sel, chemin_manifeste_ordre
+        )
+        _verifier_ordre_prive(
+            chemin_sel, chemin_manifeste_ordre, verrou["creneaux"]
+        )
+        if engagements != verrou["engagements_prives"]:
+            raise ErreurVerrou(
+                "engagements privés recalculés divergents du verrou publié : "
+                "aucune réparation"
+            )
+        correspondance = _correspondance_ordre_privee(
+            chemin_manifeste_ordre, verrou["creneaux"]
+        )
+    except ErreurVerrou as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    except OSError as erreur:
+        nom = Path(erreur.filename).name if erreur.filename else "inconnu"
+        print(
+            f"ECHEC matériel privé du verrou inaccessible : '{nom}' "
+            f"({erreur.strerror})"
+        )
+        return 2
+    decision = {
+        "id": DECISION_RELECTEUR_ID,
+        "relecteur": RELECTEUR_AUTORISE,
+        "disponibilite": DISPONIBILITE_RELECTEUR,
+        "url": URL_DECISION_RELECTEUR,
+    }
+    requis = manifeste["dossiers"]
+    if not requis:
+        return _geler_lot_vide(racine, manifeste, decision, {
+            "engagement_ordre": {
+                "chemin": relatif_engagement,
+                "sha256": sha_engagement,
+            },
+            "manifeste_dossiers": {
+                "chemin": relatif_manifeste,
+                "sha256": sha_manifeste,
+            },
+        })
+    return _geler_lot_complet(
+        racine,
+        requis,
+        decision,
+        {
+            "engagement_ordre": {
+                "chemin": relatif_engagement,
+                "sha256": sha_engagement,
+            },
+            "manifeste_dossiers": {
+                "chemin": relatif_manifeste,
+                "sha256": sha_manifeste,
+            },
+        },
+        correspondance,
+        verrou_charge,
+        registre_validation[1],
+        engagement,
+    )
+
+
+class ErreurSaisieVerdict(Exception):
+    """Saisie de verdict humain hors contrat, fait nommé."""
+
+
+def _charger_saisie_verdict(racine: Path, item: str) -> dict:
+    """Saisie humaine d'un verdict : fichier versionné par item opaque.
+
+    Toute forme hors contrat est refusée avec le fait exact : le gel n'écrit
+    jamais un reçu depuis une saisie invalide."""
+    chemin = racine / REPERTOIRE_SAISIE_VERDICTS / f"{item}.json"
+    if not os.path.lexists(chemin):
+        raise ErreurSaisieVerdict(
+            f"verdict humain manquant pour {item} : "
+            f"{(REPERTOIRE_SAISIE_VERDICTS / (item + '.json')).as_posix()} "
+            "absent — aucun gel partiel, aucune révélation"
+        )
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurSaisieVerdict(
+            f"saisie de verdict pour {item} : fichier régulier non "
+            "symbolique attendu"
+        )
+    try:
+        saisie = json.loads(chemin.read_bytes().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurSaisieVerdict(
+            f"saisie de verdict illisible pour {item} : {erreur}"
+        ) from erreur
+    if not isinstance(saisie, dict) or sorted(saisie) != [
+        "item",
+        "justification",
+        "schema_version",
+        "verdict",
+    ]:
+        raise ErreurSaisieVerdict(
+            f"saisie de verdict pour {item} : exactement les champs "
+            "schema_version, item, verdict et justification attendus"
+        )
+    if saisie["schema_version"] != SCHEMA_SAISIE_VERDICT_HUMAIN:
+        raise ErreurSaisieVerdict(
+            f"saisie de verdict pour {item} : schéma "
+            f"'{SCHEMA_SAISIE_VERDICT_HUMAIN}' attendu"
+        )
+    if saisie["item"] != item:
+        raise ErreurSaisieVerdict(
+            f"saisie de verdict pour {item} : champ item divergent du "
+            "fichier"
+        )
+    if saisie["verdict"] not in VERDICTS_HUMAINS:
+        raise ErreurSaisieVerdict(
+            f"verdict hors vocabulaire pour {item} : l'un de "
+            f"{', '.join(VERDICTS_HUMAINS)} attendu"
+        )
+    justification = saisie["justification"]
+    if not isinstance(justification, str) or not justification.strip():
+        raise ErreurSaisieVerdict(
+            f"justification manquante pour {item} : une justification non "
+            "vide liée à la sortie est obligatoire"
+        )
+    return saisie
+
+
+_MOTIF_FICHIER_RECU_VERDICT = re.compile(r"^ITEM-\d{3}\.json$")
+
+
+def _fichiers_recus_verdicts(racine: Path, items_requis: set[str]) -> None:
+    """Refuse tout fichier inattendu du répertoire des reçus de verdicts :
+    seuls les reçus des items requis y sont admis, jamais supprimés."""
+    repertoire = racine / REPERTOIRE_RECUS_VERDICTS
+    if not os.path.lexists(repertoire):
+        return
+    infos = os.lstat(repertoire)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISDIR(infos.st_mode):
+        raise ErreurSaisieVerdict(
+            "répertoire des reçus de verdicts : répertoire réel non "
+            "symbolique attendu"
+        )
+    inattendus = [
+        present.name
+        for present in sorted(repertoire.iterdir(), key=lambda c: c.name)
+        if stat.S_ISLNK(os.lstat(present).st_mode)
+        or not stat.S_ISREG(os.lstat(present).st_mode)
+        or not _MOTIF_FICHIER_RECU_VERDICT.match(present.name)
+        or present.stem not in items_requis
+    ]
+    if inattendus:
+        raise ErreurSaisieVerdict(
+            "fichier(s) inattendu(s) dans le répertoire des reçus de "
+            "verdicts, aucune suppression : " + ", ".join(inattendus)
+        )
+
+
+def _stable_sans(contenu: dict, champs: tuple[str, ...]) -> dict:
+    return {clef: valeur for clef, valeur in contenu.items() if clef not in champs}
+
+
+def _geler_recu_verdict(
+    racine: Path,
+    entree_manifeste: dict,
+    saisie: dict,
+    decision: dict,
+    liens: dict,
+    sequence: int,
+) -> tuple[str, str, dict]:
+    """Gèle un verdict : reçu immuable écrit une seule fois, jamais réécrit.
+
+    Un reçu déjà gelé reste l'autorité : toute divergence de la saisie ou du
+    dossier est refusée, aucun écrasement silencieux."""
+    item = entree_manifeste["item"]
+    relatif = REPERTOIRE_RECUS_VERDICTS / f"{item}.json"
+    chemin = racine / relatif
+    stable = {
+        "schema_version": SCHEMA_RECU_VERDICT_HUMAIN,
+        "item": item,
+        "position": entree_manifeste["position"],
+        "dossier": {
+            "fichier": entree_manifeste["fichier"],
+            "sha256": entree_manifeste["sha256"],
+        },
+        "rubrique_id": ID_RUBRIQUE_REVUE,
+        "verdict": saisie["verdict"],
+        "justification": saisie["justification"],
+        "relecteur": RELECTEUR_AUTORISE,
+        "decision": {"id": decision["id"], "url": decision["url"]},
+        "engagement_ordre": liens["engagement_ordre"],
+        "sequence": sequence,
+    }
+    if os.path.lexists(chemin):
+        try:
+            existant = json.loads(chemin.read_bytes().decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+            raise ErreurSaisieVerdict(
+                f"reçu de verdict gelé illisible pour {item} : {erreur}"
+            ) from erreur
+        if not isinstance(existant, dict) or _stable_sans(
+            existant, ("horodatage_utc",)
+        ) != stable:
+            raise ErreurSaisieVerdict(
+                f"reçu de verdict gelé divergent pour {item} : un verdict "
+                "gelé est immuable, aucune réécriture"
+            )
+        octets = chemin.read_bytes()
+        return relatif.as_posix(), hashlib.sha256(octets).hexdigest(), existant
+    recu = dict(stable)
+    recu["horodatage_utc"] = _horodatage_utc()
+    octets = octets_canoniques(recu)
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    descripteur = os.open(chemin, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(descripteur, "wb") as flux:
+        flux.write(octets)
+    return relatif.as_posix(), hashlib.sha256(octets).hexdigest(), recu
+
+
+def _etats_officiels_reveles(
+    registre: dict,
+    correspondance: dict[str, dict],
+    verdicts_humains: dict[str, str],
+) -> list[dict]:
+    """État officiel de chaque entrée du registre, par conjonction stricte.
+
+    Une entrée sans sortie candidate reste un défaut du dispositif ; une
+    sortie FAIL n'a jamais reçu de verdict humain et reste candidate non
+    acceptable ; une sortie PASS combine son verdict humain gelé."""
+    etats: list[dict] = []
+    for entree in registre["entrees"]:
+        verdict = entree["verdict"]
+        statut = verdict["statut"] if verdict is not None else None
+        item = None
+        verdict_humain = None
+        if statut == "PASS":
+            acquisition_id = _identifiant_creneau(entree["configuration_id"])
+            item = correspondance[acquisition_id]["item"]
+            verdict_humain = verdicts_humains[item]
+        etats.append(
+            {
+                "configuration_id": entree["configuration_id"],
+                "recu": entree["recu"],
+                "verdict_automatique": statut,
+                "item": item,
+                "verdict_humain": verdict_humain,
+                "etat_officiel": _etat_officiel(statut, verdict_humain),
+            }
+        )
+    return etats
+
+
+def _geler_lot_complet(
+    racine: Path,
+    requis: list[dict],
+    decision: dict,
+    liens: dict,
+    correspondance: dict[str, dict],
+    verrou_charge: tuple[str, dict, str],
+    registre: dict,
+    engagement: dict,
+) -> int:
+    """Gel du lot éligible complet : un reçu immuable par verdict requis,
+    puis révélation de la correspondance strictement après le gel."""
+    items_requis = {entree["item"] for entree in requis}
+    try:
+        saisies = {
+            entree["item"]: _charger_saisie_verdict(racine, entree["item"])
+            for entree in requis
+        }
+        _fichiers_recus_verdicts(racine, items_requis)
+        entrees_gel: list[dict] = []
+        verdicts_humains: dict[str, str] = {}
+        for sequence, entree_manifeste in enumerate(requis, start=1):
+            item = entree_manifeste["item"]
+            relatif, sha, recu = _geler_recu_verdict(
+                racine,
+                entree_manifeste,
+                saisies[item],
+                decision,
+                liens,
+                sequence,
+            )
+            entrees_gel.append({"item": item, "chemin": relatif, "sha256": sha})
+            verdicts_humains[item] = recu["verdict"]
+    except ErreurSaisieVerdict as erreur:
+        return _refus_gel(str(erreur))
+    gel_stable = {
+        "schema_version": SCHEMA_GEL_VERDICTS,
+        "campaign_id": CAMPAGNE_ID_VERROU,
+        "decision": decision,
+        **liens,
+        "verdicts_requis": len(requis),
+        "recus": entrees_gel,
+        "intervention_relecteur": INTERVENTION_EFFECTUEE,
+        "revelation": REVELATION_CORRESPONDANCE,
+        "juge_fantome": STATUT_JUGE_FANTOME,
+    }
+    chemin_gel = racine / CHEMIN_GEL_VERDICTS
+    if os.path.lexists(chemin_gel):
+        try:
+            gel_existant = json.loads(chemin_gel.read_bytes().decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+            return _refus_gel(f"gel existant illisible : {erreur}")
+        if not isinstance(gel_existant, dict) or _stable_sans(
+            gel_existant, ("horodatage_gel_utc",)
+        ) != gel_stable:
+            return _refus_gel(
+                "gel existant divergent de l'état courant : un gel est "
+                "immuable, aucune réécriture"
+            )
+        gel = gel_existant
+    else:
+        gel = dict(gel_stable)
+        gel["horodatage_gel_utc"] = _horodatage_utc()
+        chemin_gel.parent.mkdir(parents=True, exist_ok=True)
+        chemin_gel.write_bytes(octets_canoniques(gel))
+    # Révélation strictement postérieure au gel complet : la correspondance
+    # scellée devient publique, chaînée par empreinte au gel réellement écrit
+    relatif_verrou, verrou, sha_verrou = verrou_charge
+    engagement_verrou = next(
+        entree
+        for entree in verrou["engagements_prives"]
+        if entree["kind"] == "manifeste-ordre"
+    )
+    creneaux_configurations = {
+        creneau["acquisition_id"]: creneau["configuration_id"]
+        for creneau in verrou["creneaux"]
+    }
+    correspondance_publique = sorted(
+        (
+            {
+                "item": position["item"],
+                "position": position["position"],
+                "acquisition_id": acquisition_id,
+                "configuration_id": creneaux_configurations[acquisition_id],
+            }
+            for acquisition_id, position in correspondance.items()
+        ),
+        key=lambda entree: entree["position"],
+    )
+    revelation_stable = {
+        "schema_version": SCHEMA_REVELATION_CORRESPONDANCE,
+        "campaign_id": CAMPAGNE_ID_VERROU,
+        "verrou": {"chemin": relatif_verrou, "sha256": sha_verrou},
+        "gel": {
+            "chemin": CHEMIN_GEL_VERDICTS.as_posix(),
+            "sha256": _sha256_fichier(chemin_gel),
+        },
+        "engagement_verifie": {
+            "commitment": engagement_verrou["commitment"],
+            "commitment_method": engagement_verrou["commitment_method"],
+            "resultat": "CONFORME",
+        },
+        "correspondance": correspondance_publique,
+        "etats_officiels": _etats_officiels_reveles(
+            registre, correspondance, verdicts_humains
+        ),
+        "posterieure_au_gel": True,
+    }
+    chemin_revelation = racine / CHEMIN_REVELATION_CORRESPONDANCE
+    if os.path.lexists(chemin_revelation):
+        try:
+            revelation_existante = json.loads(
+                chemin_revelation.read_bytes().decode("utf-8")
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+            return _refus_gel(f"révélation existante illisible : {erreur}")
+        if not isinstance(revelation_existante, dict) or _stable_sans(
+            revelation_existante, ("horodatage_revelation_utc",)
+        ) != revelation_stable:
+            return _refus_gel(
+                "révélation existante divergente de l'état gelé : aucune "
+                "modification après révélation, aucune réécriture"
+            )
+        revelation = revelation_existante
+    else:
+        revelation = dict(revelation_stable)
+        revelation["horodatage_revelation_utc"] = _horodatage_strictement_apres(
+            gel["horodatage_gel_utc"]
+        )
+        chemin_revelation.write_bytes(octets_canoniques(revelation))
+    print(f"gel écrit : {CHEMIN_GEL_VERDICTS.as_posix()}")
+    print(
+        f"révélation écrite : {CHEMIN_REVELATION_CORRESPONDANCE.as_posix()}"
+    )
+    # RG-07 : sortie lisible — verdicts gelés puis états officiels révélés
+    print(
+        f"{len(requis)} verdict(s) humain(s) gelé(s), révélation "
+        "postérieure au gel"
+    )
+    for entree in gel["recus"]:
+        print(f"verdict gelé : {entree['item']} — {verdicts_humains[entree['item']]}")
+    for etat in revelation["etats_officiels"]:
+        print(
+            f"état officiel : {etat['configuration_id']} — "
+            f"{etat['etat_officiel']}"
+        )
+    return 0
+
+
+def _geler_lot_vide(
+    racine: Path, manifeste: dict, decision: dict, liens: dict
+) -> int:
+    """Lot éligible vide : zéro verdict requis, fait déclaré tel quel.
+
+    Aucun reçu n'est écrit, aucune intervention humaine n'est simulée et
+    aucune correspondance n'est révélée : une révélation sur lot vide
+    prétendrait qu'une revue a eu lieu. Aucune configuration n'est dégradée.
+    """
+    if os.path.lexists(racine / CHEMIN_REVELATION_CORRESPONDANCE):
+        return _refus_gel(
+            "révélation présente sur lot vide : aucune revue n'a eu lieu, "
+            "aucune réparation"
+        )
+    if os.path.lexists(racine / REPERTOIRE_SAISIE_VERDICTS) or os.path.lexists(
+        racine / REPERTOIRE_RECUS_VERDICTS
+    ):
+        return _refus_gel(
+            "saisie ou reçu de verdict présent sur lot vide : aucun verdict "
+            "n'est requis, aucun verdict fantôme n'est gelé"
+        )
+    gel_stable = {
+        "schema_version": SCHEMA_GEL_VERDICTS,
+        "campaign_id": CAMPAGNE_ID_VERROU,
+        "decision": decision,
+        **liens,
+        "verdicts_requis": 0,
+        "recus": [],
+        "lot_vide": manifeste["lot_vide"],
+        "intervention_relecteur": INTERVENTION_AUCUNE,
+        "revelation": REVELATION_LOT_VIDE,
+        "juge_fantome": STATUT_JUGE_FANTOME,
+    }
+    chemin_gel = racine / CHEMIN_GEL_VERDICTS
+    if os.path.lexists(chemin_gel):
+        try:
+            gel_existant = json.loads(chemin_gel.read_bytes().decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+            return _refus_gel(f"gel existant illisible : {erreur}")
+        if not isinstance(gel_existant, dict) or _stable_sans(
+            gel_existant, ("horodatage_gel_utc",)
+        ) != gel_stable:
+            return _refus_gel(
+                "gel existant divergent de l'état courant : un gel est "
+                "immuable, aucune réécriture"
+            )
+    else:
+        gel = dict(gel_stable)
+        gel["horodatage_gel_utc"] = _horodatage_utc()
+        chemin_gel.parent.mkdir(parents=True, exist_ok=True)
+        chemin_gel.write_bytes(octets_canoniques(gel))
+    print(f"gel écrit : {CHEMIN_GEL_VERDICTS.as_posix()}")
+    print(
+        "lot éligible vide : 0 verdict requis, 0 reçu écrit — aucune "
+        "intervention du relecteur humain, aucune configuration dégradée, "
+        "aucune révélation d'identité "
+        f"({json.dumps(manifeste['lot_vide']['comptage_statuts'], sort_keys=True)})"
+    )
+    return 0
+
+
 SECTION_DOSSIERS_REVUE = "manifeste de dossiers de revue aveugle V1 versionné"
 SECTION_ENGAGEMENT_ORDRE = "engagement d'ordre de revue aveugle V1 versionné"
 SECTION_CONTROLE_FUITES = "contrôle d'absence de fuite des dossiers V1 versionné"
@@ -10247,6 +10816,410 @@ def _section_dossiers_revue(
         "écrit avant tout dossier et contrôle d'absence de fuite. Les "
         "dossiers sont opaques ; la correspondance avec les acquisitions "
         "n'est pas publiée.</p>"
+        + "".join(articles)
+        + "</section>"
+    )
+
+
+SECTION_GEL_VERDICTS = "gel des verdicts humains V1 versionné"
+SECTION_RECU_VERDICT = "reçu de verdict humain gelé V1 versionné"
+SECTION_REVELATION = "révélation de correspondance V1 versionnée"
+
+
+def _charger_artefacts_verdicts(racine: Path) -> dict | None:
+    """Gel, reçus de verdicts et révélation pour le rendu.
+
+    Le gel est produit par `geler` ; une révélation ou des reçus sans gel
+    sont une divulgation hors contrat, refusée au rendu, jamais réparée. La
+    saisie humaine est une entrée, pas une preuve : elle n'est pas rendue."""
+    gel_present = os.path.lexists(racine / CHEMIN_GEL_VERDICTS)
+    revelation_presente = os.path.lexists(
+        racine / CHEMIN_REVELATION_CORRESPONDANCE
+    )
+    recus_presents = os.path.lexists(racine / REPERTOIRE_RECUS_VERDICTS)
+    if not gel_present:
+        if revelation_presente or recus_presents:
+            raise ErreurRestitution(
+                "révélation ou reçus de verdicts présents sans gel : "
+                "divulgation hors contrat, aucune réparation"
+            )
+        return None
+    charge_gel = _charger_json_artefact_dossiers(racine, CHEMIN_GEL_VERDICTS)
+    _, gel, _ = charge_gel
+    if gel.get("schema_version") != SCHEMA_GEL_VERDICTS:
+        raise ErreurRestitution(
+            f"gel de verdicts de schéma inattendu : {charge_gel[0]}"
+        )
+    lot_vide = "lot_vide" in gel
+    if lot_vide:
+        if revelation_presente or recus_presents:
+            raise ErreurRestitution(
+                "lot vide gelé avec révélation ou reçus de verdicts : "
+                "aucune revue n'a eu lieu, aucune réparation"
+            )
+        if (
+            gel.get("verdicts_requis") != 0
+            or gel.get("recus") != []
+            or gel.get("intervention_relecteur") != INTERVENTION_AUCUNE
+            or gel.get("revelation") != REVELATION_LOT_VIDE
+        ):
+            raise ErreurRestitution(
+                "gel de lot vide incohérent : zéro verdict, zéro reçu et "
+                "aucune intervention attendus"
+            )
+        return {"gel": charge_gel, "recus": [], "revelation": None}
+    if not revelation_presente:
+        raise ErreurRestitution(
+            "gel de lot non vide sans révélation : le gel complet révèle "
+            "dans la même invocation, aucune réparation"
+        )
+    entrees_gel = gel.get("recus")
+    if not isinstance(entrees_gel, list) or not entrees_gel:
+        raise ErreurRestitution(
+            "gel de lot non vide sans reçu déclaré : aucune réparation"
+        )
+    recus: list[tuple[str, dict, str]] = []
+    for entree in entrees_gel:
+        charge_recu = _charger_json_artefact_dossiers(
+            racine, Path(entree["chemin"])
+        )
+        relatif_recu, recu, sha_recu = charge_recu
+        if sha_recu != entree["sha256"]:
+            raise ErreurRestitution(
+                f"reçu de verdict divergent de l'empreinte du gel : "
+                f"{relatif_recu} — un verdict gelé est immuable"
+            )
+        if recu.get("schema_version") != SCHEMA_RECU_VERDICT_HUMAIN:
+            raise ErreurRestitution(
+                f"reçu de verdict de schéma inattendu : {relatif_recu}"
+            )
+        if recu.get("item") != entree["item"]:
+            raise ErreurRestitution(
+                f"reçu de verdict d'item divergent du gel : {relatif_recu}"
+            )
+        if recu.get("verdict") not in VERDICTS_HUMAINS:
+            raise ErreurRestitution(
+                f"verdict hors vocabulaire dans le reçu gelé : {relatif_recu}"
+            )
+        justification = recu.get("justification")
+        if not isinstance(justification, str) or not justification.strip():
+            raise ErreurRestitution(
+                f"justification vide dans le reçu gelé : {relatif_recu}"
+            )
+        if recu.get("relecteur") != RELECTEUR_AUTORISE:
+            raise ErreurRestitution(
+                f"relecteur hors décision D-V1-06 dans le reçu gelé : "
+                f"{relatif_recu}"
+            )
+        recus.append(charge_recu)
+    charge_revelation = _charger_json_artefact_dossiers(
+        racine, CHEMIN_REVELATION_CORRESPONDANCE
+    )
+    if (
+        charge_revelation[1].get("schema_version")
+        != SCHEMA_REVELATION_CORRESPONDANCE
+    ):
+        raise ErreurRestitution(
+            f"révélation de schéma inattendu : {charge_revelation[0]}"
+        )
+    return {"gel": charge_gel, "recus": recus, "revelation": charge_revelation}
+
+
+def _verifier_coherence_verdicts(
+    artefacts_verdicts: dict,
+    artefacts_dossiers: tuple[
+        tuple[str, dict, str], tuple[str, dict, str], tuple[str, dict, str]
+    ] | None,
+    registre_validation: tuple[str, dict, str] | None,
+    verrou_charge: tuple[str, dict, str] | None,
+) -> None:
+    """Cohérence fail-closed du gel avec les dossiers, le registre, le
+    verrou et la chronologie gel puis révélation. Aucune réparation."""
+    if artefacts_dossiers is None:
+        raise ErreurRestitution(
+            "gel de verdicts présent sans artefacts de revue aveugle"
+        )
+    if registre_validation is None or verrou_charge is None:
+        raise ErreurRestitution(
+            "gel de verdicts présent sans registre de verdicts ou sans verrou"
+        )
+    (_, manifeste, sha_manifeste) = artefacts_dossiers[0]
+    (relatif_engagement, engagement, sha_engagement) = artefacts_dossiers[2]
+    relatif_gel, gel, sha_gel = artefacts_verdicts["gel"]
+    if gel["engagement_ordre"] != {
+        "chemin": relatif_engagement,
+        "sha256": sha_engagement,
+    } or gel["manifeste_dossiers"] != {
+        "chemin": artefacts_dossiers[0][0],
+        "sha256": sha_manifeste,
+    }:
+        raise ErreurRestitution(
+            "gel de verdicts non chaîné aux artefacts de revue courants : "
+            "aucune réparation"
+        )
+    decision_attendue = {
+        "id": DECISION_RELECTEUR_ID,
+        "relecteur": RELECTEUR_AUTORISE,
+        "disponibilite": DISPONIBILITE_RELECTEUR,
+        "url": URL_DECISION_RELECTEUR,
+    }
+    if gel.get("decision") != decision_attendue:
+        raise ErreurRestitution(
+            "décision D-V1-06 divergente dans le gel de verdicts"
+        )
+    if gel.get("juge_fantome") != STATUT_JUGE_FANTOME:
+        raise ErreurRestitution(
+            "statut de juge fantôme divergent de la décision héritée DISABLED"
+        )
+    items_manifeste = [entree["item"] for entree in manifeste["dossiers"]]
+    items_gel = [entree["item"] for entree in gel["recus"]]
+    if items_gel != items_manifeste or gel["verdicts_requis"] != len(
+        items_manifeste
+    ):
+        raise ErreurRestitution(
+            "gel de verdicts non aligné sur le lot éligible du manifeste"
+        )
+    if ("lot_vide" in gel) != (not items_manifeste):
+        raise ErreurRestitution(
+            "déclaration de lot vide du gel divergente du manifeste"
+        )
+    if "lot_vide" in gel:
+        if gel["lot_vide"] != manifeste["lot_vide"]:
+            raise ErreurRestitution(
+                "fait de lot vide du gel divergent du manifeste de dossiers"
+            )
+        return
+    # Lot gelé : chronologie stricte et états officiels recalculés
+    charge_revelation = artefacts_verdicts["revelation"]
+    _, revelation, _ = charge_revelation
+    recus = {relatif: recu for relatif, recu, _ in artefacts_verdicts["recus"]}
+    horodatage_gel = gel.get("horodatage_gel_utc")
+    if not isinstance(horodatage_gel, str) or not horodatage_gel:
+        raise ErreurRestitution("gel de verdicts sans horodatage")
+    for relatif_recu, recu in recus.items():
+        horodatage_recu = recu.get("horodatage_utc")
+        if not isinstance(horodatage_recu, str) or horodatage_recu > horodatage_gel:
+            raise ErreurRestitution(
+                f"chronologie inversée : reçu {relatif_recu} postérieur au gel"
+            )
+    horodatage_revelation = revelation.get("horodatage_revelation_utc")
+    if (
+        not isinstance(horodatage_revelation, str)
+        or horodatage_revelation <= horodatage_gel
+        or revelation.get("posterieure_au_gel") is not True
+    ):
+        raise ErreurRestitution(
+            "révélation non strictement postérieure au gel : la chronologie "
+            "relative doit le prouver"
+        )
+    if revelation.get("gel") != {"chemin": relatif_gel, "sha256": sha_gel}:
+        raise ErreurRestitution(
+            "révélation non chaînée au gel réellement écrit : aucune "
+            "modification après révélation"
+        )
+    relatif_verrou, verrou, sha_verrou = verrou_charge
+    if revelation.get("verrou") != {
+        "chemin": relatif_verrou,
+        "sha256": sha_verrou,
+    }:
+        raise ErreurRestitution("révélation non chaînée au verrou courant")
+    engagement_verrou = next(
+        entree
+        for entree in verrou["engagements_prives"]
+        if entree["kind"] == "manifeste-ordre"
+    )
+    if revelation.get("engagement_verifie") != {
+        "commitment": engagement_verrou["commitment"],
+        "commitment_method": engagement_verrou["commitment_method"],
+        "resultat": "CONFORME",
+    }:
+        raise ErreurRestitution(
+            "engagement vérifié de la révélation divergent du verrou"
+        )
+    correspondance = revelation.get("correspondance")
+    if not isinstance(correspondance, list):
+        raise ErreurRestitution("révélation sans correspondance")
+    items_ordre = {
+        entree["item"]: entree["position"]
+        for entree in engagement["ordre_revue"]
+    }
+    creneaux = {
+        creneau["acquisition_id"]: creneau["configuration_id"]
+        for creneau in verrou["creneaux"]
+    }
+    if len(correspondance) != len(items_ordre):
+        raise ErreurRestitution(
+            "correspondance révélée non alignée sur l'ordre engagé"
+        )
+    par_acquisition: dict[str, str] = {}
+    for entree in correspondance:
+        if (
+            items_ordre.get(entree.get("item")) != entree.get("position")
+            or creneaux.get(entree.get("acquisition_id"))
+            != entree.get("configuration_id")
+        ):
+            raise ErreurRestitution(
+                "entrée de correspondance révélée divergente de l'ordre "
+                "engagé ou des créneaux verrouillés"
+            )
+        par_acquisition[entree["acquisition_id"]] = entree["item"]
+    verdicts_humains = {
+        recu["item"]: recu["verdict"] for recu in recus.values()
+    }
+    etats_attendus = []
+    for entree in registre_validation[1]["entrees"]:
+        verdict = entree["verdict"]
+        statut = verdict["statut"] if verdict is not None else None
+        item = None
+        verdict_humain = None
+        if statut == "PASS":
+            item = par_acquisition.get(
+                _identifiant_creneau(entree["configuration_id"])
+            )
+            verdict_humain = verdicts_humains.get(item)
+        etats_attendus.append(
+            {
+                "configuration_id": entree["configuration_id"],
+                "recu": entree["recu"],
+                "verdict_automatique": statut,
+                "item": item,
+                "verdict_humain": verdict_humain,
+                "etat_officiel": _etat_officiel(statut, verdict_humain),
+            }
+        )
+    if revelation.get("etats_officiels") != etats_attendus:
+        raise ErreurRestitution(
+            "états officiels de la révélation divergents de la conjonction "
+            "stricte recalculée : aucune réparation"
+        )
+
+
+def _sources_verdicts(artefacts_verdicts: dict) -> list[tuple[str, dict, str]]:
+    """Sources citées de la section des verdicts : gel, reçus, révélation."""
+    sources = [artefacts_verdicts["gel"], *artefacts_verdicts["recus"]]
+    if artefacts_verdicts["revelation"] is not None:
+        sources.append(artefacts_verdicts["revelation"])
+    return sources
+
+
+def _section_verdicts_humains(
+    artefacts_verdicts: dict,
+) -> str:
+    """Section de restitution du gel des verdicts humains : décision
+    D-V1-06 en provenance, reçus gelés, chronologie et états officiels
+    révélés ; pour un lot vide, l'absence d'intervention est déclarée."""
+    relatif_gel, gel, sha_gel = artefacts_verdicts["gel"]
+    decision = gel["decision"]
+    articles: list[str] = [
+        _article(
+            "fait",
+            "<p>Décision propriétaire <code>"
+            f"{_echapper(decision['id'])}</code> : relecteur humain aveugle "
+            f"autorisé <code>{_echapper(decision['relecteur'])}</code>, "
+            "disponibilité <code>"
+            f"{_echapper(decision['disponibilite'])}</code>. Le juge LLM "
+            f"fantôme reste <code>{_echapper(gel['juge_fantome'])}</code>, "
+            "décision V0 héritée. Preuve : <code>"
+            f"{_neutraliser_schema(_echapper(decision['url']))}</code>.</p>"
+            + _span_source(relatif_gel, sha_gel, SECTION_GEL_VERDICTS),
+        )
+    ]
+    if "lot_vide" in gel:
+        lot_vide = gel["lot_vide"]
+        articles.append(
+            _article(
+                "fait",
+                "<p>Gel du lot éligible vide : 0 verdict requis, 0 reçu "
+                "écrit — aucune intervention du relecteur humain n'a eu "
+                "lieu, aucune configuration n'est dégradée et aucune "
+                "correspondance n'est révélée. Cause exacte : <code>"
+                f"{_echapper(lot_vide['cause'])}</code> (comptage des "
+                "statuts automatiques : "
+                f"{_echapper(json.dumps(lot_vide['comptage_statuts'], sort_keys=True))}"
+                "). Aucun état officiel n'existe.</p>"
+                + _span_source(relatif_gel, sha_gel, SECTION_GEL_VERDICTS),
+            )
+        )
+    else:
+        for relatif_recu, recu, sha_recu in artefacts_verdicts["recus"]:
+            articles.append(
+                _article(
+                    "fait",
+                    f'<p data-verdict-humain="{_echapper(recu["item"])}">'
+                    f"<code>{_echapper(recu['item'])}</code> — verdict "
+                    f"humain gelé <code>{_echapper(recu['verdict'])}</code> "
+                    f"(séquence {recu['sequence']}, horodatage "
+                    f"<code>{_echapper(recu['horodatage_utc'])}</code>) · "
+                    "justification liée à la sortie : "
+                    f"{_echapper(recu['justification'])} · dossier "
+                    f"<code>{_echapper(recu['dossier']['fichier'])}</code> · "
+                    f"SHA-256 <code>{recu['dossier']['sha256']}</code></p>"
+                    + _span_source(relatif_recu, sha_recu, SECTION_RECU_VERDICT),
+                )
+            )
+        relatif_revelation, revelation, sha_revelation = artefacts_verdicts[
+            "revelation"
+        ]
+        articles.append(
+            _article(
+                "fait",
+                '<p data-revelation="correspondance">Correspondance révélée '
+                "strictement après le gel complet : gel à <code>"
+                f"{_echapper(gel['horodatage_gel_utc'])}</code>, révélation "
+                "à <code>"
+                f"{_echapper(revelation['horodatage_revelation_utc'])}</code>. "
+                "Engagement masqué du verrou vérifié : <code>"
+                f"{_echapper(revelation['engagement_verifie']['resultat'])}"
+                "</code>.</p>"
+                + "<ul>"
+                + "".join(
+                    '<li data-correspondance-revelee="'
+                    f'{_echapper(entree["item"])}"><code>'
+                    f"{_echapper(entree['item'])}</code> (position "
+                    f"{entree['position']}) ↔ <code>"
+                    f"{_echapper(entree['configuration_id'])}</code> · "
+                    f"<code>{_echapper(entree['acquisition_id'])}</code></li>"
+                    for entree in revelation["correspondance"]
+                )
+                + "</ul>"
+                + _span_source(
+                    relatif_revelation, sha_revelation, SECTION_REVELATION
+                ),
+            )
+        )
+        articles.append(
+            _article(
+                "fait",
+                "<p>États officiels par conjonction stricte — "
+                "<code>OFFICIALLY_ACCEPTABLE</code> si et seulement si le "
+                "verdict automatique est <code>PASS</code> et le verdict "
+                "humain <code>ACCEPTABLE</code> :</p>"
+                + "<ul>"
+                + "".join(
+                    '<li data-etat-officiel="'
+                    f'{_echapper(entree["configuration_id"])}"><code>'
+                    f"{_echapper(entree['configuration_id'])}</code> — "
+                    f"automatique <code>"
+                    f"{_echapper(entree['verdict_automatique'] or 'AUCUN')}"
+                    "</code> · humain <code>"
+                    f"{_echapper(entree['verdict_humain'] or 'AUCUN')}"
+                    "</code> → état officiel <code>"
+                    f"{_echapper(entree['etat_officiel'])}</code></li>"
+                    for entree in revelation["etats_officiels"]
+                )
+                + "</ul>"
+                + _span_source(
+                    relatif_revelation, sha_revelation, SECTION_REVELATION
+                ),
+            )
+        )
+    return (
+        '<section id="verdicts-humains" data-verdicts-humains="section">'
+        "<h2>Verdicts humains aveugles gelés</h2>"
+        "<p>Cette section reprend les artefacts produits par "
+        "<code>geler</code> : le gel des verdicts humains, leurs reçus "
+        "immuables et la révélation de correspondance postérieure au gel. "
+        "La vue n'améliore aucune preuve.</p>"
         + "".join(articles)
         + "</section>"
     )
@@ -10746,6 +11719,14 @@ def _rendre_page(racine: Path) -> bytes:
         _verifier_coherence_dossiers(
             racine, artefacts_dossiers, registre_validation, verrou_charge
         )
+    artefacts_verdicts = _charger_artefacts_verdicts(racine)
+    if artefacts_verdicts is not None:
+        _verifier_coherence_verdicts(
+            artefacts_verdicts,
+            artefacts_dossiers,
+            registre_validation,
+            verrou_charge,
+        )
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -10764,6 +11745,9 @@ def _rendre_page(racine: Path) -> bytes:
         empreintes[registre_validation[0]] = registre_validation[2]
     if artefacts_dossiers is not None:
         for relatif, _, sha in artefacts_dossiers:
+            empreintes[relatif] = sha
+    if artefacts_verdicts is not None:
+        for relatif, _, sha in _sources_verdicts(artefacts_verdicts):
             empreintes[relatif] = sha
     if recuperation is not None:
         empreintes[recuperation[0]] = recuperation[2]
@@ -11124,6 +12108,9 @@ def _rendre_page(racine: Path) -> bytes:
             )
         )
 
+    if artefacts_verdicts is not None:
+        sections.append(_section_verdicts_humains(artefacts_verdicts))
+
     if recuperation is not None:
         sections.append(
             "<section id=\"recuperation-harnais\"><h2>Récupération "
@@ -11428,6 +12415,27 @@ def _rendre_page(racine: Path) -> bytes:
                 else ()
             ),
             *(
+                (
+                    (artefacts_verdicts["gel"][0], SECTION_GEL_VERDICTS),
+                    *(
+                        (relatif, SECTION_RECU_VERDICT)
+                        for relatif, _, _ in artefacts_verdicts["recus"]
+                    ),
+                    *(
+                        (
+                            (
+                                artefacts_verdicts["revelation"][0],
+                                SECTION_REVELATION,
+                            ),
+                        )
+                        if artefacts_verdicts["revelation"] is not None
+                        else ()
+                    ),
+                )
+                if artefacts_verdicts is not None
+                else ()
+            ),
+            *(
                 ((qualification[0], SECTION_QUALIFICATION),)
                 if qualification is not None
                 else ()
@@ -11553,6 +12561,14 @@ def verifier_restitution(racine: Path) -> int:
         _verifier_coherence_dossiers(
             racine, artefacts_dossiers, registre_validation, verrou_charge
         )
+    artefacts_verdicts = _charger_artefacts_verdicts(racine)
+    if artefacts_verdicts is not None:
+        _verifier_coherence_verdicts(
+            artefacts_verdicts,
+            artefacts_dossiers,
+            registre_validation,
+            verrou_charge,
+        )
     jetons_factuels = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
     )
@@ -11571,6 +12587,9 @@ def verifier_restitution(racine: Path) -> int:
         empreintes[registre_validation[0]] = registre_validation[2]
     if artefacts_dossiers is not None:
         for relatif, _, sha in artefacts_dossiers:
+            empreintes[relatif] = sha
+    if artefacts_verdicts is not None:
+        for relatif, _, sha in _sources_verdicts(artefacts_verdicts):
             empreintes[relatif] = sha
     if verrou_charge is not None:
         empreintes[verrou_charge[0]] = verrou_charge[2]
@@ -11783,6 +12802,53 @@ def verifier_restitution(racine: Path) -> int:
             f"attendues dans la page, {nombre_exclusions_revue} trouvées"
         )
 
+    if artefacts_verdicts is not None:
+        attendu_section_verdicts = _section_verdicts_humains(artefacts_verdicts)
+        if attendu_section_verdicts not in page:
+            echecs.append(
+                "section des verdicts humains gelés infidèle ou absente"
+            )
+    nombre_sections_verdicts = page.count(' data-verdicts-humains="section"')
+    attendu_sections_verdicts = 0 if artefacts_verdicts is None else 1
+    if nombre_sections_verdicts != attendu_sections_verdicts:
+        echecs.append(
+            f"{attendu_sections_verdicts} section de verdicts humains "
+            f"attendue dans la page, {nombre_sections_verdicts} trouvée"
+        )
+    nombre_verdicts_humains = page.count(' data-verdict-humain="')
+    attendu_verdicts_humains = (
+        len(artefacts_verdicts["recus"]) if artefacts_verdicts is not None else 0
+    )
+    if nombre_verdicts_humains != attendu_verdicts_humains:
+        echecs.append(
+            f"{attendu_verdicts_humains} entrées de verdict humain attendues "
+            f"dans la page, {nombre_verdicts_humains} trouvées"
+        )
+    nombre_etats_officiels = page.count(' data-etat-officiel="')
+    attendu_etats_officiels = (
+        len(artefacts_verdicts["revelation"][1]["etats_officiels"])
+        if artefacts_verdicts is not None
+        and artefacts_verdicts["revelation"] is not None
+        else 0
+    )
+    if nombre_etats_officiels != attendu_etats_officiels:
+        echecs.append(
+            f"{attendu_etats_officiels} entrées d'état officiel attendues "
+            f"dans la page, {nombre_etats_officiels} trouvées"
+        )
+    nombre_revelations = page.count(' data-revelation="correspondance"')
+    attendu_revelations = (
+        1
+        if artefacts_verdicts is not None
+        and artefacts_verdicts["revelation"] is not None
+        else 0
+    )
+    if nombre_revelations != attendu_revelations:
+        echecs.append(
+            f"{attendu_revelations} entrée de révélation attendue dans la "
+            f"page, {nombre_revelations} trouvée"
+        )
+
     for relatif, enveloppe, sha in recus_officiels:
         attendu = _article_acquisition_officielle(relatif, sha, enveloppe)
         if attendu not in page:
@@ -11907,7 +12973,7 @@ _USAGE = (
     "| acquerir --officiel --configuration <id> "
     "| acquerir --recuperation --configuration <id> "
     "| preflight --configuration <id> "
-    "| qualifier | verrouiller | valider | dossiers | restituer "
+    "| qualifier | verrouiller | valider | dossiers | geler | restituer "
     "| verifier-restitution | preparer-recuperation"
 )
 
@@ -11931,6 +12997,10 @@ def principal(
         # racine_privee n'existe que pour les tests Python : la CLI de
         # production conserve la racine privée obligatoire exacte
         return dossiers(racine, racine_privee)
+    if arguments == ["geler"]:
+        # racine_privee n'existe que pour les tests Python : la CLI de
+        # production conserve la racine privée obligatoire exacte
+        return geler(racine, racine_privee)
     if arguments == ["restituer"]:
         try:
             return restituer(racine)
