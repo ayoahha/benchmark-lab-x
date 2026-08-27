@@ -22,6 +22,8 @@ sys.path.insert(0, str(RACINE / "tools"))
 
 import campagne_v1 as M  # noqa: E402
 
+from tests._helpers_v1 import retirer_couverture_publiee  # noqa: E402
+
 CONFIGURATION_LOCALE = (
     RACINE
     / "tasks/dev/pre-cadrage-entretien-client/campagne-v1/configurations-locales"
@@ -57,6 +59,7 @@ class BaseXS04(unittest.TestCase):
             destination = self.racine / relatif
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(RACINE / relatif, destination)
+        retirer_couverture_publiee(self.racine / M.CHEMIN_ETAT)
         self.locales = self.racine / M.CONFIGURATIONS_LOCALES
         self.locales.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(
@@ -561,6 +564,7 @@ class RestitutionLocaleTests(BaseXS04):
             destination = self.racine / relatif
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(RACINE / relatif, destination)
+        retirer_couverture_publiee(self.racine / M.CHEMIN_ETAT)
         shutil.copytree(
             RACINE / M.REGISTRE_OFFICIEL, self.racine / M.REGISTRE_OFFICIEL
         )

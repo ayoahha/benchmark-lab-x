@@ -18,6 +18,8 @@ sys.path.insert(0, str(RACINE / "tools"))
 
 import campagne_v1 as M  # noqa: E402
 
+from tests._helpers_v1 import retirer_couverture_publiee  # noqa: E402
+
 IDS_OFFICIELS = (
     "antigravity-gemini-3-7-flash",
     "claude-code-fable-5",
@@ -183,6 +185,7 @@ class RestitutionAutorisationsTests(BaseXS03):
             destination = self.racine / relatif
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(RACINE / relatif, destination)
+        retirer_couverture_publiee(self.racine / M.CHEMIN_ETAT)
         self.page = self.racine / M.CHEMIN_PAGE
 
     def _restituer(self) -> str:
