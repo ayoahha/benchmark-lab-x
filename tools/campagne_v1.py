@@ -8,6 +8,7 @@ Interface figée :
 - uv run tools/campagne_v1.py panel [--registre <chemin>]
 - uv run tools/campagne_v1.py autorisations [--configuration <id>]
 - uv run tools/campagne_v1.py acquerir --local --configuration <id>
+- uv run tools/campagne_v1.py acquerir --officiel --configuration <id>
 - uv run tools/campagne_v1.py preflight --configuration <id>
 - uv run tools/campagne_v1.py verrouiller
 - uv run tools/campagne_v1.py restituer
@@ -4451,25 +4452,38 @@ def _compter_recus(repertoire: Path) -> int:
     return sum(1 for _ in repertoire.iterdir())
 
 
-def _recus_locaux(racine: Path, etat: dict) -> list[tuple[str, dict, str]]:
-    """Reçus V1 locaux valides : (chemin relatif, enveloppe, SHA-256 du fichier).
+def _partitionner_recus(
+    racine: Path, etat: dict
+) -> tuple[list[tuple[str, dict, str]], list[tuple[str, dict, str]]]:
+    """Reçus V1 valides du répertoire, partitionnés (locaux, officiels) :
+    chaque élément est (chemin relatif, enveloppe, SHA-256 du fichier).
 
-    Tout fichier du répertoire doit être un reçu V1 abonnement valide et
-    chaîné ; sinon la restitution refuse fail-closed.
+    Un reçu est officiel lorsque sa configuration vit dans le registre
+    officiel versionné ; tout autre reçu reste une démonstration locale hors
+    panel officiel. Tout fichier du répertoire doit être un reçu V1
+    abonnement valide et chaîné ; sinon la restitution refuse fail-closed.
     """
     repertoire = _repertoire_recus(racine, etat)
     try:
         recus = _charger_recus(repertoire)
     except ErreurRecu as erreur:
         raise ErreurRestitution(f"reçu V1 local invalide : {erreur}") from erreur
-    return [
-        (
+    prefixe_officiel = REGISTRE_OFFICIEL.as_posix() + "/"
+    locaux: list[tuple[str, dict, str]] = []
+    officiels: list[tuple[str, dict, str]] = []
+    for chemin, enveloppe in recus:
+        element = (
             chemin.relative_to(racine).as_posix(),
             enveloppe,
             _sha256_fichier(chemin),
         )
-        for chemin, enveloppe in recus
-    ]
+        if enveloppe["payload"]["configuration"]["chemin"].startswith(
+            prefixe_officiel
+        ):
+            officiels.append(element)
+        else:
+            locaux.append(element)
+    return locaux, officiels
 
 
 def _jetons_attendus(
@@ -4477,16 +4491,13 @@ def _jetons_attendus(
 ) -> tuple[str, str, str]:
     """Recalcule les trois jetons factuels depuis l'état, les acquisitions
     officielles et le registre. Les reçus locaux de démonstration, hors panel
-    officiel, n'entrent pas dans ce décompte."""
+    officiel, n'entrent pas dans ce décompte. La conclusion reste ABSTENTION
+    tant qu'aucune acceptabilité officielle (PASS automatique plus ACCEPTABLE
+    humain) n'est établie : une acquisition n'est jamais promue en mesure."""
     if etat["panel"]:
         raise ErreurRestitution(
             "le champ panel de l'état V1 doit rester vide : le panel déclaré vit "
             "dans le registre officiel versionné"
-        )
-    if nombre_recus:
-        raise ErreurRestitution(
-            "état hors périmètre : la conclusion n'est dérivable que de zéro "
-            "acquisition, toute acquisition relève d'une tranche ultérieure"
         )
     if nombre_configurations:
         jeton_panel = (
@@ -4665,6 +4676,134 @@ def _article_acquisition_locale(relatif: str, sha_fichier: str, enveloppe: dict)
         "fait",
         contenu,
         f' data-acquisition-locale="{charge["configuration"]["identifiant"]}"',
+    )
+
+
+SECTION_AUTORISATION_ACQUISITION = "autorisation d'acquisition D-V1-04 versionnée"
+SECTION_RECU_OFFICIEL = "reçu V1 d'acquisition officielle versionné"
+
+
+def _charger_autorisation_restitution(
+    racine: Path,
+) -> tuple[str, dict, str] | None:
+    """Autorisation D-V1-04 pour le rendu : (chemin relatif, données,
+    SHA-256 du fichier), ou None lorsque l'artefact n'existe pas."""
+    chemin = racine / CHEMIN_AUTORISATION_ACQUISITION
+    if not os.path.lexists(chemin):
+        return None
+    try:
+        donnees = _charger_autorisation_acquisition(racine)
+    except ErreurAutorisation as erreur:
+        raise ErreurRestitution(
+            f"autorisation d'acquisition invalide : {erreur}"
+        ) from erreur
+    return (
+        CHEMIN_AUTORISATION_ACQUISITION.as_posix(),
+        donnees,
+        _sha256_fichier(chemin),
+    )
+
+
+def _article_autorisation_acquisition(
+    relatif: str, sha_fichier: str, donnees: dict
+) -> str:
+    """Article régénérable à l'identique depuis l'artefact d'autorisation."""
+    commentaire = donnees["commentaire"]
+    portee = donnees["portee"]
+    creneaux = "".join(
+        f"<li><code>{_echapper(creneau['acquisition_id'])}</code> pour "
+        f"<code>{_echapper(creneau['configuration_id'])}</code></li>"
+        for creneau in portee["acquisitions"]
+    )
+    contenu = (
+        f"<p><strong>{_echapper(donnees['autorite'])}</strong> — autorité "
+        "propriétaire d'acquisition, distincte du verrou : le verrou versionné "
+        "conserve inchangé son champ d'exécution <code>NOT_GRANTED</code>, et "
+        "cet artefact séparé porte seul le GO.</p>"
+        f"<p>jeton propriétaire : <code>{_echapper(donnees['jeton'])}</code> · "
+        f"auteur <code>{_echapper(commentaire['auteur'])}</code> · association "
+        f"<code>{_echapper(commentaire['association'])}</code> · date "
+        f"<code>{_echapper(commentaire['date'])}</code></p>"
+        f"<p>SHA-256 du corps du commentaire "
+        f"<code>{_echapper(commentaire['sha256_corps'])}</code></p>"
+        f"<p>verrou référencé <code>{_echapper(donnees['verrou']['chemin'])}"
+        f"</code> · SHA-256 <code>{_echapper(donnees['verrou']['sha256'])}"
+        "</code></p>"
+        f"<p>stimulus référencé <code>{_echapper(donnees['stimulus']['chemin'])}"
+        f"</code> · SHA-256 <code>{_echapper(donnees['stimulus']['sha256'])}"
+        "</code></p>"
+        f"<p>portée exacte : deux créneaux</p><ul>{creneaux}</ul>"
+        f"<p>appels fournisseur au maximum : "
+        f"<code>{_echapper(portee['appels_fournisseur_max'])}</code> · appels "
+        f"par créneau : <code>{_echapper(portee['appels_par_creneau'])}</code> · "
+        "quota : abonnements existants seuls · dépense incrémentale : "
+        f"<code>{_echapper(portee['depense_incrementale'])}</code> · reprises "
+        f"automatiques : <code>{_echapper(portee['reprises_automatiques'])}"
+        "</code> · reprises manuelles : "
+        f"<code>{_echapper(portee['reprises_manuelles'])}</code> · fallback : "
+        f"<code>{_echapper(portee['fallback'])}</code></p>"
+        + _span_source(relatif, sha_fichier, SECTION_AUTORISATION_ACQUISITION)
+    )
+    return _article(
+        "fait",
+        contenu,
+        f' data-autorisation-acquisition="{donnees["autorite"]}"',
+    )
+
+
+def _article_acquisition_officielle(
+    relatif: str, sha_fichier: str, enveloppe: dict
+) -> str:
+    """Article régénérable à l'identique depuis un reçu officiel D-V1-04."""
+    charge = enveloppe["payload"]
+    execution = charge["execution"]
+    if execution["etat"] == "OBSERVED":
+        lignes_execution = (
+            f"<p>exécution observée : code de sortie "
+            f"<code>{_echapper(execution['code_sortie'])}</code> · latence "
+            f"monotone <code>{_echapper(execution['latence_ms'])}</code> ms</p>"
+            f"<p>sortie capturée : <code>{_echapper(execution['sortie']['stdout'])}"
+            "</code></p>"
+        )
+    else:
+        preuve = (
+            f"<p>preuve attribuable : "
+            f"<code>{_echapper(execution['preuve_attribuable'])}</code></p>"
+            if "preuve_attribuable" in execution
+            else ""
+        )
+        lignes_execution = (
+            f"<p>incident nommé : <code>{_echapper(execution['incident'])}</code> — "
+            f"{_echapper(execution['fait'])}</p>" + preuve
+        )
+    predecesseur = charge["predecesseur_adresse_contenu"]
+    contenu = (
+        f"<p><strong>{_echapper(charge['configuration']['identifiant'])}</strong> — "
+        "acquisition officielle exécutée une seule fois sous D-V1-04, sans "
+        "retry ni fallback. Ce reçu restitue une exécution et ses faits ; il "
+        "n'établit aucune acceptabilité officielle et aucune conclusion.</p>"
+        f"<p>reçu <code>{relatif}</code> · SHA-256 du fichier "
+        f"<code>{sha_fichier}</code></p>"
+        f"<p>profil de mesure <code>{_echapper(charge['measurement_profile'])}</code> · "
+        f"créneau <code>{_echapper(charge['creneau'])}</code></p>"
+        f"<p>adresse de contenu <code>{enveloppe['content_address']['sha256']}</code> · "
+        f"prédécesseur <code>{_echapper(predecesseur) if predecesseur is not None else 'null'}"
+        "</code></p>"
+        f"<p>configuration verrouillée <code>{_echapper(charge['configuration']['chemin'])}"
+        f"</code> · SHA-256 <code>{charge['configuration']['sha256']}</code></p>"
+        f"<p>stimulus <code>{_echapper(charge['stimulus']['chemin'])}</code> · "
+        f"SHA-256 <code>{charge['stimulus']['sha256']}</code></p>"
+        f"<p>requête expurgée : <code>{_echapper(' '.join(charge['requete']['argv_resolu']))}"
+        "</code></p>"
+        + lignes_execution
+        + f"<p>quota observé : <code>{_echapper(charge['quota_observe'])}</code> · "
+        f"identité servie : <code>{_echapper(charge['provenance_servie'])}</code></p>"
+        + _span_source(relatif, sha_fichier, SECTION_RECU_OFFICIEL)
+    )
+    return _article(
+        "fait",
+        contenu,
+        f' data-acquisition-officielle="{charge["configuration"]["identifiant"]}"',
     )
 
 
@@ -6413,6 +6552,725 @@ _CLES_ENTREE_PANEL_VERROU = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Acquisition officielle V1-XS-08 sous l'autorité propriétaire D-V1-04
+
+SCHEMA_AUTORISATION_ACQUISITION = "campagne-v1-autorisation-acquisition/v1"
+CHEMIN_AUTORISATION_ACQUISITION = (
+    _RACINE_CAMPAGNE_V1 / "autorisation-acquisition-v1.json"
+)
+AUTORITE_ACQUISITION = "D-V1-04"
+JETON_AUTORITE_ACQUISITION = "Donc Go D-V1-04, V1-XS-08"
+URL_COMMENTAIRE_ACQUISITION = (
+    "https://github.com/ayoahha/benchmark-lab-x/issues/108"
+    "#issuecomment-5434400855"
+)
+AUTEUR_COMMENTAIRE_ACQUISITION = "ayoahha"
+ASSOCIATION_COMMENTAIRE_ACQUISITION = "OWNER"
+DATE_COMMENTAIRE_ACQUISITION = "2026-08-27"
+SHA256_COMMENTAIRE_ACQUISITION = (
+    "5a405a72b31a80b32d89e4db59e0d39f7d3f140b79c5ae3e595af9e05cd06c4f"
+)
+
+# Plafond effectif par tentative, décision technique fermée de XS-08 : les
+# fichiers verrouillés gardent delai_secondes = 0 (aucune surcharge) et la
+# couche officielle applique 600 s, plafond existant de la qualification V1
+# qui couvre l'observation V0 de 382 217 ms sur le même stimulus
+DELAI_ACQUISITION_OFFICIELLE = 600
+
+RELATIF_EXECUTION_XS08 = Path("v1-execution") / "xs-08"
+NOM_RUNTIME_XS08 = "runtime"
+NOM_JOURNAL_EXECUTION = "execution-journal.json"
+SCHEMA_JOURNAL_EXECUTION = "campagne-v1-execution-journal/v1"
+
+# Jeton machine du reçu : la requête consignée reste expurgée, le texte du
+# stimulus n'entre jamais dans le reçu, seule son empreinte le lie
+JETON_STIMULUS_UTF8 = "__STIMULUS_UTF8__"
+
+CONFIGURATION_ACQUISITION_ANTIGRAVITY = "antigravity-gemini-3-7-flash"
+CONFIGURATION_ACQUISITION_ZAI = "zai-glm-5-3"
+MODELE_ACQUISITION_ANTIGRAVITY = "gemini-3.7-flash-high"
+EFFORT_ACQUISITION_ANTIGRAVITY = "high"
+ARGV_DECLARE_ANTIGRAVITY = ("agy", JETON_FICHIER_PROMPT)
+# Flags exacts du `agy --help` local (version observée 1.1.21), verrouillés
+# par les tests avant tout appel : impression non interactive, sélection
+# explicite du modèle sans défaut implicite, effort, sandbox, mode plan non
+# mutateur et désactivation des slash commands en mode print
+FLAGS_ACQUISITION_ANTIGRAVITY = (
+    "--print",
+    "--model",
+    MODELE_ACQUISITION_ANTIGRAVITY,
+    "--effort",
+    EFFORT_ACQUISITION_ANTIGRAVITY,
+    "--sandbox",
+    "--mode",
+    "plan",
+    "--disable-slash-commands",
+)
+# Descripteur exact conservé du verrou : Codex CLI agent, OpenCodex proxy,
+# Z.AI Coding Plan fournisseur, stimulus exact sur stdin
+ARGV_DECLARE_ZAI = (
+    "codex",
+    "exec",
+    "--model",
+    "zai/glm-5.3",
+    "--cd",
+    JETON_ESPACE_ISOLE,
+    "--config",
+    'model_reasoning_effort="high"',
+    "-",
+)
+MODELES_ATTENDUS_ZAI = ("zai/glm-5.3", "glm-5.3")
+# Aucun de ces éléments n'entre jamais dans un argv d'acquisition : session,
+# reprise, projet, agent, interactivité, vitesse payante, fallback, mise à
+# jour, installation ou connexion
+FLAGS_INTERDITS_ACQUISITION = (
+    "--continue",
+    "-c",
+    "--conversation",
+    "--agent",
+    "--project",
+    "--new-project",
+    "--prompt-interactive",
+    "-i",
+    "--dangerously-skip-permissions",
+    "fast",
+    "priority",
+    "max",
+    "ultra",
+    "fallback",
+    "update",
+    "install",
+    "login",
+)
+
+# Métadonnée explicite d'identité servie : seule une ligne de la forme
+# 'model: <valeur>' émise par l'appel est attribuable ; un écho de la
+# configuration demandée ne promeut jamais REQUESTED en OBSERVED
+_MOTIF_IDENTITE_SERVIE = re.compile(
+    r"^\s*(?:--\s*)?model\s*:\s*(\S+)\s*$", re.MULTILINE
+)
+
+_CLES_AUTORISATION = {
+    "schema_version",
+    "autorite",
+    "jeton",
+    "commentaire",
+    "verrou",
+    "stimulus",
+    "portee",
+}
+_CLES_COMMENTAIRE_AUTORISATION = {
+    "url",
+    "auteur",
+    "association",
+    "date",
+    "sha256_corps",
+}
+_CLES_PORTEE_AUTORISATION = {
+    "acquisitions",
+    "appels_fournisseur_max",
+    "appels_par_creneau",
+    "consommation_quota",
+    "depense_incrementale",
+    "reprises_automatiques",
+    "reprises_manuelles",
+    "fallback",
+}
+_CLES_ENTREE_JOURNAL = {
+    "acquisition_id",
+    "configuration_id",
+    "invocation_publique",
+    "code",
+    "recu",
+    "etat_terminal",
+    "latence_ms",
+    "retry",
+    "descendants",
+}
+
+
+class ErreurAutorisation(Exception):
+    """Autorisation D-V1-04 absente ou divergente : refus code 2 avant tout
+    processus fournisseur et sans reçu."""
+
+
+class ErreurJournal(Exception):
+    """Journal d'exécution privé illisible ou hors schéma fermé : HOLD."""
+
+
+def _charger_autorisation_acquisition(racine: Path) -> dict:
+    """Autorisation D-V1-04 validée fail-closed contre les valeurs figées du
+    contrat et les empreintes courantes du verrou et du stimulus."""
+    chemin = racine / CHEMIN_AUTORISATION_ACQUISITION
+    if not chemin.is_file():
+        raise ErreurAutorisation(
+            f"artefact absent : {CHEMIN_AUTORISATION_ACQUISITION.as_posix()}"
+        )
+    try:
+        donnees = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurAutorisation(f"artefact illisible : {erreur}") from erreur
+    if not isinstance(donnees, dict) or set(donnees) != _CLES_AUTORISATION:
+        raise ErreurAutorisation("clés hors schéma fermé")
+    if donnees["schema_version"] != SCHEMA_AUTORISATION_ACQUISITION:
+        raise ErreurAutorisation(
+            f"schéma '{SCHEMA_AUTORISATION_ACQUISITION}' attendu"
+        )
+    if donnees["autorite"] != AUTORITE_ACQUISITION:
+        raise ErreurAutorisation(f"autorité '{AUTORITE_ACQUISITION}' attendue")
+    if donnees["jeton"] != JETON_AUTORITE_ACQUISITION:
+        raise ErreurAutorisation("jeton propriétaire divergent")
+    commentaire = donnees["commentaire"]
+    if (
+        not isinstance(commentaire, dict)
+        or set(commentaire) != _CLES_COMMENTAIRE_AUTORISATION
+        or commentaire["url"] != URL_COMMENTAIRE_ACQUISITION
+        or commentaire["auteur"] != AUTEUR_COMMENTAIRE_ACQUISITION
+        or commentaire["association"] != ASSOCIATION_COMMENTAIRE_ACQUISITION
+        or commentaire["date"] != DATE_COMMENTAIRE_ACQUISITION
+        or commentaire["sha256_corps"] != SHA256_COMMENTAIRE_ACQUISITION
+    ):
+        raise ErreurAutorisation("référence de commentaire divergente")
+    for nom, chemin_attendu in (
+        ("verrou", CHEMIN_VERROU),
+        ("stimulus", Path(CHEMIN_STIMULUS)),
+    ):
+        reference = donnees[nom]
+        if (
+            not isinstance(reference, dict)
+            or set(reference) != {"chemin", "sha256"}
+            or reference["chemin"] != chemin_attendu.as_posix()
+        ):
+            raise ErreurAutorisation(f"référence '{nom}' hors schéma fermé")
+        cible = racine / chemin_attendu
+        if not cible.is_file():
+            raise ErreurAutorisation(f"cible de '{nom}' absente")
+        if reference["sha256"] != _sha256_fichier(cible):
+            raise ErreurAutorisation(
+                f"empreinte de '{nom}' divergente du fichier courant"
+            )
+    portee = donnees["portee"]
+    if not isinstance(portee, dict) or set(portee) != _CLES_PORTEE_AUTORISATION:
+        raise ErreurAutorisation("portée hors schéma fermé")
+    acquisitions = portee["acquisitions"]
+    if (
+        not isinstance(acquisitions, list)
+        or len(acquisitions) != 2
+        or any(
+            not isinstance(creneau, dict)
+            or set(creneau) != {"acquisition_id", "configuration_id"}
+            for creneau in acquisitions
+        )
+    ):
+        raise ErreurAutorisation(
+            "portée : exactement deux créneaux fermés attendus"
+        )
+    if (
+        portee["appels_fournisseur_max"] != 2
+        or portee["appels_par_creneau"] != 1
+        or portee["consommation_quota"] != "ABONNEMENTS_EXISTANTS"
+        or portee["depense_incrementale"] != 0
+        or portee["reprises_automatiques"] != 0
+        or portee["reprises_manuelles"] != 0
+        or portee["fallback"] != "NONE"
+    ):
+        raise ErreurAutorisation("portée divergente du contrat D-V1-04")
+    return donnees
+
+
+def _charger_journal_execution(chemin: Path) -> dict | None:
+    """Journal privé validé, ou None lorsqu'aucune tentative n'existe."""
+    if not os.path.lexists(chemin):
+        return None
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurJournal("fichier régulier non symbolique attendu")
+    try:
+        journal = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurJournal(f"journal illisible : {erreur}") from erreur
+    if (
+        not isinstance(journal, dict)
+        or set(journal) != {"schema_version", "entrees"}
+        or journal["schema_version"] != SCHEMA_JOURNAL_EXECUTION
+        or not isinstance(journal["entrees"], list)
+    ):
+        raise ErreurJournal("journal hors schéma fermé")
+    for entree in journal["entrees"]:
+        if not isinstance(entree, dict) or set(entree) != _CLES_ENTREE_JOURNAL:
+            raise ErreurJournal("entrée de journal hors schéma fermé")
+    return journal
+
+
+def _ecrire_journal_execution(chemin: Path, journal: dict) -> None:
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    descripteur = os.open(
+        chemin, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+    )
+    with os.fdopen(descripteur, "wb") as flux:
+        flux.write(octets_canoniques(journal))
+    os.chmod(chemin, 0o600)
+
+
+def _controler_groupe(groupe: int) -> int:
+    """Contrôle post-tentative du groupe de processus : le chef est récolté,
+    tout membre restant est un descendant survivant ; il est alors tué et
+    signalé, jamais laissé vivant."""
+    try:
+        os.killpg(groupe, 0)
+    except ProcessLookupError:
+        return 0
+    except PermissionError:
+        # Membre vivant appartenant à un autre utilisateur : signalé sans kill
+        return 1
+    try:
+        os.killpg(groupe, signal.SIGKILL)
+    except ProcessLookupError:
+        return 0
+    return 1
+
+
+def _executer_acquisition(
+    argv: list[str], entree: bytes, espace: Path, delai_secondes: int
+) -> tuple[dict, int]:
+    """Exécution bornée d'une tentative officielle : nouvelle session, délai
+    officiel appliqué au groupe entier, contrôle des descendants après la
+    tentative. Rend (execution, descendants)."""
+    depart = time.monotonic()
+    try:
+        processus = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=espace,
+            start_new_session=True,
+        )
+    except OSError as erreur:
+        return (
+            {
+                "etat": "INCIDENT",
+                "incident": "HARNESS_ERROR",
+                "fait": f"lancement local impossible : {erreur}",
+            },
+            0,
+        )
+    try:
+        stdout, stderr = processus.communicate(entree, timeout=delai_secondes)
+    except subprocess.TimeoutExpired:
+        groupe = processus.pid
+        try:
+            os.killpg(groupe, signal.SIGTERM)
+            limite = time.monotonic() + 0.5
+            while time.monotonic() < limite and processus.poll() is None:
+                time.sleep(0.02)
+            os.killpg(groupe, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        processus.wait()
+        for tube in (processus.stdin, processus.stdout, processus.stderr):
+            tube.close()
+        return (
+            {
+                "etat": "INCIDENT",
+                "incident": "HARNESS_ERROR",
+                "fait": (
+                    f"délai officiel de {delai_secondes} s dépassé : "
+                    "terminaison envoyée au groupe de processus entier, puis "
+                    "groupe tué et parent récolté ; aucun retry"
+                ),
+            },
+            _controler_groupe(processus.pid),
+        )
+    latence_ms = int((time.monotonic() - depart) * 1000)
+    descendants = _controler_groupe(processus.pid)
+    return (
+        {
+            "etat": "OBSERVED",
+            "sortie": {
+                "stdout": stdout.decode("utf-8", errors="replace"),
+                "stderr": stderr.decode("utf-8", errors="replace"),
+            },
+            "code_sortie": processus.returncode,
+            "latence_ms": latence_ms,
+        },
+        descendants,
+    )
+
+
+def _projeter_identite_servie(
+    stdout: str, stderr: str, attendus: tuple[str, ...]
+) -> dict | None:
+    """Divergence explicite d'identité servie : la première métadonnée
+    'model:' dont la valeur ne correspond à aucune forme attendue, avec sa
+    ligne exacte comme preuve attribuable. None sans métadonnée divergente ;
+    une valeur concordante reste un écho, jamais une preuve d'identité."""
+    for texte in (stdout, stderr):
+        for correspondance in _MOTIF_IDENTITE_SERVIE.finditer(texte):
+            valeur = correspondance.group(1)
+            if valeur not in attendus:
+                return {
+                    "valeur": valeur,
+                    "ligne": correspondance.group(0).strip(),
+                }
+    return None
+
+
+def _refus_acquisition(fait: str) -> int:
+    print(f"ECHEC {fait}")
+    return 2
+
+
+def acquerir_officiel(
+    racine: Path, identifiant: str, racine_privee: Path | None = None
+) -> int:
+    """Exécute une seule fois le créneau autorisé de la configuration donnée.
+
+    Fail-closed : toute divergence d'autorisation, de verrou, de
+    configuration, de journal ou de créneau rend 2 avant tout processus
+    fournisseur et sans reçu. Aucun retry, aucun fallback, aucune reprise.
+    """
+    if racine_privee is None:
+        racine_privee = RACINE_PRIVEE_PRODUCTION
+    if not _MOTIF_SLUG.match(identifiant):
+        return _refus_acquisition(
+            f"champ 'configuration_id' : '{identifiant}' n'est pas un slug "
+            "stable ; identifiant refusé avant toute résolution de chemin"
+        )
+    try:
+        autorisation = _charger_autorisation_acquisition(racine)
+    except ErreurAutorisation as erreur:
+        return _refus_acquisition(
+            f"autorisation D-V1-04 absente ou divergente : {erreur} ; aucun "
+            "processus fournisseur créé, aucun reçu écrit"
+        )
+    creneau_autorise = next(
+        (
+            creneau
+            for creneau in autorisation["portee"]["acquisitions"]
+            if creneau["configuration_id"] == identifiant
+        ),
+        None,
+    )
+    if creneau_autorise is None:
+        return _refus_acquisition(
+            f"configuration '{identifiant}' hors de la portée D-V1-04 : "
+            "aucune autre configuration du panel n'est autorisée à acquérir"
+        )
+    acquisition_id = creneau_autorise["acquisition_id"]
+    try:
+        verrou = json.loads(
+            (racine / CHEMIN_VERROU).read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        return _refus_acquisition(f"verrou de campagne illisible : {erreur}")
+    if creneau_autorise not in verrou.get("creneaux", []):
+        return _refus_acquisition(
+            f"créneau '{acquisition_id}' absent du verrou de campagne"
+        )
+    entree_panel = next(
+        (
+            entree
+            for entree in verrou.get("panel", [])
+            if isinstance(entree, dict)
+            and entree.get("configuration_id") == identifiant
+        ),
+        None,
+    )
+    if (
+        entree_panel is None
+        or entree_panel.get("disposition") != DISPOSITION_ELIGIBLE
+        or entree_panel.get("verdict") != "READY"
+    ):
+        return _refus_acquisition(
+            f"configuration '{identifiant}' non ELIGIBLE/READY dans le verrou"
+        )
+    chemin_configuration = racine / REGISTRE_OFFICIEL / f"{identifiant}.toml"
+    if not chemin_configuration.is_file():
+        return _refus_acquisition(
+            f"configuration verrouillée absente : '{identifiant}'"
+        )
+    if _sha256_fichier(chemin_configuration) != entree_panel["configuration"].get(
+        "sha256"
+    ):
+        return _refus_acquisition(
+            f"configuration '{identifiant}' divergente du verrou "
+            "(CONFIGURATION_CHANGED) : aucun appel"
+        )
+    try:
+        configuration = _charger_configuration(chemin_configuration)
+    except ErreurConfiguration as erreur:
+        return _refus_acquisition(str(erreur))
+    if configuration["configuration_id"] != identifiant:
+        return _refus_acquisition(
+            "champ 'configuration_id' divergent du fichier verrouillé"
+        )
+    harnais = configuration["harnais"]
+    if harnais["delai_secondes"] != 0:
+        return _refus_acquisition(
+            "champ 'harnais.delai_secondes' : 0 attendu (aucune surcharge de "
+            f"configuration), la couche officielle applique "
+            f"{DELAI_ACQUISITION_OFFICIELLE} s par tentative"
+        )
+    if identifiant == CONFIGURATION_ACQUISITION_ANTIGRAVITY:
+        if tuple(harnais["argv"]) != ARGV_DECLARE_ANTIGRAVITY or (
+            "stdin_fichier" in harnais
+        ):
+            return _refus_acquisition(
+                "descripteur Antigravity divergent du descripteur déclaré "
+                "verrouillé : aucun appel"
+            )
+        if configuration["modele"]["demande"] != MODELE_ACQUISITION_ANTIGRAVITY:
+            return _refus_acquisition(
+                "modèle demandé divergent : sélection Antigravity explicite "
+                f"'{MODELE_ACQUISITION_ANTIGRAVITY}' attendue, sans défaut "
+                "implicite"
+            )
+    elif identifiant == CONFIGURATION_ACQUISITION_ZAI:
+        if (
+            tuple(harnais["argv"]) != ARGV_DECLARE_ZAI
+            or harnais.get("stdin_fichier") != JETON_FICHIER_PROMPT
+        ):
+            return _refus_acquisition(
+                "descripteur Z.AI divergent du descripteur exact conservé : "
+                "aucun appel"
+            )
+    else:
+        return _refus_acquisition(
+            f"aucun adaptateur officiel pour '{identifiant}'"
+        )
+    sources: dict[str, dict] = {}
+    for nom, relatif in (
+        ("carte", CHEMIN_CARTE),
+        ("paquet", CHEMIN_PAQUET),
+        ("stimulus", CHEMIN_STIMULUS),
+    ):
+        chemin_source = racine / relatif
+        if not chemin_source.is_file():
+            return _refus_acquisition(f"source du reçu absente : {relatif}")
+        sources[nom] = {"chemin": relatif, "sha256": _sha256_fichier(chemin_source)}
+    if sources["stimulus"]["sha256"] != autorisation["stimulus"]["sha256"]:
+        return _refus_acquisition(
+            "stimulus divergent de l'autorisation D-V1-04 : aucun appel"
+        )
+    try:
+        etat = _charger_etat(racine)
+    except ErreurRestitution as erreur:
+        return _refus_acquisition(str(erreur))
+    creneau = f"{identifiant}:{sources['stimulus']['sha256']}"
+    repertoire = _repertoire_recus(racine, etat)
+    try:
+        recus = _charger_recus(repertoire)
+    except ErreurRecu as erreur:
+        return _refus_acquisition(str(erreur))
+    for _, existant in recus:
+        if existant["payload"]["creneau"] == creneau:
+            return _refus_acquisition(
+                f"collision append-only : le créneau '{creneau}' est déjà "
+                "occupé, aucun retry et aucune réécriture"
+            )
+    chemin_journal = (
+        racine_privee / RELATIF_EXECUTION_XS08 / NOM_JOURNAL_EXECUTION
+    )
+    try:
+        journal = _charger_journal_execution(chemin_journal)
+    except ErreurJournal as erreur:
+        return _refus_acquisition(f"journal d'exécution : {erreur} ; HOLD")
+    if journal is None:
+        journal = {"schema_version": SCHEMA_JOURNAL_EXECUTION, "entrees": []}
+    for entree in journal["entrees"]:
+        if entree["acquisition_id"] == acquisition_id:
+            return _refus_acquisition(
+                f"créneau '{acquisition_id}' déjà consommé selon le journal : "
+                "aucun second enregistrement du même créneau, aucun retry"
+            )
+        if entree["etat_terminal"] == "IDENTITY_MISMATCH":
+            return _refus_acquisition(
+                "HOLD : une identité servie divergente est journalisée, "
+                "aucun appel suivant avant arbitrage propriétaire"
+            )
+        if entree["descendants"]:
+            return _refus_acquisition(
+                "HOLD : un descendant survivant est journalisé, aucun appel "
+                "suivant avant arbitrage propriétaire"
+            )
+        if entree["recu"] is None:
+            return _refus_acquisition(
+                "HOLD : une tentative sans reçu est journalisée, aucun appel "
+                "suivant avant arbitrage propriétaire"
+            )
+    espace_tentative = (
+        racine_privee / RELATIF_EXECUTION_XS08 / NOM_RUNTIME_XS08 / acquisition_id
+    )
+    if os.path.lexists(espace_tentative):
+        return _refus_acquisition(
+            f"espace réel de tentative déjà présent pour '{acquisition_id}' : "
+            "le créneau est consommé, aucun retry et aucun nettoyage"
+        )
+    stimulus_octets = (racine / CHEMIN_STIMULUS).read_bytes()
+    if identifiant == CONFIGURATION_ACQUISITION_ANTIGRAVITY:
+        prefixe = ["agy", *FLAGS_ACQUISITION_ANTIGRAVITY]
+        argv_execute = [*prefixe, stimulus_octets.decode("utf-8")]
+        argv_resolu = [*prefixe, JETON_STIMULUS_UTF8]
+        entree_stdin = b""
+        mode_stdin = "aucun"
+    else:
+        argv_resolu = list(ARGV_DECLARE_ZAI)
+        entree_stdin = stimulus_octets
+        mode_stdin = JETON_FICHIER_PROMPT
+    if any(element in FLAGS_INTERDITS_ACQUISITION for element in argv_resolu):
+        return _refus_acquisition(
+            "flag interdit présent dans le descripteur résolu : aucun appel"
+        )
+    espace = espace_tentative / "espace"
+    espace.mkdir(parents=True, exist_ok=False)
+    if identifiant == CONFIGURATION_ACQUISITION_ZAI:
+        argv_execute = [
+            element.replace(JETON_ESPACE_ISOLE, str(espace))
+            for element in ARGV_DECLARE_ZAI
+        ]
+    depart_tentative = time.monotonic()
+    execution, descendants = _executer_acquisition(
+        argv_execute, entree_stdin, espace, DELAI_ACQUISITION_OFFICIELLE
+    )
+    latence_tentative_ms = int((time.monotonic() - depart_tentative) * 1000)
+    if execution["etat"] == "OBSERVED":
+        # La sortie texte candidate est conservée dans l'espace réel privé
+        (espace_tentative / "sortie-stdout.txt").write_text(
+            execution["sortie"]["stdout"], encoding="utf-8"
+        )
+        (espace_tentative / "sortie-stderr.txt").write_text(
+            execution["sortie"]["stderr"], encoding="utf-8"
+        )
+        attendus = (
+            (MODELE_ACQUISITION_ANTIGRAVITY,)
+            if identifiant == CONFIGURATION_ACQUISITION_ANTIGRAVITY
+            else MODELES_ATTENDUS_ZAI
+        )
+        divergence = _projeter_identite_servie(
+            execution["sortie"]["stdout"],
+            execution["sortie"]["stderr"],
+            attendus,
+        )
+        if divergence is not None:
+            execution = {
+                "etat": "INCIDENT",
+                "incident": "IDENTITY_MISMATCH",
+                "fait": (
+                    "métadonnée explicite d'identité servie divergente du "
+                    "modèle demandé : le créneau est consommé, HOLD avant "
+                    "tout appel suivant"
+                ),
+                "preuve_attribuable": divergence["ligne"],
+            }
+        elif execution["code_sortie"] != 0 and execution["sortie"]["stdout"] == "":
+            # Erreur locale ou wrapper défaillant : sans sortie candidate, le
+            # code client non nul ne prouve aucune observation du fournisseur
+            execution = {
+                "etat": "INCIDENT",
+                "incident": "HARNESS_ERROR",
+                "fait": (
+                    f"code client {execution['code_sortie']} sans sortie "
+                    "candidate : erreur du harnais local, stderr conservée "
+                    "dans l'espace réel privé, créneau consommé sans retry"
+                ),
+            }
+    latence_journal = (
+        execution["latence_ms"]
+        if execution["etat"] == "OBSERVED"
+        else latence_tentative_ms
+    )
+    charge = {
+        "measurement_profile": PROFIL_MESURE_RECU,
+        "creneau": creneau,
+        "predecesseur_adresse_contenu": (
+            recus[-1][1]["content_address"]["sha256"] if recus else None
+        ),
+        "carte": sources["carte"],
+        "paquet": sources["paquet"],
+        "stimulus": sources["stimulus"],
+        "configuration": {
+            "identifiant": identifiant,
+            "chemin": (REGISTRE_OFFICIEL / f"{identifiant}.toml").as_posix(),
+            "sha256": _sha256_fichier(chemin_configuration),
+        },
+        "plan_declare": {"etat": "DECLARE", "champs": configuration["plan"]},
+        "interface_declaree": {
+            "etat": "DECLARE",
+            "champs": configuration["interface"],
+        },
+        "quota_observe": INCONNU,
+        "requete": {
+            "etat": "REQUESTED",
+            "argv_resolu": argv_resolu,
+            "mode_stdin": mode_stdin,
+            "espace_de_travail": JETON_ESPACE_ISOLE,
+        },
+        "execution": execution,
+        "provenance_servie": INCONNU,
+    }
+    enveloppe = {
+        "schema_version": SCHEMA_RECU,
+        "content_address": {
+            "algorithm": "SHA256",
+            "sha256": adresse_canonique(charge),
+        },
+        "payload": charge,
+    }
+    adresse: str | None = enveloppe["content_address"]["sha256"]
+    etat_terminal = (
+        "OBSERVED" if execution["etat"] == "OBSERVED" else execution["incident"]
+    )
+    try:
+        _valider_recu(enveloppe)
+        destination = repertoire / f"{adresse}.json"
+        with open(destination, "xb") as fichier:
+            fichier.write(octets_canoniques(enveloppe))
+    except (ErreurRecu, OSError) as erreur:
+        # Tentative sans reçu : journalisée telle quelle, HOLD obligatoire
+        print(f"ECHEC reçu non écrit après tentative : {erreur} ; HOLD")
+        adresse = None
+        destination = None
+    code_commande = 0 if adresse is not None and descendants == 0 else 1
+    journal["entrees"].append(
+        {
+            "acquisition_id": acquisition_id,
+            "configuration_id": identifiant,
+            "invocation_publique": (
+                "uv run tools/campagne_v1.py acquerir --officiel "
+                f"--configuration {identifiant}"
+            ),
+            "code": code_commande,
+            "recu": adresse,
+            "etat_terminal": etat_terminal,
+            "latence_ms": latence_journal,
+            "retry": 0,
+            "descendants": descendants,
+        }
+    )
+    _ecrire_journal_execution(chemin_journal, journal)
+    if destination is not None:
+        print(
+            "reçu V1 abonnement écrit : "
+            f"{destination.relative_to(racine).as_posix()}"
+        )
+        print(f"créneau : {creneau}")
+        print(f"adresse de contenu : {adresse}")
+    print(f"état terminal : {etat_terminal}")
+    if execution["etat"] == "INCIDENT":
+        print(
+            f"incident : {execution['incident']} — {execution['fait']}"
+        )
+    print(f"descendants survivants : {descendants}")
+    if descendants:
+        print(
+            "ECHEC descendant survivant détecté après la tentative : groupe "
+            "tué, HOLD avant tout appel suivant"
+        )
+    return code_commande
+
+
 def _charger_verrou_restitution(racine: Path) -> tuple[str, dict, str] | None:
     """Verrou public validé pour le rendu : (chemin relatif, verrou, SHA-256),
     ou None lorsque le verrou n'est pas matérialisé."""
@@ -6680,24 +7538,29 @@ def _rendre_page(racine: Path) -> bytes:
     etat = _charger_etat(racine)
     repertoire = _repertoire_recus(racine, etat)
     _compter_recus(repertoire)
-    # Tout fichier du répertoire doit être un reçu local valide ; aucune
-    # acquisition officielle n'existe, la conclusion du panel reste inchangée.
-    recus_locaux = _recus_locaux(racine, etat)
+    # Tout fichier du répertoire doit être un reçu V1 valide et chaîné ; les
+    # acquisitions officielles D-V1-04 sont restituées sans jamais changer la
+    # conclusion ABSTENTION du panel, faute d'acceptabilité officielle.
+    recus_locaux, recus_officiels = _partitionner_recus(racine, etat)
     configurations = _configurations_officielles(racine)
     qualification = _charger_recu_qualification(racine)
     preflights = _charger_recus_preflight(racine)
     verrou_charge = _charger_verrou_restitution(racine)
+    autorisation = _charger_autorisation_restitution(racine)
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
-        etat, 0, len(configurations)
+        etat, len(recus_officiels), len(configurations)
     )
     etat_relatif = CHEMIN_ETAT.as_posix()
     empreintes = _empreintes_sources(
         racine, etat_relatif, tuple(chemin for chemin, _ in configurations)
     )
     empreintes.update({relatif: sha for relatif, _, sha in recus_locaux})
+    empreintes.update({relatif: sha for relatif, _, sha in recus_officiels})
     empreintes.update({relatif: sha for relatif, _, sha in preflights})
     if qualification is not None:
         empreintes[qualification[0]] = qualification[2]
+    if autorisation is not None:
+        empreintes[autorisation[0]] = autorisation[2]
     relatif_sources_plans = CHEMIN_SOURCES_PLANS.as_posix()
     if verrou_charge is not None:
         empreintes[verrou_charge[0]] = verrou_charge[2]
@@ -6766,7 +7629,19 @@ def _rendre_page(racine: Path) -> bytes:
 
     # Fidélité MSW : avec un reçu local présent, l'absence d'acquisition et de
     # reçu se dit uniquement à portée officielle qualifiée, jamais littéralement
-    if recus_locaux:
+    if recus_officiels:
+        absence_acquisition = (
+            f"{len(recus_officiels)} acquisition(s) officielle(s) sous "
+            "D-V1-04 existent avec reçu, sans acceptabilité officielle "
+            "établie ni notation"
+        )
+        premisse_recus = (
+            f"{len(recus_officiels)} reçu(s) d'acquisition officielle et "
+            f"{len(recus_locaux)} reçu(s) de démonstration locale hors panel "
+            "officiel dans le répertoire de reçus V1, sans acceptabilité "
+            "officielle établie"
+        )
+    elif recus_locaux:
         absence_acquisition = (
             "aucune acquisition officielle n'existe ; le reçu de démonstration "
             "locale, hors panel officiel, n'établit aucune mesure du panel"
@@ -6817,7 +7692,14 @@ def _rendre_page(racine: Path) -> bytes:
             f'{premisse_recus} ; règle U-018 de docs/RULES.md"',
         )
 
-    if recus_locaux:
+    if recus_officiels:
+        texte_recus = (
+            f"répertoire de reçus V1 <code>{chemin_recus}</code> existe et contient "
+            f"{len(recus_officiels)} reçu(s) d'acquisition officielle sous "
+            f"D-V1-04 et {len(recus_locaux)} reçu(s) de démonstration locale "
+            "hors panel officiel."
+        )
+    elif recus_locaux:
         texte_recus = (
             f"répertoire de reçus V1 <code>{chemin_recus}</code> existe et contient "
             f"{len(recus_locaux)} reçu(s) de démonstration locale hors panel "
@@ -6858,11 +7740,20 @@ def _rendre_page(racine: Path) -> bytes:
                 else "Aucun préflight n'existe. "
             )
             + (
-                "Aucune acquisition officielle et aucune mesure du panel "
-                "n'existe ; le reçu de démonstration locale reste hors panel "
-                "officiel."
-                if recus_locaux
-                else "Aucune acquisition et aucune mesure n'existe."
+                (
+                    f"{len(recus_officiels)} acquisition(s) officielle(s) "
+                    "sous D-V1-04 existent avec reçus, restituées plus bas ; "
+                    "aucune acceptabilité officielle n'est établie et aucune "
+                    "configuration n'est notée."
+                )
+                if recus_officiels
+                else (
+                    "Aucune acquisition officielle et aucune mesure du panel "
+                    "n'existe ; le reçu de démonstration locale reste hors "
+                    "panel officiel."
+                    if recus_locaux
+                    else "Aucune acquisition et aucune mesure n'existe."
+                )
             )
             + "</p>"
             + "".join(
@@ -6953,6 +7844,42 @@ def _rendre_page(racine: Path) -> bytes:
             + "</section>"
         )
 
+    if autorisation is not None:
+        relatif_autorisation, donnees_autorisation, sha_autorisation = autorisation
+        sections.append(
+            "<section id=\"autorite-acquisition\"><h2>Autorité d'acquisition "
+            "D-V1-04</h2>"
+            "<p>Le verrou de campagne versionné conserve, inchangé, son champ "
+            "d'exécution historique <code>NOT_GRANTED</code> : le verrou ne "
+            "confère aucune autorité. L'autorité d'acquisition vit dans "
+            "l'artefact séparé restitué ici, qui référence le commentaire "
+            "propriétaire, le verrou et le stimulus par empreintes. Cette "
+            "autorité couvre exactement deux créneaux, sans reprise, sans "
+            "fallback et sans dépense incrémentale.</p>"
+            + _article_autorisation_acquisition(
+                relatif_autorisation, sha_autorisation, donnees_autorisation
+            )
+            + "</section>"
+        )
+
+    if recus_officiels:
+        sections.append(
+            "<section id=\"acquisitions-officielles\"><h2>Acquisitions "
+            "officielles sous D-V1-04</h2>"
+            "<p>Chaque entrée reprend un reçu V1 abonnement versionné, adressé "
+            "par contenu et append-only, produit par une exécution unique de "
+            "son créneau autorisé. Les exécutions et incidents sont restitués "
+            "tels quels : quota consommé et identité servie restent "
+            "<code>INCONNU</code> sans observation prouvée, aucune "
+            "acceptabilité officielle n'est établie et aucune conclusion "
+            "n'en est tirée.</p>"
+            + "".join(
+                _article_acquisition_officielle(relatif, sha, enveloppe)
+                for relatif, enveloppe, sha in recus_officiels
+            )
+            + "</section>"
+        )
+
     if configurations:
         article_identites_inconnues = _article(
             "fait",
@@ -6976,17 +7903,35 @@ def _rendre_page(racine: Path) -> bytes:
         + _article(
             "fait",
             (
-                "<p>Aucun reçu V1 rattaché au panel officiel n'existe : "
-                "expérience réelle, coûts, latences et couverture du panel "
-                "restent <code>INCONNU</code> ; le reçu de démonstration locale, "
-                "hors panel officiel, n'établit aucune de ces mesures. Aucune "
-                "sortie officiellement acceptable n'existant, tout coût par "
-                "sortie officiellement acceptable serait <code>NON_DEFINI</code>.</p>"
-                if recus_locaux
-                else "<p>Aucun reçu V1 n'existe : expérience réelle, coûts, "
-                "latences et couverture restent <code>INCONNU</code>. Aucune "
-                "sortie acceptable n'existant, tout coût par sortie "
-                "officiellement acceptable serait <code>NON_DEFINI</code>.</p>"
+                (
+                    f"<p>{len(recus_officiels)} reçu(s) V1 rattachés au panel "
+                    "officiel existent : leurs exécutions et incidents sont "
+                    "restitués tels quels. L'acceptabilité officielle, la "
+                    "couverture de mesure et toute conclusion restent non "
+                    "établies ; les quotas consommés et l'identité servie "
+                    "restent <code>INCONNU</code> sans observation prouvée. "
+                    "Aucune sortie officiellement acceptable n'étant établie, "
+                    "tout coût par sortie officiellement acceptable serait "
+                    "<code>NON_DEFINI</code>.</p>"
+                    + "".join(
+                        src(relatif, SECTION_RECU_OFFICIEL)
+                        for relatif, _, _ in recus_officiels
+                    )
+                )
+                if recus_officiels
+                else (
+                    "<p>Aucun reçu V1 rattaché au panel officiel n'existe : "
+                    "expérience réelle, coûts, latences et couverture du panel "
+                    "restent <code>INCONNU</code> ; le reçu de démonstration locale, "
+                    "hors panel officiel, n'établit aucune de ces mesures. Aucune "
+                    "sortie officiellement acceptable n'existant, tout coût par "
+                    "sortie officiellement acceptable serait <code>NON_DEFINI</code>.</p>"
+                    if recus_locaux
+                    else "<p>Aucun reçu V1 n'existe : expérience réelle, coûts, "
+                    "latences et couverture restent <code>INCONNU</code>. Aucune "
+                    "sortie acceptable n'existant, tout coût par sortie "
+                    "officiellement acceptable serait <code>NON_DEFINI</code>.</p>"
+                )
             )
             + src(etat_relatif, "état V1 versionné")
             + src(rules, "U-020"),
@@ -7074,7 +8019,35 @@ def _rendre_page(racine: Path) -> bytes:
         for relatif, enveloppe, _ in recus_locaux
         if enveloppe["payload"]["execution"]["etat"] == "OBSERVED"
     ]
-    if recus_observes:
+    officiels_observes = [
+        relatif
+        for relatif, enveloppe, _ in recus_officiels
+        if enveloppe["payload"]["execution"]["etat"] == "OBSERVED"
+    ]
+    if recus_officiels:
+        if officiels_observes:
+            texte_observation = (
+                "<p>Les reçus V1 officiels cités en source prouvent des "
+                "exécutions <code>OBSERVED</code> de créneaux autorisés. Une "
+                "exécution observée n'est ni une acceptabilité officielle ni "
+                "une notation : le panel officiel demeure sans conclusion.</p>"
+                + "".join(
+                    src(relatif, SECTION_RECU_OFFICIEL)
+                    for relatif in officiels_observes
+                )
+            )
+        else:
+            texte_observation = (
+                "<p>Chaque reçu V1 officiel cité en source consigne un "
+                "incident nommé, sans exécution <code>OBSERVED</code> : le "
+                "panel officiel demeure sans conclusion.</p>"
+                + "".join(
+                    src(relatif, SECTION_RECU_OFFICIEL)
+                    for relatif, _, _ in recus_officiels
+                )
+            )
+        article_observation_v1 = _article("fait", texte_observation)
+    elif recus_observes:
         article_observation_v1 = _article(
             "fait",
             "<p>Le reçu V1 local versionné cité en source prouve une exécution "
@@ -7172,6 +8145,15 @@ def _rendre_page(racine: Path) -> bytes:
             *SOURCES_AUTORISEES,
             *((chemin, SECTION_REGISTRE) for chemin, _ in configurations),
             *((relatif, SECTION_RECU_LOCAL) for relatif, _, _ in recus_locaux),
+            *(
+                (relatif, SECTION_RECU_OFFICIEL)
+                for relatif, _, _ in recus_officiels
+            ),
+            *(
+                ((autorisation[0], SECTION_AUTORISATION_ACQUISITION),)
+                if autorisation is not None
+                else ()
+            ),
             *(
                 ((qualification[0], SECTION_QUALIFICATION),)
                 if qualification is not None
@@ -7277,20 +8259,26 @@ def verifier_restitution(racine: Path) -> int:
     etat = _charger_etat(racine)
     repertoire = _repertoire_recus(racine, etat)
     _compter_recus(repertoire)
-    recus_locaux = _recus_locaux(racine, etat)
+    recus_locaux, recus_officiels = _partitionner_recus(racine, etat)
     configurations = _configurations_officielles(racine)
     qualification = _charger_recu_qualification(racine)
     preflights = _charger_recus_preflight(racine)
     verrou_charge = _charger_verrou_restitution(racine)
-    jetons_factuels = _jetons_attendus(etat, 0, len(configurations))
+    autorisation = _charger_autorisation_restitution(racine)
+    jetons_factuels = _jetons_attendus(
+        etat, len(recus_officiels), len(configurations)
+    )
     etat_relatif = CHEMIN_ETAT.as_posix()
     empreintes = _empreintes_sources(
         racine, etat_relatif, tuple(chemin for chemin, _ in configurations)
     )
     empreintes.update({relatif: sha for relatif, _, sha in recus_locaux})
+    empreintes.update({relatif: sha for relatif, _, sha in recus_officiels})
     empreintes.update({relatif: sha for relatif, _, sha in preflights})
     if qualification is not None:
         empreintes[qualification[0]] = qualification[2]
+    if autorisation is not None:
+        empreintes[autorisation[0]] = autorisation[2]
     if verrou_charge is not None:
         empreintes[verrou_charge[0]] = verrou_charge[2]
         try:
@@ -7367,6 +8355,39 @@ def verifier_restitution(racine: Path) -> int:
         echecs.append(
             f"{len(recus_locaux)} entrées d'acquisition locale attendues dans la "
             f"page, {nombre_locales} trouvées"
+        )
+
+    if autorisation is not None:
+        attendu = _article_autorisation_acquisition(
+            autorisation[0], autorisation[2], autorisation[1]
+        )
+        if attendu not in page:
+            echecs.append(
+                "entrée d'autorisation d'acquisition D-V1-04 infidèle ou absente"
+            )
+    nombre_autorisations_acquisition = page.count(
+        ' data-autorisation-acquisition="'
+    )
+    attendu_autorisations_acquisition = 0 if autorisation is None else 1
+    if nombre_autorisations_acquisition != attendu_autorisations_acquisition:
+        echecs.append(
+            f"{attendu_autorisations_acquisition} entrée d'autorisation "
+            "d'acquisition attendue dans la page, "
+            f"{nombre_autorisations_acquisition} trouvée"
+        )
+
+    for relatif, enveloppe, sha in recus_officiels:
+        attendu = _article_acquisition_officielle(relatif, sha, enveloppe)
+        if attendu not in page:
+            echecs.append(
+                "entrée d'acquisition officielle infidèle ou absente : "
+                f"{enveloppe['payload']['configuration']['identifiant']}"
+            )
+    nombre_officielles = page.count(' data-acquisition-officielle="')
+    if nombre_officielles != len(recus_officiels):
+        echecs.append(
+            f"{len(recus_officiels)} entrées d'acquisition officielle attendues "
+            f"dans la page, {nombre_officielles} trouvées"
         )
 
     for chemin, donnees in configurations:
@@ -7476,6 +8497,7 @@ _USAGE = (
     "usage : campagne_v1.py enregistrer [--registre <chemin>] --fichier <chemin> "
     "| panel [--registre <chemin>] | autorisations [--configuration <id>] "
     "| acquerir --local --configuration <id> "
+    "| acquerir --officiel --configuration <id> "
     "| preflight --configuration <id> "
     "| qualifier | verrouiller | restituer | verifier-restitution"
 )
@@ -7520,15 +8542,18 @@ def principal(
             return 2
         return afficher_autorisations(racine, options.get("--configuration"))
     if arguments[:1] == ["acquerir"]:
-        # Forme figée : seule l'acquisition locale non officielle existe.
-        if (
-            len(arguments) != 4
-            or arguments[1] != "--local"
-            or arguments[2] != "--configuration"
-        ):
+        # Deux formes figées : locale de démonstration, officielle D-V1-04.
+        if len(arguments) != 4 or arguments[2] != "--configuration":
             print(_USAGE)
             return 2
-        return acquerir_local(racine, arguments[3])
+        if arguments[1] == "--local":
+            return acquerir_local(racine, arguments[3])
+        if arguments[1] == "--officiel":
+            # racine_privee n'existe que pour les tests Python : la CLI de
+            # production conserve la racine privée obligatoire exacte
+            return acquerir_officiel(racine, arguments[3], racine_privee)
+        print(_USAGE)
+        return 2
     if arguments[:1] == ["preflight"]:
         options = _analyser_options(arguments[1:], ("--configuration",))
         if options is None:
