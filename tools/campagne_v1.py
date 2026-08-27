@@ -9350,6 +9350,576 @@ def acquerir_officiel(
     return code_commande
 
 
+# V1-R4 : préparation additive de la complétion du panel (#139). Paquet
+# local pour les cinq configurations MISSING_OBSERVATION : verrou additif
+# citant les sources historiques sans les réécrire, cinq créneaux -001
+# réservés non consommés, verdicts locaux d'aptitude statique et garde
+# d'autorité absente avant tout processus fournisseur.
+
+
+class ErreurCompletion(Exception):
+    """Divergence nommée du contrat de complétion V1-R4."""
+
+
+SCHEMA_VERROU_COMPLETION = "campagne-v1-verrou-completion/v1"
+CHEMIN_VERROU_COMPLETION = (
+    _RACINE_CAMPAGNE_V1 / "completion-panel-v1" / "verrou-completion.json"
+)
+ISSUE_COMPLETION = "https://github.com/ayoahha/benchmark-lab-x/issues/139"
+TRANCHE_COMPLETION = "V1-R4"
+# Version issue de V1-R3 (#138) : base fusionnée exacte de cette tranche,
+# citée comme fait immuable. L'état et la restitution restent des artefacts
+# vivants réécrits par leurs commandes : ils ne sont jamais scellés ici,
+# afin que le verrou reste re-dérivable byte-identique après toute
+# exécution future autorisée.
+ISSUE_V1_R3 = "https://github.com/ayoahha/benchmark-lab-x/issues/138"
+COMMIT_V1_R3 = "ede86a2c9475c3186aa57b4a95b8754513e4f2ce"
+
+# Les cinq configurations MISSING_OBSERVATION et leurs créneaux -001 figés
+# par le contrat #139 ; identifiants exactement ceux de D-V1-01.
+CRENEAUX_COMPLETION = (
+    ("claude-code-fable-5", "ACQ-V1-CLAUDE-CODE-FABLE-5-001"),
+    ("claude-code-opus-5", "ACQ-V1-CLAUDE-CODE-OPUS-5-001"),
+    ("codex-gpt-5-6-sol", "ACQ-V1-CODEX-GPT-5-6-SOL-001"),
+    ("cursor-kimi-k3", "ACQ-V1-CURSOR-KIMI-K3-001"),
+    ("grok-build-grok-4-6", "ACQ-V1-GROK-BUILD-GROK-4-6-001"),
+)
+
+
+VERDICT_APTITUDE_STATIQUE_PRETE = "APTITUDE_STATIQUE_PRETE"
+VERDICT_COMPLETION_UNAVAILABLE = "UNAVAILABLE"
+VERDICT_COMPLETION_HOLD = "HOLD"
+CAUSE_STATIQUE_COMPLETE = "STATIQUE_COMPLETE"
+CAUSE_PANEL_DIVERGENT = "PANEL_DIVERGENT"
+CAUSE_CONFIGURATION_ABSENTE = "CONFIGURATION_ABSENTE"
+CAUSE_CONFIGURATION_INVALIDE = "CONFIGURATION_INVALIDE"
+CAUSE_SCELLE_CONFIGURATION_DIVERGENT = "SCELLE_CONFIGURATION_DIVERGENT"
+CAUSE_DESCRIPTEUR_NON_STANDARD = "DESCRIPTEUR_NON_STANDARD"
+CAUSE_PREFLIGHT_ABSENT = "PREFLIGHT_ABSENT"
+CAUSE_PREFLIGHT_ILLISIBLE = "PREFLIGHT_ILLISIBLE"
+CAUSE_SCELLE_PREFLIGHT_DIVERGENT = "SCELLE_PREFLIGHT_DIVERGENT"
+CAUSE_CRENEAU_CONSOMME = "CRENEAU_CONSOMME"
+# Mode d'entrée standard du stimulus des cinq harnais D-V1-01 : un fichier
+# de prompt matérialisé dans l'espace de travail isolé, jamais un argument
+# inline ni stdin.
+MODE_STIMULUS_FICHIER_PROMPT = "fichier-prompt"
+# Faits dynamiques qui restent littéralement INCONNU jusqu'à un reçu
+# attribuable : jamais promus, jamais dégradants pour l'aptitude statique.
+FAITS_A_L_APPEL_COMPLETION = (
+    "identite_servie",
+    "effort_effectif",
+    "disponibilite_distante",
+    "quota_restant",
+)
+# Descripteurs standards fermés : exactement le harnais D-V1-01 du registre
+# officiel, sans wrapper fournisseur, sans variante et sans flag ajouté ;
+# toute divergence avec le TOML scellé rend HOLD.
+DESCRIPTEURS_COMPLETION = {
+    "claude-code-fable-5": ("claude", JETON_FICHIER_PROMPT),
+    "claude-code-opus-5": ("claude", JETON_FICHIER_PROMPT),
+    "codex-gpt-5-6-sol": ("codex", JETON_FICHIER_PROMPT),
+    "cursor-kimi-k3": ("agent", JETON_FICHIER_PROMPT),
+    "grok-build-grok-4-6": ("grok", JETON_FICHIER_PROMPT),
+}
+# Scellés figés partagés avec la chaîne historique V1-R1 : le verrou de
+# campagne et le stimulus restent byte-identiques aux constantes du contrat.
+EMPREINTE_VERROU_CAMPAGNE_COMPLETION = (
+    EMPREINTES_SOURCES_HISTORIQUES_RECUPERATION[CHEMIN_VERROU.as_posix()]
+)
+EMPREINTE_STIMULUS_COMPLETION = EMPREINTES_SOURCES_HISTORIQUES_RECUPERATION[
+    CHEMIN_STIMULUS
+]
+APTITUDE_STATIQUE_SIGNIFIE = (
+    "configuration validée, descripteur standard, créneau réservé et "
+    "scellés locaux complets"
+)
+APTITUDE_STATIQUE_NE_PROUVE_JAMAIS = (
+    "READY de préflight",
+    "disponibilité distante",
+    "quota",
+    "identité servie",
+    "résultat candidat",
+)
+
+
+def _refus_completion(fait: str) -> int:
+    print(f"ECHEC {fait}")
+    return 2
+
+
+def _panel_campagne_completion(racine: Path) -> dict[str, dict]:
+    """Épingles du panel du verrou de campagne, vérifié byte-identique à la
+    constante figée du contrat avant toute lecture de champ."""
+    chemin = racine / CHEMIN_VERROU
+    try:
+        sha_obtenu = _sha256_fichier(chemin)
+    except OSError as erreur:
+        raise ErreurCompletion(
+            "champ 'sources_historiques' : verrou de campagne illisible "
+            f"'{CHEMIN_VERROU.as_posix()}' : {erreur}"
+        ) from erreur
+    if sha_obtenu != EMPREINTE_VERROU_CAMPAGNE_COMPLETION:
+        raise ErreurCompletion(
+            "champ 'sources_historiques' : constante figée divergente pour "
+            f"'{CHEMIN_VERROU.as_posix()}' : "
+            f"{EMPREINTE_VERROU_CAMPAGNE_COMPLETION} attendu, "
+            f"{sha_obtenu} obtenu"
+        )
+    verrou = json.loads(chemin.read_text(encoding="utf-8"))
+    return {
+        entree["configuration_id"]: entree for entree in verrou["panel"]
+    }
+
+
+def _ligne_completion(
+    racine: Path,
+    configuration_id: str,
+    acquisition_id: str,
+    entree_panel: dict | None,
+    creneaux_occupes: set[str],
+) -> dict:
+    """Une ligne du paquet de complétion : verdict local, cause nommée,
+    faits dynamiques INCONNU et, en aptitude complète, les deux scellés de
+    la ligne. N'exécute aucune commande et ne résout aucun exécutable."""
+    ligne = {
+        "configuration_id": configuration_id,
+        "acquisition_id": acquisition_id,
+        "descripteur": {
+            "argv": list(DESCRIPTEURS_COMPLETION[configuration_id]),
+            "stimulus_utf8": MODE_STIMULUS_FICHIER_PROMPT,
+        },
+        "faits_a_l_appel": {nom: INCONNU for nom in FAITS_A_L_APPEL_COMPLETION},
+        "sources": None,
+    }
+
+    def _conclure(verdict: str, cause: str, fait: str) -> dict:
+        return {**ligne, "verdict": verdict, "cause": cause, "fait": fait}
+
+    if (
+        not isinstance(entree_panel, dict)
+        or entree_panel.get("cause") != "MISSING_OBSERVATION"
+        or not isinstance(entree_panel.get("configuration"), dict)
+        or not isinstance(entree_panel.get("preflight"), dict)
+    ):
+        return _conclure(
+            VERDICT_COMPLETION_HOLD,
+            CAUSE_PANEL_DIVERGENT,
+            "entrée de panel absente ou hors MISSING_OBSERVATION dans "
+            f"'{CHEMIN_VERROU.as_posix()}'",
+        )
+    relatif_configuration = entree_panel["configuration"]["chemin"]
+    chemin_configuration = racine / relatif_configuration
+    if not os.path.lexists(chemin_configuration):
+        return _conclure(
+            VERDICT_COMPLETION_UNAVAILABLE,
+            CAUSE_CONFIGURATION_ABSENTE,
+            f"configuration officielle absente : '{relatif_configuration}'",
+        )
+    try:
+        sha_configuration = _sha256_fichier(chemin_configuration)
+    except OSError as erreur:
+        return _conclure(
+            VERDICT_COMPLETION_HOLD,
+            CAUSE_CONFIGURATION_INVALIDE,
+            f"configuration illisible '{relatif_configuration}' : {erreur}",
+        )
+    if sha_configuration != entree_panel["configuration"]["sha256"]:
+        return _conclure(
+            VERDICT_COMPLETION_HOLD,
+            CAUSE_SCELLE_CONFIGURATION_DIVERGENT,
+            f"scellé divergent pour '{relatif_configuration}' : "
+            f"{entree_panel['configuration']['sha256']} attendu, "
+            f"{sha_configuration} obtenu",
+        )
+    try:
+        configuration = _charger_configuration(chemin_configuration)
+    except ErreurConfiguration as erreur:
+        return _conclure(
+            VERDICT_COMPLETION_HOLD, CAUSE_CONFIGURATION_INVALIDE, str(erreur)
+        )
+    if configuration["configuration_id"] != configuration_id:
+        return _conclure(
+            VERDICT_COMPLETION_HOLD,
+            CAUSE_CONFIGURATION_INVALIDE,
+            f"champ 'configuration_id' : '{configuration['configuration_id']}'"
+            f" ne correspond pas à '{configuration_id}'",
+        )
+    harnais = configuration["harnais"]
+    if harnais["argv"] != list(
+        DESCRIPTEURS_COMPLETION[configuration_id]
+    ) or "stdin_fichier" in harnais:
+        return _conclure(
+            VERDICT_COMPLETION_HOLD,
+            CAUSE_DESCRIPTEUR_NON_STANDARD,
+            "harnais divergent du descripteur standard D-V1-01 pour "
+            f"'{configuration_id}'",
+        )
+    relatif_preflight = entree_panel["preflight"]["chemin"]
+    chemin_preflight = racine / relatif_preflight
+    if not os.path.lexists(chemin_preflight):
+        return _conclure(
+            VERDICT_COMPLETION_UNAVAILABLE,
+            CAUSE_PREFLIGHT_ABSENT,
+            f"reçu de préflight absent : '{relatif_preflight}'",
+        )
+    try:
+        sha_preflight = _sha256_fichier(chemin_preflight)
+    except OSError as erreur:
+        return _conclure(
+            VERDICT_COMPLETION_HOLD,
+            CAUSE_PREFLIGHT_ILLISIBLE,
+            f"reçu de préflight illisible '{relatif_preflight}' : {erreur}",
+        )
+    if sha_preflight != entree_panel["preflight"]["sha256"]:
+        return _conclure(
+            VERDICT_COMPLETION_HOLD,
+            CAUSE_SCELLE_PREFLIGHT_DIVERGENT,
+            f"scellé divergent pour '{relatif_preflight}' : "
+            f"{entree_panel['preflight']['sha256']} attendu, "
+            f"{sha_preflight} obtenu",
+        )
+    if configuration_id in creneaux_occupes:
+        return _conclure(
+            VERDICT_COMPLETION_HOLD,
+            CAUSE_CRENEAU_CONSOMME,
+            f"un reçu officiel occupe déjà un créneau de '{configuration_id}'"
+            " : la réservation -001 non consommée est impossible",
+        )
+    ligne["sources"] = [
+        {"chemin": relatif_configuration, "sha256": sha_configuration},
+        {"chemin": relatif_preflight, "sha256": sha_preflight},
+    ]
+    return {
+        **ligne,
+        "verdict": VERDICT_APTITUDE_STATIQUE_PRETE,
+        "cause": CAUSE_STATIQUE_COMPLETE,
+        "fait": APTITUDE_STATIQUE_SIGNIFIE,
+    }
+
+
+def _lignes_completion(racine: Path) -> list[dict]:
+    """Les cinq lignes du paquet de complétion dans l'ordre figé des
+    créneaux. Les scellés partagés (verrou de campagne, stimulus) et la
+    lisibilité des reçus sont vérifiés fail-closed avant toute ligne."""
+    panel = _panel_campagne_completion(racine)
+    chemin_stimulus = racine / CHEMIN_STIMULUS
+    try:
+        sha_stimulus = _sha256_fichier(chemin_stimulus)
+    except OSError as erreur:
+        raise ErreurCompletion(
+            "champ 'sources_historiques' : stimulus illisible "
+            f"'{CHEMIN_STIMULUS}' : {erreur}"
+        ) from erreur
+    if sha_stimulus != EMPREINTE_STIMULUS_COMPLETION:
+        raise ErreurCompletion(
+            "champ 'sources_historiques' : constante figée divergente pour "
+            f"'{CHEMIN_STIMULUS}' : {EMPREINTE_STIMULUS_COMPLETION} attendu, "
+            f"{sha_stimulus} obtenu"
+        )
+    try:
+        etat = _charger_etat(racine)
+        _, officiels = _partitionner_recus(racine, etat)
+    except ErreurRestitution as erreur:
+        raise ErreurCompletion(
+            f"reçus officiels non vérifiables : {erreur}"
+        ) from erreur
+    creneaux_occupes = {
+        enveloppe["payload"]["creneau"].split(":")[0]
+        for _, enveloppe, _ in officiels
+    }
+    return [
+        _ligne_completion(
+            racine,
+            configuration_id,
+            acquisition_id,
+            panel.get(configuration_id),
+            creneaux_occupes,
+        )
+        for configuration_id, acquisition_id in CRENEAUX_COMPLETION
+    ]
+
+
+def _structure_verrou_completion(lignes: list[dict]) -> dict:
+    """Contenu canonique du verrou additif : cinq lignes toutes en aptitude
+    statique complète, sources historiques citées par chemin et SHA-256."""
+    sources = [
+        {
+            "chemin": CHEMIN_VERROU.as_posix(),
+            "sha256": EMPREINTE_VERROU_CAMPAGNE_COMPLETION,
+        },
+        {"chemin": CHEMIN_STIMULUS, "sha256": EMPREINTE_STIMULUS_COMPLETION},
+    ]
+    entrees = []
+    for ligne in lignes:
+        sources.extend(ligne["sources"])
+        entrees.append(
+            {
+                "configuration_id": ligne["configuration_id"],
+                "acquisition_id": ligne["acquisition_id"],
+                "descripteur": ligne["descripteur"],
+                "verdict": ligne["verdict"],
+                "cause": ligne["cause"],
+                "faits_a_l_appel": ligne["faits_a_l_appel"],
+            }
+        )
+    return {
+        "schema_version": SCHEMA_VERROU_COMPLETION,
+        "portee": {
+            "issue": ISSUE_COMPLETION,
+            "product_version": "V1",
+            "tranche": TRANCHE_COMPLETION,
+        },
+        "version_v1_r3": {"issue": ISSUE_V1_R3, "commit": COMMIT_V1_R3},
+        "configurations": entrees,
+        "autorite_execution": "NOT_GRANTED",
+        "creneaux_executes": 0,
+        "reprises_executees": 0,
+        "fallback": "NONE",
+        "variantes_interdites": list(VARIANTES_INTERDITES_RECUPERATION),
+        "aptitude_statique": {
+            "signifie": APTITUDE_STATIQUE_SIGNIFIE,
+            "ne_prouve_jamais": list(APTITUDE_STATIQUE_NE_PROUVE_JAMAIS),
+        },
+        "jamais_preuve": list(JAMAIS_PREUVE_RECUPERATION),
+        "sources_historiques": sources,
+    }
+
+
+def _nommer_divergence_completion(
+    existant: object, attendu: dict, prefixe: str = ""
+) -> str:
+    """Champ fautif exact d'un verrou de complétion divergent."""
+    if not isinstance(existant, dict):
+        return prefixe.rstrip(".") or "schema_version"
+    for cle in sorted(set(attendu) | set(existant)):
+        if existant.get(cle) == attendu.get(cle):
+            continue
+        chemin = f"{prefixe}{cle}"
+        if cle == "configurations":
+            return _nommer_divergence_entrees(
+                existant.get(cle), attendu[cle], chemin, "configuration_id"
+            )
+        if cle == "sources_historiques":
+            return _nommer_divergence_entrees(
+                existant.get(cle), attendu[cle], chemin, "chemin"
+            )
+        if isinstance(attendu.get(cle), dict) and isinstance(
+            existant.get(cle), dict
+        ):
+            return _nommer_divergence_completion(
+                existant[cle], attendu[cle], f"{chemin}."
+            )
+        return chemin
+    return prefixe.rstrip(".") or "schema_version"
+
+
+def _verifier_verrou_completion(chemin: Path, octets_attendus: bytes) -> None:
+    """Vérifie l'octet existant sans réécriture ; toute divergence nomme le
+    champ fautif."""
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurCompletion(
+            "verrou de complétion : fichier régulier non symbolique attendu"
+        )
+    octets = chemin.read_bytes()
+    if octets == octets_attendus:
+        return
+    try:
+        existant = json.loads(octets.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        existant = None
+    champ = _nommer_divergence_completion(
+        existant, json.loads(octets_attendus.decode("utf-8"))
+    )
+    raise ErreurCompletion(
+        "verrou de complétion divergent : champ fautif "
+        f"'{champ}' (LOCKED_ARTIFACT_CHANGED) : aucune réécriture"
+    )
+
+
+def construire_tentative_completion(
+    identifiant: str, stimulus_utf8: bytes, espace_isole: str
+) -> dict:
+    """Adaptateur pur de la future exécution de complétion : construit la
+    tentative fermée sans résoudre d'exécutable, sans processus et sans
+    écriture.
+
+    Le stimulus entre par un fichier de prompt matérialisé dans l'espace de
+    travail isolé (jamais par argument inline ni stdin) ; l'argv est le
+    descripteur standard D-V1-01 avec le seul jeton de fichier de prompt
+    substitué. Tout identifiant hors des cinq créneaux est refusé."""
+    descripteur = DESCRIPTEURS_COMPLETION.get(identifiant)
+    if descripteur is None:
+        raise ErreurCompletion(
+            "champ 'configuration_id' : "
+            f"'{identifiant}' hors des cinq créneaux de complétion "
+            f"{', '.join(creneau for _, creneau in CRENEAUX_COMPLETION)}"
+        )
+    fichier_prompt = str(Path(espace_isole) / "stimulus.md")
+    argv = [
+        element.replace(JETON_FICHIER_PROMPT, fichier_prompt).replace(
+            JETON_ESPACE_ISOLE, espace_isole
+        )
+        for element in descripteur
+    ]
+    return {
+        "argv": argv,
+        "stdin": None,
+        "cwd": espace_isole,
+        "fichier_prompt": {
+            "chemin": fichier_prompt,
+            "stimulus_utf8": stimulus_utf8,
+        },
+    }
+
+
+def _texte_ligne_completion(ligne: dict) -> str:
+    faits = " · ".join(
+        f"{nom}={valeur}" for nom, valeur in ligne["faits_a_l_appel"].items()
+    )
+    return (
+        f"{ligne['acquisition_id']} · {ligne['configuration_id']} · "
+        f"verdict {ligne['verdict']} · cause {ligne['cause']} · "
+        f"faits à l'appel : {faits}"
+    )
+
+
+def preparer_completion(racine: Path) -> int:
+    """Prépare ou vérifie le paquet additif de complétion des cinq
+    configurations MISSING_OBSERVATION : verdicts locaux d'aptitude
+    statique, cause nommée par ligne, faits dynamiques INCONNU, puis
+    matérialisation unique du verrou additif. N'exécute aucune commande
+    externe de fournisseur, de modèle ou de harnais."""
+    try:
+        lignes = _lignes_completion(racine)
+    except ErreurCompletion as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    except OSError as erreur:
+        print(
+            "ECHEC construction du verrou de complétion : erreur d'accès "
+            f"nommée : {erreur}"
+        )
+        return 2
+    for ligne in lignes:
+        print(_texte_ligne_completion(ligne))
+    en_hold = [
+        ligne for ligne in lignes if ligne["verdict"] == VERDICT_COMPLETION_HOLD
+    ]
+    indisponibles = [
+        ligne
+        for ligne in lignes
+        if ligne["verdict"] == VERDICT_COMPLETION_UNAVAILABLE
+    ]
+    if en_hold:
+        faits = " ; ".join(
+            f"{ligne['configuration_id']} : {ligne['fait']}"
+            for ligne in en_hold
+        )
+        print(
+            f"ECHEC HOLD : manque local ambigu ou scellé divergent — {faits} "
+            "; aucun verrou écrit, aucune réécriture"
+        )
+        return 2
+    if indisponibles:
+        faits = " ; ".join(
+            f"{ligne['configuration_id']} : {ligne['fait']}"
+            for ligne in indisponibles
+        )
+        print(
+            f"ECHEC UNAVAILABLE : impossibilité locale explicite — {faits} ; "
+            "aucun verrou écrit"
+        )
+        return 1
+    octets_attendus = octets_canoniques(_structure_verrou_completion(lignes))
+    chemin = racine / CHEMIN_VERROU_COMPLETION
+    try:
+        if os.path.lexists(chemin):
+            _verifier_verrou_completion(chemin, octets_attendus)
+        else:
+            chemin.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                descripteur = os.open(
+                    chemin, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
+                )
+            except FileExistsError as erreur:
+                # Course de création distincte : aucune réparation ni
+                # réécriture dans la même invocation ; l'invocation
+                # suivante vérifiera l'octet existant.
+                raise ErreurCompletion(
+                    "création concurrente détectée : le verrou de "
+                    "complétion existe déjà (LOCKED_ARTIFACT_CHANGED) : "
+                    "aucune réécriture, une nouvelle invocation vérifiera "
+                    "l'octet existant"
+                ) from erreur
+            with os.fdopen(descripteur, "wb") as flux:
+                flux.write(octets_attendus)
+    except ErreurCompletion as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    except OSError as erreur:
+        nom = Path(erreur.filename).name if erreur.filename else "inconnu"
+        print(
+            "ECHEC verrou de complétion inaccessible : "
+            f"'{nom}' ({erreur.strerror})"
+        )
+        return 2
+    print(
+        "verrou de complétion vérifié : "
+        f"{CHEMIN_VERROU_COMPLETION.as_posix()}"
+    )
+    print(
+        "créneaux : 5 · autorite_execution : NOT_GRANTED · "
+        "creneaux_executes : 0 · reprises_executees : 0 · fallback : NONE"
+    )
+    print(
+        "APTITUDE_STATIQUE_PRETE reste distinct du READY de préflight : "
+        "aucune disponibilité distante, aucun quota, aucune identité servie "
+        "et aucun résultat candidat ne sont prouvés ; les faits dynamiques "
+        "restent INCONNU jusqu'à un reçu attribuable"
+    )
+    print(
+        "empreinte SHA-256 : "
+        f"{hashlib.sha256(octets_attendus).hexdigest()}"
+    )
+    return 0
+
+
+def acquerir_completion(identifiant: str) -> int:
+    """Interface publique de la future exécution de complétion.
+
+    Dans la tranche V1-R4, aucune autorité d'acquisition de complétion
+    n'existe : la garde rend toujours 2 avec AUTORITE_ABSENTE, avant toute
+    résolution d'exécutable, création de processus, espace de travail,
+    journal ou reçu. Fonction pure : aucune lecture ni écriture."""
+    if not _MOTIF_SLUG.match(identifiant):
+        return _refus_completion(
+            f"champ 'configuration_id' : '{identifiant}' n'est pas un slug "
+            "stable ; identifiant refusé avant toute résolution de chemin"
+        )
+    acquisition_id = next(
+        (
+            creneau
+            for configuration_id, creneau in CRENEAUX_COMPLETION
+            if configuration_id == identifiant
+        ),
+        None,
+    )
+    if acquisition_id is None:
+        return _refus_completion(
+            f"configuration '{identifiant}' hors de la portée de la "
+            "complétion V1-R4 : seuls les cinq créneaux -001 du verrou de "
+            "complétion sont réservés"
+        )
+    return _refus_completion(
+        "AUTORITE_ABSENTE : aucune autorité d'acquisition de complétion "
+        f"n'est accordée dans la tranche V1-R4 pour le créneau "
+        f"'{acquisition_id}' ; arrêt avant toute résolution d'exécutable : "
+        "aucun exécutable résolu, aucun processus fournisseur créé, aucun "
+        "espace de travail, aucun journal, aucun reçu, aucun appel candidat"
+    )
+
+
 # V1-XS-10 : dossiers de revue aveugle. Sélection des seules sorties au
 # verdict automatique PASS, dossiers opaques embarquant la rubrique HR-001
 # byte-identique, engagement d'ordre écrit avant tout dossier sans publier
@@ -13882,9 +14452,11 @@ _USAGE = (
     "| acquerir --local --configuration <id> "
     "| acquerir --officiel --configuration <id> "
     "| acquerir --recuperation --configuration <id> "
+    "| acquerir --completion --configuration <id> "
     "| preflight --configuration <id> "
     "| qualifier | verrouiller | valider | dossiers | geler | etat "
-    "| restituer | verifier-restitution | preparer-recuperation"
+    "| restituer | verifier-restitution | preparer-recuperation "
+    "| preparer-completion"
 )
 
 
@@ -13931,6 +14503,8 @@ def principal(
             return 1
     if arguments == ["preparer-recuperation"]:
         return preparer_recuperation(racine)
+    if arguments == ["preparer-completion"]:
+        return preparer_completion(racine)
     if arguments[:1] == ["enregistrer"]:
         options = _analyser_options(arguments[1:], ("--registre", "--fichier"))
         if options is None or "--fichier" not in options:
@@ -13960,6 +14534,9 @@ def principal(
             # racine_privee n'existe que pour les tests Python : la CLI de
             # production conserve la racine privée obligatoire exacte
             return acquerir_recuperation(racine, arguments[3], racine_privee)
+        if arguments[1] == "--completion":
+            # Garde pure V1-R4 : AUTORITE_ABSENTE avant toute résolution
+            return acquerir_completion(arguments[3])
         print(_USAGE)
         return 2
     if arguments[:1] == ["preflight"]:
