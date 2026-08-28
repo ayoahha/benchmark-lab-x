@@ -155,6 +155,21 @@ ETAPES_FUTURES = (
     ),
 )
 
+# Retours propriétaires V1-XS-14 : statuts du parcours dérivés des preuves
+# versionnées présentes ; a-venir reste la valeur sans preuve
+LIBELLES_PARCOURS = {
+    "realise": "RÉALISÉ",
+    "partiel": "PARTIEL",
+    "bloque": "BLOQUÉ",
+}
+CHEMIN_REGISTRE_VERITE = (
+    "tasks/dev/pre-cadrage-entretien-client/registre-verite.md"
+)
+SECTION_VERROU_COMPLETION = "verrou de complétion du panel versionné"
+SECTION_REGISTRE_VERITE = (
+    "registre de vérité du paquet, portes G-001 à G-005"
+)
+
 
 class ErreurRestitution(Exception):
     """Entrée absente, invalide ou hors du périmètre XS-01."""
@@ -13695,6 +13710,7 @@ def _sources_verdicts(artefacts_verdicts: dict) -> list[tuple[str, dict, str]]:
 
 def _section_verdicts_humains(
     artefacts_verdicts: dict,
+    sha_rules: str,
 ) -> str:
     """Section de restitution du gel des verdicts humains : décision
     D-V1-06 en provenance, reçus gelés, chronologie et états officiels
@@ -13713,7 +13729,29 @@ def _section_verdicts_humains(
             "décision V0 héritée. Preuve : <code>"
             f"{_neutraliser_schema(_echapper(decision['url']))}</code>.</p>"
             + _span_source(relatif_gel, sha_gel, SECTION_GEL_VERDICTS),
-        )
+        ),
+        _article(
+            "deduction",
+            "<p>Pourquoi le juge LLM fantôme reste-t-il "
+            f"<code>{_echapper(gel['juge_fantome'])}</code>, et pourquoi "
+            "n'est-ce pas un blocage ? Déduction raisonnée : la règle "
+            "U-015 n'autorise un juge LLM qu'après le gel du verdict "
+            "humain, avec un avis séparé et sans effet officiel ; le gel "
+            "versionné porte <code>juge_fantome</code> <code>"
+            f"{_echapper(gel['juge_fantome'])}</code>, décision héritée "
+            "de la V0. Un juge synthétique n'aurait donc jamais d'effet "
+            "officiel et ne se substitue pas à la revue humaine aveugle : "
+            "sa désactivation ne retire aucun effet officiel, ce n'est "
+            "pas un blocage et rien n'est à lever ici.</p>"
+            + _span_source(relatif_gel, sha_gel, SECTION_GEL_VERDICTS)
+            + _span_source("docs/RULES.md", sha_rules, "U-015"),
+            ' data-explication-verdicts="juge-fantome"'
+            ' data-premisses="le gel versionné porte juge_fantome '
+            f"{_echapper(gel['juge_fantome'])}, décision héritée de la"
+            " V0 ; la règle U-015 n'autorise un juge LLM qu'après gel du"
+            " verdict humain, avec un avis séparé et sans effet"
+            ' officiel"',
+        ),
     ]
     if "lot_vide" in gel:
         lot_vide = gel["lot_vide"]
@@ -13731,6 +13769,27 @@ def _section_verdicts_humains(
                 + _span_source(relatif_gel, sha_gel, SECTION_GEL_VERDICTS),
             )
         )
+        if lot_vide["cause"] == "aucune_sortie_pass":
+            articles.append(
+                _article(
+                    "fait",
+                    "<p>Pourquoi le relecteur humain n'a-t-il pas été "
+                    "sollicité ? La décision <code>"
+                    f"{_echapper(decision['id'])}</code> ne l'autorise que "
+                    "si un dossier éligible existe. Le comptage gelé "
+                    "ci-dessus ne contient aucun <code>PASS</code> "
+                    "automatique : zéro dossier éligible, zéro verdict "
+                    "requis. Action immédiate du relecteur pour ce lot : "
+                    "aucune. Une future revue humaine exige d'abord une "
+                    "sortie automatique <code>PASS</code> dans un lot "
+                    "autorisé ; la restitution ne peut pas la "
+                    "fabriquer.</p>"
+                    + _span_source(
+                        relatif_gel, sha_gel, SECTION_GEL_VERDICTS
+                    ),
+                    ' data-explication-verdicts="relecteur-non-sollicite"',
+                )
+            )
     else:
         for relatif_recu, recu, sha_recu in artefacts_verdicts["recus"]:
             articles.append(
@@ -14978,6 +15037,769 @@ def _section_restitution_complete(
     )
 
 
+# ---------------------------------------------------------------------------
+# Retours propriétaires V1-XS-14 (Issue #144) : explications de restitution.
+# Chaque article répond à « qu'est-ce que cela veut dire, pourquoi, qu'est-ce
+# qui bloque, que faut-il faire » depuis les seuls artefacts déjà chargés ;
+# aucune preuve n'est modifiée et aucune valeur n'est inventée
+
+
+def _charger_verrou_completion_restitution(
+    racine: Path,
+) -> tuple[str, dict, str] | None:
+    """Verrou de complétion pour le rendu : (chemin relatif, données,
+    SHA-256 du fichier), ou None lorsque l'artefact n'existe pas."""
+    chemin = racine / CHEMIN_VERROU_COMPLETION
+    if not os.path.lexists(chemin):
+        return None
+    try:
+        donnees = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurRestitution(
+            f"verrou de complétion illisible : {erreur}"
+        ) from erreur
+    if (
+        not isinstance(donnees, dict)
+        or donnees.get("schema_version") != SCHEMA_VERROU_COMPLETION
+    ):
+        raise ErreurRestitution(
+            "verrou de complétion de schéma inattendu : "
+            f"{CHEMIN_VERROU_COMPLETION.as_posix()}"
+        )
+    return (
+        CHEMIN_VERROU_COMPLETION.as_posix(),
+        donnees,
+        _sha256_fichier(chemin),
+    )
+
+
+def _configurations_completion(completion: dict) -> set[str]:
+    return {
+        entree["configuration_id"] for entree in completion["configurations"]
+    }
+
+
+def _completion_citee(
+    completion: tuple[str, dict, str] | None,
+    preflights: list[tuple[str, dict, str]],
+    verrou_charge: tuple[str, dict, str] | None,
+) -> bool:
+    """Vrai si et seulement si un span citant le verrou de complétion est
+    réellement rendu dans la page. Deux voies exactes : l'encadré des
+    blocages, rendu dès que le verrou de campagne existe et qui cite
+    toujours le verrou de complétion présent ; ou l'explication d'un
+    préflight HOLD MISSING_OBSERVATION dont la configuration figure au
+    verrou de complétion. Sans citation rendue, l'empreinte n'entre pas
+    dans la provenance."""
+    if completion is None:
+        return False
+    if verrou_charge is not None:
+        return True
+    identifiants = _configurations_completion(completion[1])
+    return any(
+        recu["verdict"] == "HOLD"
+        and recu["cause"] == "MISSING_OBSERVATION"
+        and recu["configuration_id"] in identifiants
+        for _, recu, _ in preflights
+    )
+
+
+def _article_explication_preflight(
+    relatif: str,
+    sha_fichier: str,
+    recu: dict,
+    completion: tuple[str, dict, str] | None,
+    empreintes: dict[str, str],
+) -> str:
+    """Explication d'un reçu de préflight : READY à identité servie
+    INCONNU, ou HOLD MISSING_OBSERVATION. Vide pour tout autre reçu."""
+    identifiant = recu["configuration_id"]
+    span_preflight = _span_source(relatif, sha_fichier, SECTION_PREFLIGHT)
+    span_rules = _span_source(
+        "docs/RULES.md", empreintes["docs/RULES.md"], "U-018"
+    )
+    if (
+        recu["verdict"] == "READY"
+        and recu.get("identite_reellement_servie") == INCONNU
+    ):
+        contenu = (
+            f"<p><strong>{_echapper(identifiant)}</strong> — que veut dire "
+            "<code>identite_reellement_servie</code> <code>INCONNU</code> "
+            "avec un verdict <code>READY</code> ? Le préflight est non "
+            "génératif : ses sondes observent la route et le plan (client, "
+            "authentification, catalogue, quota) sans envoyer une seule "
+            "génération. Une route et un plan observables ne prouvent "
+            "jamais quelle identité de modèle répondrait réellement à un "
+            "appel.</p>"
+            '<p class="blocage"><strong>Blocage exact : aucune observation '
+            "générative attribuable ne prouve l'identité servie. Pour "
+            "lever cette inconnue, il faudrait une autorité propriétaire "
+            "d'acquisition explicite et bornée, puis une génération dont "
+            "la trace attribuable prouve l'identité servie, ingérée comme "
+            "preuve.</strong></p>" + span_preflight + span_rules
+        )
+        return _article(
+            "fait",
+            contenu,
+            f' data-explication-preflight="{identifiant}"',
+        )
+    if (
+        recu["verdict"] == "HOLD"
+        and recu["cause"] == "MISSING_OBSERVATION"
+    ):
+        fragment_completion = ""
+        span_completion = ""
+        if completion is not None and identifiant in (
+            _configurations_completion(completion[1])
+        ):
+            donnees_completion = completion[1]
+            # Les significations viennent des champs aptitude_statique du
+            # verrou lui-même, jamais de littéraux dupliqués dans le code
+            aptitude = donnees_completion["aptitude_statique"]
+            entree_completion = next(
+                entree
+                for entree in donnees_completion["configurations"]
+                if entree["configuration_id"] == identifiant
+            )
+            jamais = " · ".join(
+                f"<code>{_echapper(element)}</code>"
+                for element in aptitude["ne_prouve_jamais"]
+            )
+            fragment_completion = (
+                "<p>Le verrou de complétion versionné porte pour cette "
+                "configuration le verdict <code>"
+                f"{_echapper(entree_completion['verdict'])}</code> — "
+                f"{_echapper(aptitude['signifie'])}. Cette aptitude "
+                f"statique ne prouve jamais : {jamais} ; son autorité "
+                "d'exécution reste <code>"
+                f"{_echapper(donnees_completion['autorite_execution'])}"
+                "</code> et ses créneaux exécutés <code>"
+                f"{_echapper(donnees_completion['creneaux_executes'])}"
+                "</code>.</p>"
+            )
+            span_completion = _span_source(
+                completion[0], completion[2], SECTION_VERROU_COMPLETION
+            )
+        contenu = (
+            f"<p><strong>{_echapper(identifiant)}</strong> — que veut dire "
+            "<code>MISSING_OBSERVATION</code> ? La CLI n'est pas absente : "
+            "le reçu ci-dessus prouve des observations locales (client, "
+            "version, authentification ou catalogue selon les sondes). "
+            "Mais une installation, une authentification locale ou une "
+            "aide de syntaxe ne prouve aucun des faits distants exigés par "
+            "<code>READY</code> : les clés fermées non observées, "
+            "énumérées dans le champ fait du reçu ci-dessus, restent "
+            "<code>INCONNU</code> sans commande générative, que le "
+            "préflight s'interdit.</p>"
+            + fragment_completion
+            + '<p class="blocage"><strong>Blocage restant : les faits '
+            "distants exigés par READY ne sont pas observés, et tout appel "
+            "génératif qui les observerait exigerait une autorité "
+            "propriétaire d'acquisition explicite et bornée.</strong></p>"
+            + span_preflight
+            + span_completion
+            + span_rules
+        )
+        return _article(
+            "fait",
+            contenu,
+            f' data-explication-preflight="{identifiant}"',
+        )
+    return ""
+
+
+def _articles_autorite_completion(
+    verrou_charge: tuple[str, dict, str],
+    autorisation: tuple[str, dict, str],
+    completion: tuple[str, dict, str] | None,
+    recus_officiels: list[tuple[str, dict, str]],
+) -> list[str]:
+    """Articles de la section d'autorité : NOT_GRANTED historique
+    distingué de D-V1-04, puis état des configurations sans autorité."""
+    span_verrou = _span_source(
+        verrou_charge[0], verrou_charge[2], SECTION_VERROU
+    )
+    span_autorisation = _span_source(
+        autorisation[0], autorisation[2], SECTION_AUTORISATION_ACQUISITION
+    )
+    creneaux_autorises = " et ".join(
+        f"<code>{_echapper(creneau['configuration_id'])}</code>"
+        for creneau in autorisation[1]["portee"]["acquisitions"]
+    )
+    fragment_execution = (
+        ", et des reçus immuables de ces exécutions sont restitués plus bas"
+        if recus_officiels
+        else ""
+    )
+    articles = [
+        _article(
+            "fait",
+            "<p>Que veut dire <code>NOT_GRANTED</code> dans le verrou ? "
+            "C'est l'état historique du verrou à sa matérialisation : un "
+            "verrou ne s'auto-confère aucune autorité d'exécution. Ce "
+            "jeton historique ne porte aucune interdiction actuelle sur "
+            "les deux créneaux ensuite couverts par l'autorité séparée "
+            f"D-V1-04 ({creneaux_autorises}), autorisés sans reprise ni "
+            f"fallback{fragment_execution}.</p>"
+            + span_verrou
+            + span_autorisation,
+            ' data-explication-autorite="not-granted-historique"',
+        )
+    ]
+    if completion is not None:
+        donnees_completion = completion[1]
+        nombre_attente = len(donnees_completion["configurations"])
+        span_completion = _span_source(
+            completion[0], completion[2], SECTION_VERROU_COMPLETION
+        )
+        # Portée réellement dérivée : le recouvrement entre les créneaux
+        # de D-V1-04 et les configurations du verrou de complétion est
+        # calculé, jamais présumé ; aucune affirmation sur des artefacts
+        # d'autorité non chargés ici
+        identifiants_completion = _configurations_completion(
+            donnees_completion
+        )
+        identifiants_autorises = {
+            creneau["configuration_id"]
+            for creneau in autorisation[1]["portee"]["acquisitions"]
+        }
+        recouvrement = sorted(
+            identifiants_completion & identifiants_autorises
+        )
+        if recouvrement:
+            phrase_portee = (
+                " La portée de l'autorité D-V1-04 restituée ci-dessus "
+                "nomme "
+                + ", ".join(
+                    f"<code>{_echapper(identifiant)}</code>"
+                    for identifiant in recouvrement
+                )
+                + " parmi ces configurations."
+            )
+        else:
+            phrase_portee = (
+                " La portée de l'autorité D-V1-04 restituée ci-dessus — "
+                "seule autorité d'acquisition chargée par cette section — "
+                f"nomme exactement ses {len(identifiants_autorises)} "
+                "créneaux : elle ne nomme aucune de ces configurations."
+            )
+        articles.append(
+            _article(
+                "fait",
+                f"<p>Pour les {nombre_attente} configuration(s) du verrou "
+                "de complétion : l'autorité d'exécution y reste <code>"
+                f"{_echapper(donnees_completion['autorite_execution'])}"
+                "</code> et zéro créneau exécuté (<code>creneaux_executes"
+                f"</code> <code>"
+                f"{_echapper(donnees_completion['creneaux_executes'])}"
+                f"</code>).{phrase_portee}</p>"
+                + span_completion
+                + span_autorisation,
+                ' data-explication-autorite="attente-completion"',
+            )
+        )
+        if not recouvrement:
+            articles.append(
+                _article(
+                    "deduction",
+                    "<p>Déduction raisonnée : avant tout appel "
+                    "fournisseur pour ces configurations en attente, une "
+                    "nouvelle autorité propriétaire bornée — créneaux "
+                    "nommés, plafond d'appels, sans reprise ni fallback, "
+                    "sur le modèle de D-V1-04 — serait nécessaire. La "
+                    "restitution ne crée aucune autorité.</p>"
+                    + span_completion
+                    + span_autorisation,
+                    ' data-explication-autorite="autorite-necessaire"'
+                    ' data-premisses="le verrou de complétion conserve'
+                    " autorite_execution NOT_GRANTED et creneaux_executes"
+                    " 0 ; la portée de D-V1-04 ne nomme aucune de ces"
+                    " configurations ; toute acquisition exige une"
+                    ' autorité propriétaire explicite et bornée"',
+                )
+            )
+    return articles
+
+
+def _explication_validation_applicable(registre: dict) -> bool:
+    """Vrai si chaque échec du registre est exactement le motif expliqué :
+    G-005 franchie, G-001 en cause, origine CANDIDATE_ERROR."""
+    entrees_fail = [
+        entree
+        for entree in registre["entrees"]
+        if entree["verdict"] is not None
+        and entree["verdict"]["statut"] == "FAIL"
+    ]
+    if not entrees_fail:
+        return False
+    return all(
+        entree["verdict"]["porte_en_cause"] == "G-001"
+        and entree["verdict"]["origine"] == "CANDIDATE_ERROR"
+        and dict(
+            (nom, franchie) for nom, franchie in entree["verdict"]["portes"]
+        ).get("G-005") is True
+        for entree in entrees_fail
+    )
+
+
+def _charger_registre_verite_restitution(
+    racine: Path, registre_validation: tuple[str, dict, str] | None
+) -> str | None:
+    """SHA-256 du registre de vérité, uniquement lorsque l'explication des
+    échecs G-001 est applicable et que le fichier existe."""
+    if registre_validation is None:
+        return None
+    if not _explication_validation_applicable(registre_validation[1]):
+        return None
+    chemin = racine / CHEMIN_REGISTRE_VERITE
+    if not os.path.lexists(chemin):
+        return None
+    return _sha256_fichier(chemin)
+
+
+def _article_explication_validation(
+    relatif_registre: str,
+    sha_registre: str,
+    registre: dict,
+    sha_verite: str,
+) -> str:
+    """Explication des échecs automatiques : portes franchies et porte en
+    cause, sans rien déduire au-delà du registre et des reçus."""
+    nombre_fail = registre["couverture"]["verdicts"]["FAIL"]
+    contenu = (
+        f"<p>Que veulent dire ces {nombre_fail} <code>FAIL</code> "
+        "automatiques ? Chaque sortie candidate observée franchit d'abord "
+        "la porte <code>G-005</code> — intégrité et provenance mécaniques "
+        "du paquet : le dispositif de contrôle était sain — puis échoue à "
+        "la porte <code>G-001</code> avec l'origine "
+        "<code>CANDIDATE_ERROR</code> : l'échec est attribuable à la "
+        "sortie candidate elle-même, jamais au harnais.</p>"
+        "<p><code>G-001</code> contrôle l'enveloppe de la sortie : "
+        "Markdown lisible, schéma des champs requis, valeurs des champs à "
+        "vocabulaire fermé et sections requises présentes dans l'ordre. "
+        "Le registre versionné et les reçus ne consignent rien de plus "
+        "sur ces échecs ; aucune autre déduction n'en est tirée ici.</p>"
+        + _span_source(
+            relatif_registre, sha_registre, SECTION_REGISTRE_VALIDATION
+        )
+        + _span_source(
+            CHEMIN_REGISTRE_VERITE, sha_verite, SECTION_REGISTRE_VERITE
+        )
+    )
+    return _article(
+        "fait", contenu, ' data-explication-validation="fail-g-001"'
+    )
+
+
+def _identite_complete(donnees: dict) -> bool:
+    """Vrai si aucune valeur INCONNU ne subsiste dans l'identité déclarée
+    d'une configuration : le critère « identités complètes » du parcours
+    n'est jamais tenu pour acquis tant qu'un champ reste INCONNU."""
+
+    def _contient_inconnu(valeur: object) -> bool:
+        if isinstance(valeur, dict):
+            return any(_contient_inconnu(v) for v in valeur.values())
+        if isinstance(valeur, list):
+            return any(_contient_inconnu(v) for v in valeur)
+        return valeur == INCONNU
+
+    return not _contient_inconnu(donnees)
+
+
+def _articles_parcours(
+    empreintes: dict[str, str],
+    etat_relatif: str,
+    configurations: list[tuple[str, dict]],
+    qualification: tuple[str, dict, str] | None,
+    verrou_charge: tuple[str, dict, str] | None,
+    recus_officiels: list[tuple[str, dict, str]],
+    registre_validation: tuple[str, dict, str] | None,
+    artefacts_verdicts: dict | None,
+    couverture_etat: dict | None,
+) -> list[str]:
+    """Les six capacités du parcours V1, chacune au statut dérivé des
+    preuves versionnées présentes : realise, partiel, bloque, ou l'article
+    planifié à venir historique lorsque aucune preuve n'existe."""
+    span_verrou = (
+        _span_source(verrou_charge[0], verrou_charge[2], SECTION_VERROU)
+        if verrou_charge is not None
+        else ""
+    )
+    articles: list[str] = []
+    for rang, (nom, texte, chemin, section) in enumerate(
+        ETAPES_FUTURES, start=1
+    ):
+        span_normatif = _span_source(chemin, empreintes[chemin], section)
+        statut: str | None = None
+        detail = ""
+        spans_preuves = ""
+        if nom == "panel-abonnement" and configurations:
+            incompletes = [
+                donnees["configuration_id"]
+                for _, donnees in configurations
+                if not _identite_complete(donnees)
+            ]
+            fragment_plans = ""
+            if verrou_charge is not None:
+                fragment_plans = (
+                    f" et {len(verrou_charge[1]['panel'])} entrée(s) de "
+                    "plan versionnée(s) sous l'autorité <code>"
+                    + _echapper(
+                        verrou_charge[1]["autorites"]["contrat_plans"]
+                    )
+                    + "</code>, chacune avec sa date de consultation et "
+                    "sa classe MSW propre"
+                )
+            if incompletes:
+                # Identités requises incomplètes : jamais RÉALISÉ tant
+                # qu'un champ INCONNU subsiste dans une configuration
+                statut = "partiel"
+                detail = (
+                    "matérialisé : le registre officiel versionné "
+                    f"déclare {len(configurations)} configuration(s) "
+                    "abonnement (produit, plan, quotas, resets, "
+                    f"interface, harnais, intervention humaine)"
+                    f"{fragment_plans}. Inconnu : les identités "
+                    "requises restent incomplètes, "
+                    f"{len(incompletes)} configuration(s) portent "
+                    "encore des champs <code>INCONNU</code> hérités de "
+                    "l'instantané déclaratif, jamais réécrits"
+                )
+            else:
+                statut = "realise"
+                detail = (
+                    "le registre officiel versionné déclare "
+                    f"{len(configurations)} configuration(s) abonnement "
+                    "aux identités complètes, sans champ "
+                    f"<code>INCONNU</code>{fragment_plans}"
+                )
+            spans_preuves = (
+                "".join(
+                    _span_source(
+                        chemin_configuration,
+                        empreintes[chemin_configuration],
+                        SECTION_REGISTRE,
+                    )
+                    for chemin_configuration, _ in configurations
+                )
+                + span_verrou
+            )
+        elif (
+            nom == "qualification-independante"
+            and qualification is not None
+            and qualification[1]["verdict"] == "PASS"
+        ):
+            statut = "realise"
+            detail = (
+                "le harnais V1 est qualifié par le rejeu des témoins "
+                "approuvés du paquet (verdict <code>PASS</code>), "
+                "indépendamment des profils API et auto-hébergé"
+            )
+            spans_preuves = _span_source(
+                qualification[0], qualification[2], SECTION_QUALIFICATION
+            )
+        elif nom == "approbation-empreintes" and verrou_charge is not None:
+            statut = "realise"
+            detail = (
+                "réalisée pour les objets effectivement verrouillés : "
+                "panel, plans validés et engagements sont figés par "
+                "empreintes sous les autorités citées par le verrou"
+            )
+            spans_preuves = span_verrou
+        elif nom == "recus-immuables" and recus_officiels:
+            # Dénominateur = les acquisitions elles-mêmes, jamais les
+            # configurations du panel : le critère U-010 est « un reçu
+            # immuable pour chaque acquisition »
+            couvertes = sorted(
+                {
+                    enveloppe["payload"]["configuration"]["identifiant"]
+                    for _, enveloppe, _ in recus_officiels
+                }
+            )
+            total = len(configurations)
+            nombre_acquisitions = len(recus_officiels)
+            statut = "realise"
+            liste_couvertes = ", ".join(
+                f"<code>{_echapper(identifiant)}</code>"
+                for identifiant in couvertes
+            )
+            detail = (
+                "chaque acquisition officielle exécutée possède son reçu "
+                "immuable, adressé par contenu et chaîné : "
+                f"{nombre_acquisitions} acquisition(s) officielle(s), "
+                f"{nombre_acquisitions} reçu(s). Cette couverture ne "
+                f"concerne que {len(couvertes)} configuration(s) "
+                f"({liste_couvertes}) sur {total} déclarées et ne "
+                "complète pas le panel"
+            )
+            spans_preuves = "".join(
+                _span_source(relatif, sha, SECTION_RECU_OFFICIEL)
+                for relatif, _, sha in recus_officiels
+            )
+        elif (
+            nom == "acceptabilite-officielle"
+            and registre_validation is not None
+        ):
+            comptes = registre_validation[1]["couverture"]["verdicts"]
+            span_registre = _span_source(
+                registre_validation[0],
+                registre_validation[2],
+                SECTION_REGISTRE_VALIDATION,
+            )
+            span_gel = (
+                _span_source(
+                    artefacts_verdicts["gel"][0],
+                    artefacts_verdicts["gel"][2],
+                    SECTION_GEL_VERDICTS,
+                )
+                if artefacts_verdicts is not None
+                else ""
+            )
+            if comptes["PASS"] == 0:
+                statut = "bloque"
+                detail = (
+                    "bloquée sur le lot courant : zéro verdict automatique "
+                    "<code>PASS</code>, donc aucun dossier de revue "
+                    "humaine et aucune acceptabilité officielle possible "
+                    "pour ce lot"
+                )
+            else:
+                etats = (
+                    artefacts_verdicts["revelation"][1]["etats_officiels"]
+                    if artefacts_verdicts is not None
+                    and artefacts_verdicts["revelation"] is not None
+                    else []
+                )
+                if any(
+                    entree["etat_officiel"] == "OFFICIALLY_ACCEPTABLE"
+                    for entree in etats
+                ):
+                    statut = "realise"
+                    detail = (
+                        "au moins un état officiel "
+                        "<code>OFFICIALLY_ACCEPTABLE</code> est établi par "
+                        "la conjonction PASS automatique plus ACCEPTABLE "
+                        "humain"
+                    )
+                else:
+                    statut = "partiel"
+                    detail = (
+                        "des verdicts automatiques <code>PASS</code> "
+                        "existent ; l'acceptabilité officielle exige "
+                        "encore la revue humaine aveugle"
+                    )
+            spans_preuves = span_registre + span_gel
+        elif (
+            nom == "restitution-ou-abstention"
+            and couverture_etat is not None
+        ):
+            statut = "realise"
+            detail = (
+                "réalisée pour l'état courant : les mesures versionnées "
+                "sont restituées avec leurs dénominateurs et leurs "
+                "manquants, et l'abstention correspondante est prononcée, "
+                "<code>ABSTENTION</code> et limites préservées"
+            )
+            spans_preuves = _span_source(
+                etat_relatif, empreintes[etat_relatif], SECTION_COUVERTURE_ETAT
+            )
+        if statut is None:
+            articles.append(
+                _article(
+                    "planifie",
+                    f"<p>Étape {rang} — {texte} <strong>à venir</strong></p>"
+                    + span_normatif,
+                    f' data-marqueur="a-venir" data-etape="{nom}"',
+                )
+            )
+        else:
+            articles.append(
+                _article(
+                    "fait",
+                    f"<p>Étape {rang} — {texte} <strong>"
+                    f"{LIBELLES_PARCOURS[statut]}</strong> — {detail}.</p>"
+                    + span_normatif
+                    + spans_preuves,
+                    f' data-etape="{nom}"'
+                    f' data-parcours-statut="{statut}"',
+                )
+            )
+    return articles
+
+
+def _section_blocages(
+    empreintes: dict[str, str],
+    verrou_charge: tuple[str, dict, str] | None,
+    autorisation: tuple[str, dict, str] | None,
+    completion: tuple[str, dict, str] | None,
+    recus_officiels: list[tuple[str, dict, str]],
+    registre_validation: tuple[str, dict, str] | None,
+    artefacts_verdicts: dict | None,
+) -> str:
+    """Encadré prioritaire : faits historiques dépassés, inconnues encore
+    réelles, autorité ou action exacte nécessaire. Rendu seulement quand
+    le verrou de campagne existe ; chaque volet cite ses sources."""
+    if verrou_charge is None:
+        return ""
+    verrou = verrou_charge[1]
+    span_verrou = _span_source(
+        verrou_charge[0], verrou_charge[2], SECTION_VERROU
+    )
+    relatif_sources_plans = verrou["sources_plans"]["chemin"]
+    span_sources_plans = _span_source(
+        relatif_sources_plans,
+        verrou["sources_plans"]["sha256"],
+        SECTION_SOURCES_PLANS,
+    )
+    dates_attestation = sorted(
+        {entree["attestation"]["date"] for entree in verrou["panel"]}
+    )
+    date_attestation = ", ".join(
+        f"<code>{_echapper(date)}</code>" for date in dates_attestation
+    )
+    fragment_autorisation = ""
+    span_autorisation = ""
+    if autorisation is not None:
+        creneaux_autorises = " et ".join(
+            f"<code>{_echapper(creneau['configuration_id'])}</code>"
+            for creneau in autorisation[1]["portee"]["acquisitions"]
+        )
+        fragment_autorisation = (
+            " ; l'autorité séparée D-V1-04 a ensuite autorisé exactement "
+            f"deux créneaux ({creneaux_autorises}), sans reprise ni "
+            "fallback"
+            + (
+                ", et leurs reçus immuables existent"
+                if recus_officiels
+                else ""
+            )
+        )
+        span_autorisation = _span_source(
+            autorisation[0],
+            autorisation[2],
+            SECTION_AUTORISATION_ACQUISITION,
+        )
+    article_historique = _article(
+        "fait",
+        "<p><strong>Faits historiques déjà résolus ou dépassés.</strong> "
+        "Les nombreux <code>INCONNU</code> du panel officiel sont "
+        "l'instantané déclaratif historique D-V1-01 du "
+        f"{date_attestation}, conservé tel quel ; des sources de plans "
+        "versionnées sous l'autorité <code>"
+        + _echapper(verrou["autorites"]["contrat_plans"])
+        + "</code> existent depuis, verrouillées avec leurs provenances : "
+        "chaque entrée porte sa date de consultation et sa classe MSW "
+        "propre, la date de publication pouvant rester "
+        "<code>NON_DEFINI</code>. Le <code>NOT_GRANTED</code> du verrou "
+        "est l'état historique du verrou, qui ne s'auto-confère aucune "
+        "autorité"
+        f"{fragment_autorisation}.</p>"
+        + span_verrou
+        + span_sources_plans
+        + span_autorisation,
+        ' data-blocage="historique"',
+    )
+    nombre_attente = len(
+        [
+            entree
+            for entree in verrou["panel"]
+            if entree["cause"] == "MISSING_OBSERVATION"
+        ]
+    )
+    fragment_attente = ""
+    if nombre_attente:
+        fragment_attente = (
+            f" {nombre_attente} configuration(s) restent en attente "
+            "d'observation (<code>MISSING_OBSERVATION</code>) : leur "
+            "disponibilité distante, leur quota et leur identité servie "
+            "restent <code>INCONNU</code>."
+        )
+    fragment_pass = ""
+    span_registre = ""
+    if registre_validation is not None:
+        comptes = registre_validation[1]["couverture"]["verdicts"]
+        if comptes["PASS"] == 0:
+            fragment_pass = (
+                " Aucune sortie candidate <code>PASS</code> : "
+                "l'acceptabilité officielle reste absente sur le lot "
+                "courant."
+            )
+            span_registre = _span_source(
+                registre_validation[0],
+                registre_validation[2],
+                SECTION_REGISTRE_VALIDATION,
+            )
+    span_completion = (
+        _span_source(completion[0], completion[2], SECTION_VERROU_COMPLETION)
+        if completion is not None
+        else ""
+    )
+    article_inconnues = _article(
+        "fait",
+        "<p><strong>Inconnues encore réelles.</strong> L'identité "
+        "réellement servie reste <code>INCONNU</code> pour chaque "
+        "configuration du panel, y compris les routes <code>READY</code>"
+        + (" et les acquisitions exécutées" if recus_officiels else "")
+        + " : aucune observation générative attribuable ne l'a prouvée."
+        + fragment_attente
+        + fragment_pass
+        + "</p>"
+        + span_verrou
+        + span_completion
+        + span_registre,
+        ' data-blocage="inconnues"',
+    )
+    article_actions = ""
+    if (
+        autorisation is not None
+        and completion is not None
+        and registre_validation is not None
+        and registre_validation[1]["couverture"]["verdicts"]["PASS"] == 0
+        and artefacts_verdicts is not None
+    ):
+        span_gel = _span_source(
+            artefacts_verdicts["gel"][0],
+            artefacts_verdicts["gel"][2],
+            SECTION_GEL_VERDICTS,
+        )
+        article_actions = _article(
+            "deduction",
+            "<p><strong>Autorité ou action exacte nécessaire.</strong> "
+            "1. Pour les configurations en attente : une nouvelle "
+            "autorité propriétaire bornée — créneaux nommés, plafond "
+            "d'appels, sans reprise ni fallback, sur le modèle de "
+            "D-V1-04 — avant tout appel fournisseur. 2. Pour lever "
+            "l'identité réellement servie : une observation générative "
+            "autorisée et attribuable, ingérée comme preuve. 3. Pour "
+            "l'acceptabilité officielle : une sortie automatique "
+            "<code>PASS</code> dans un lot autorisé, puis la revue "
+            "humaine aveugle. 4. Pour le relecteur humain, sur le lot "
+            "courant : aucune action.</p>"
+            + span_completion
+            + span_registre
+            + span_gel
+            + span_autorisation,
+            ' data-blocage="actions"'
+            ' data-premisses="le verrou de complétion conserve'
+            " autorite_execution NOT_GRANTED et creneaux_executes 0 ;"
+            " le registre de validation ne contient aucun PASS ; le gel"
+            " D-V1-06 constate un lot vide sans verdict requis ; la"
+            ' portée de D-V1-04 nomme exactement deux créneaux"',
+        )
+    return (
+        '<section id="blocages-reels" class="blocages">'
+        "<h2>Blocages réels à lever</h2>"
+        "<p>Lecture prioritaire : ce qui est déjà résolu ou dépassé, ce "
+        "qui reste réellement inconnu, et l'autorité ou l'action exacte "
+        "qui manque pour avancer. Chaque affirmation cite sa source ; "
+        "rien ici n'améliore une preuve.</p>"
+        + article_historique
+        + article_inconnues
+        + article_actions
+        + "</section>"
+    )
+
+
 def _rendre_page(racine: Path) -> bytes:
     etat = _charger_etat(racine)
     repertoire = _repertoire_recus(racine, etat)
@@ -14995,6 +15817,10 @@ def _rendre_page(racine: Path) -> bytes:
     verrou_charge = _charger_verrou_restitution(racine)
     autorisation = _charger_autorisation_restitution(racine)
     registre_validation = _charger_registre_validation(racine)
+    completion = _charger_verrou_completion_restitution(racine)
+    sha_verite = _charger_registre_verite_restitution(
+        racine, registre_validation
+    )
     recuperation = _charger_verrou_recuperation(racine)
     autorisation_recuperation = _charger_autorisation_recuperation_restitution(
         racine
@@ -15032,6 +15858,12 @@ def _rendre_page(racine: Path) -> bytes:
         empreintes[autorisation[0]] = autorisation[2]
     if registre_validation is not None:
         empreintes[registre_validation[0]] = registre_validation[2]
+    if _completion_citee(completion, preflights, verrou_charge):
+        empreintes[completion[0]] = completion[2]
+    else:
+        completion = None
+    if sha_verite is not None:
+        empreintes[CHEMIN_REGISTRE_VERITE] = sha_verite
     if artefacts_dossiers is not None:
         for relatif, _, sha in artefacts_dossiers:
             empreintes[relatif] = sha
@@ -15117,6 +15949,20 @@ def _rendre_page(racine: Path) -> bytes:
         )
         + "</section>"
     )
+
+    # Retours propriétaires : encadré prioritaire des blocages réels,
+    # rendu seulement quand le verrou de campagne existe
+    encadre_blocages = _section_blocages(
+        empreintes,
+        verrou_charge,
+        autorisation,
+        completion,
+        recus_officiels,
+        registre_validation,
+        artefacts_verdicts,
+    )
+    if encadre_blocages:
+        sections.append(encadre_blocages)
 
     # Fidélité MSW : avec un reçu local présent, l'absence d'acquisition et de
     # reçu se dit uniquement à portée officielle qualifiée, jamais littéralement
@@ -15242,13 +16088,61 @@ def _rendre_page(racine: Path) -> bytes:
     )
 
     if configurations:
+        article_plans_valides = ""
+        if verrou_charge is not None:
+            # Comptages dérivés du verrou : classes MSW et dates de
+            # publication NON_DEFINI ne sont jamais présumées uniformes
+            panel_verrou = verrou_charge[1]["panel"]
+            nombre_deductions = sum(
+                1
+                for entree in panel_verrou
+                if entree["plan"]["classe_msw"] == CLASSE_PLAN_DEDUCTION
+            )
+            nombre_faits = sum(
+                1
+                for entree in panel_verrou
+                if entree["plan"]["classe_msw"] == CLASSE_PLAN_FAIT
+            )
+            nombre_publications_non_definies = sum(
+                1
+                for entree in panel_verrou
+                if entree["plan"]["date_publication"] == "NON_DEFINI"
+            )
+            contrat_plans = _echapper(
+                verrou_charge[1]["autorites"]["contrat_plans"]
+            )
+            article_plans_valides = _article(
+                "fait",
+                "<p>Distinction des deux états : les <code>INCONNU</code> "
+                "ci-dessus sont l'instantané historique D-V1-01 ; "
+                "séparément, <code>sources-plans-v1.toml</code> porte "
+                f"{len(panel_verrou)} entrée(s) de plan versionnée(s) "
+                f"sous l'autorité <code>{contrat_plans}</code>, figées "
+                "par le verrou de campagne et restituées entrée par "
+                "entrée dans la section "
+                '<a href="#verrou-campagne">Verrou de campagne '
+                "abonnement</a>. Chaque entrée porte sa date de "
+                "consultation et sa classe MSW propre : "
+                f"{nombre_faits} <code>FAIT_ETABLI</code> et "
+                f"{nombre_deductions} <code>DEDUCTION_RAISONNEE</code> ; "
+                f"{nombre_publications_non_definies} entrée(s) portent "
+                "une date de publication <code>NON_DEFINI</code>. Les "
+                "valeurs historiques ne sont pas remplacées et rien du "
+                "contenu déduit n'est promu en fait.</p>"
+                + src(relatif_sources_plans, SECTION_SOURCES_PLANS)
+                + src(verrou_charge[0], SECTION_VERROU),
+                ' data-plans-valides="resume"',
+            )
         sections.append(
             "<section id=\"panel-officiel\"><h2>Panel officiel déclaré</h2>"
-            "<p>Chaque entrée reprend un fichier du registre officiel versionné. "
-            "Elle est déclarée et non mesurée : tout champ non observé reste "
-            "<code>INCONNU</code>, le modèle demandé est marqué REQUESTED, "
-            "et aucune activité de compte, aucune authentification et aucune "
-            "disponibilité n'en est déduite. "
+            "<p>Chaque entrée reprend un fichier du registre officiel "
+            "versionné : c'est l'instantané historique de l'attestation "
+            f"D-V1-01 du {DATE_ATTESTATION_PANEL}, conservé tel quel. "
+            "Chaque entrée est déclarée et non mesurée : tout champ non "
+            "observé à cette date reste littéralement "
+            "<code>INCONNU</code>, jamais réécrit, le modèle demandé est "
+            "marqué REQUESTED, et aucune activité de compte, aucune "
+            "authentification et aucune disponibilité n'en est déduite. "
             + (
                 f"{len(preflights)} reçu(s) de préflight de disponibilité "
                 "existent, restitués plus bas : ils sondent une route sans "
@@ -15277,6 +16171,7 @@ def _rendre_page(racine: Path) -> bytes:
                 _article_panel(chemin, empreintes[chemin], donnees)
                 for chemin, donnees in configurations
             )
+            + article_plans_valides
             + "</section>"
         )
 
@@ -15341,6 +16236,9 @@ def _rendre_page(racine: Path) -> bytes:
             "plan ni l'exposition d'un modèle.</p>"
             + "".join(
                 _article_preflight(relatif, sha, recu)
+                + _article_explication_preflight(
+                    relatif, sha, recu, completion, empreintes
+                )
                 for relatif, recu, sha in preflights
             )
             + "</section>"
@@ -15375,6 +16273,18 @@ def _rendre_page(racine: Path) -> bytes:
             "fallback et sans dépense incrémentale.</p>"
             + _article_autorisation_acquisition(
                 relatif_autorisation, sha_autorisation, donnees_autorisation
+            )
+            + (
+                "".join(
+                    _articles_autorite_completion(
+                        verrou_charge,
+                        autorisation,
+                        completion,
+                        recus_officiels,
+                    )
+                )
+                if verrou_charge is not None
+                else ""
             )
             + "</section>"
         )
@@ -15420,6 +16330,13 @@ def _rendre_page(racine: Path) -> bytes:
                 _article_validation(entree, relatif_registre, sha_registre)
                 for entree in registre["entrees"]
             )
+            + (
+                _article_explication_validation(
+                    relatif_registre, sha_registre, registre, sha_verite
+                )
+                if sha_verite is not None
+                else ""
+            )
             + "</section>"
         )
 
@@ -15434,7 +16351,11 @@ def _rendre_page(racine: Path) -> bytes:
         )
 
     if artefacts_verdicts is not None:
-        sections.append(_section_verdicts_humains(artefacts_verdicts))
+        sections.append(
+            _section_verdicts_humains(
+                artefacts_verdicts, empreintes["docs/RULES.md"]
+            )
+        )
 
     if recuperation is not None:
         sections.append(
@@ -15605,9 +16526,9 @@ def _rendre_page(racine: Path) -> bytes:
             "se résolvent que par les preuves produites par le parcours "
             "officiel : chaque acquisition exige un reçu immuable et chaque "
             "restitution exige ses preuves, ou l'abstention correspondante. "
-            "Les collectes appartiennent aux étapes à venir, décrites avec "
-            "leurs sources dans la section "
-            '<a href="#etapes-futures">Six étapes futures</a> de cette '
+            "Les collectes restantes appartiennent aux étapes du parcours, "
+            "décrites avec leurs sources et leur statut dans la section "
+            '<a href="#etapes-futures">Parcours V1</a> de cette '
             "page.</p>" + src(rules, "U-010 et U-018"),
             ' data-commentaire="c_3f78b813dc60"',
         )
@@ -15623,18 +16544,25 @@ def _rendre_page(racine: Path) -> bytes:
     )
 
     lignes_etapes = "".join(
-        _article(
-            "planifie",
-            f"<p>Étape {rang} — {texte} <strong>à venir</strong></p>"
-            + src(chemin, section),
-            f' data-marqueur="a-venir" data-etape="{nom}"',
+        _articles_parcours(
+            empreintes,
+            etat_relatif,
+            configurations,
+            qualification,
+            verrou_charge,
+            recus_officiels,
+            registre_validation,
+            artefacts_verdicts,
+            couverture_etat,
         )
-        for rang, (nom, texte, chemin, section) in enumerate(ETAPES_FUTURES, start=1)
     )
     sections.append(
-        "<section id=\"etapes-futures\"><h2>Six étapes futures</h2>"
-        "<p>Éléments planifiés, tous marqués à venir. Aucun n'est commencé ni "
-        "prouvé.</p>" + lignes_etapes + "</section>"
+        "<section id=\"etapes-futures\"><h2>Parcours V1</h2>"
+        "<p>Les six capacités du parcours V1, chacune avec son statut "
+        "dérivé des preuves versionnées présentes : RÉALISÉ, PARTIEL, "
+        "BLOQUÉ ou à venir. Aucun statut n'est déclaré sans source, et "
+        "aucune capacité n'est annoncée non commencée quand des preuves "
+        "existent.</p>" + lignes_etapes + "</section>"
     )
 
     recus_observes = [
@@ -15836,6 +16764,16 @@ def _rendre_page(racine: Path) -> bytes:
                 if cout_abonnement is not None
                 else ()
             ),
+            *(
+                ((completion[0], SECTION_VERROU_COMPLETION),)
+                if completion is not None
+                else ()
+            ),
+            *(
+                ((CHEMIN_REGISTRE_VERITE, SECTION_REGISTRE_VERITE),)
+                if sha_verite is not None
+                else ()
+            ),
             (etat_relatif, "état V1 versionné"),
         )
     )
@@ -15876,6 +16814,11 @@ def _rendre_page(racine: Path) -> bytes:
         '{content:"planifié — à venir"}\n'
         "span.source{display:block;font-size:0.8rem;color:#555;"
         "overflow-wrap:anywhere}\n"
+        "section.blocages{border:3px solid #8a1a1a;padding:0.4rem 1rem;"
+        "background:#fbf3f3}\n"
+        "section.blocages h2{font-size:1.35rem;border-bottom:none;"
+        "color:#8a1a1a}\n"
+        "p.blocage{font-size:1.1rem;font-weight:bold}\n"
         "code{background:#eee;padding:0 0.2rem}\n"
         "footer{margin-top:2rem;font-size:0.8rem;color:#555}\n"
         "</style>\n"
@@ -15997,6 +16940,16 @@ def verifier_restitution(racine: Path) -> int:
         empreintes[autorisation[0]] = autorisation[2]
     if registre_validation is not None:
         empreintes[registre_validation[0]] = registre_validation[2]
+    completion = _charger_verrou_completion_restitution(racine)
+    if _completion_citee(completion, preflights, verrou_charge):
+        empreintes[completion[0]] = completion[2]
+    else:
+        completion = None
+    sha_verite = _charger_registre_verite_restitution(
+        racine, registre_validation
+    )
+    if sha_verite is not None:
+        empreintes[CHEMIN_REGISTRE_VERITE] = sha_verite
     if artefacts_dossiers is not None:
         for relatif, _, sha in artefacts_dossiers:
             empreintes[relatif] = sha
@@ -16215,7 +17168,9 @@ def verifier_restitution(racine: Path) -> int:
         )
 
     if artefacts_verdicts is not None:
-        attendu_section_verdicts = _section_verdicts_humains(artefacts_verdicts)
+        attendu_section_verdicts = _section_verdicts_humains(
+            artefacts_verdicts, empreintes["docs/RULES.md"]
+        )
         if attendu_section_verdicts not in page:
             echecs.append(
                 "section des verdicts humains gelés infidèle ou absente"
@@ -16676,7 +17631,6 @@ def verifier_restitution(racine: Path) -> int:
     articles = _MOTIF_ARTICLE.findall(page)
     if page.count('<article class="affirmation"') != len(articles):
         echecs.append("article d'affirmation mal formé")
-    etapes: list[str] = []
     for attributs, contenu in articles:
         classe = _MOTIF_CLASSE.search(attributs)
         if classe is None or classe.group(1) not in CLASSES_MSW:
@@ -16701,13 +17655,46 @@ def verifier_restitution(racine: Path) -> int:
                 or "à venir" not in contenu
             ):
                 echecs.append(f"étape planifiée sans marqueur à venir : {contenu[:60]!r}")
-            else:
-                etapes.append(etape.group(1))
 
+    # Parcours V1 : les six étapes et leurs statuts sont redérivés depuis
+    # les artefacts rechargés, jamais lus dans la page ; un statut rendu
+    # divergent, une étape omise ou un « à venir » alors que des preuves
+    # existent sont des refus, jamais des réparations
     noms_attendus = [nom for nom, _, _, _ in ETAPES_FUTURES]
-    if etapes != noms_attendus:
+    articles_parcours_attendus = _articles_parcours(
+        empreintes,
+        etat_relatif,
+        configurations,
+        qualification,
+        verrou_charge,
+        recus_officiels,
+        registre_validation,
+        artefacts_verdicts,
+        couverture_etat,
+    )
+    for rang, attendu in enumerate(articles_parcours_attendus):
+        if attendu not in page:
+            echecs.append(
+                "étape de parcours infidèle ou absente : "
+                f"{noms_attendus[rang]}"
+            )
+    noms_rendus = re.findall(r' data-etape="([^"]+)"', page)
+    if noms_rendus != noms_attendus:
         echecs.append(
-            f"six étapes futures attendues {noms_attendus}, trouvées {etapes}"
+            f"six étapes de parcours attendues {noms_attendus}, "
+            f"trouvées {noms_rendus}"
+        )
+    attendu_a_venir = sum(
+        1
+        for article in articles_parcours_attendus
+        if ' data-marqueur="a-venir"' in article
+    )
+    nombre_a_venir = page.count(' data-marqueur="a-venir"')
+    if nombre_a_venir != attendu_a_venir:
+        echecs.append(
+            f"{attendu_a_venir} étape(s) de parcours à venir attendues "
+            f"dans la page, {nombre_a_venir} trouvées — un rendu tout à "
+            "venir est interdit quand des preuves existent"
         )
 
     # Contrôle final V1-XS-14 : la page publiée doit rester byte-identique
