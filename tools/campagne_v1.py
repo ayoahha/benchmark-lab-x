@@ -38,6 +38,7 @@ import tempfile
 import time
 import tomllib
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path
 
 VERSION_VUE = "restitution-humaine-v1/vue/1"
@@ -14349,6 +14350,634 @@ def _section_couverture_etat(
     )
 
 
+# ---------------------------------------------------------------------------
+# V1-XS-14 : restitution complète — évaluation des déclencheurs d'abstention
+# U-018 et comparaison située strictement intra-panel abonnement (Issue #115)
+
+# Familles de déclencheurs U-018, toutes évaluées et publiées à chaque rendu
+FAMILLES_DECLENCHEURS = (
+    "identite",
+    "provenance",
+    "fraicheur",
+    "comparabilite",
+    "preference",
+)
+AXE_TAUX = "taux-acceptable"
+AXE_COUT = "cout-par-sortie-acceptable"
+AXE_LATENCE = "latence-preenregistree"
+# Les trois axes figés de la comparaison située, jamais agrégés entre eux
+AXES_COMPARAISON = (AXE_TAUX, AXE_COUT, AXE_LATENCE)
+# Motifs refusés partout dans la page publiée, en minuscules : toute
+# occurrence est une injection, jamais un contenu légitime de la vue
+MOTIFS_RESTITUTION_INTERDITS = (
+    "classement général",
+    "vainqueur",
+    "score agrégé",
+    "score global",
+    "meilleur produit",
+    "meilleure configuration",
+)
+# Formes comparatives inter-profils refusées, en minuscules : la page
+# légitime ne mentionne les autres profils qu'en séparation, jamais en
+# comparaison (ARD section 7)
+MOTIFS_INTER_PROFILS_INTERDITS = (
+    "surpasse le profil",
+    "dépasse le profil",
+    "supérieur au profil",
+    "inférieur au profil",
+    "meilleur que le profil",
+    "contre le profil",
+)
+
+
+def _evaluer_restitution_complete(
+    racine: Path,
+    configurations: list[tuple[str, dict]],
+    couverture: dict | None,
+    table_metriques: tuple[str, dict, str] | None,
+    cout_abonnement: tuple[str, dict, str] | None,
+    verrou_charge: tuple[str, dict, str] | None,
+) -> dict:
+    """Évaluation mécanique des cinq déclencheurs d'abstention U-018
+    depuis les seuls artefacts versionnés chargés, puis décision de
+    branche : comparaison située intra-panel ou abstention.
+
+    Chaque déclencheur porte son constat ; sous déclenchement il nomme la
+    preuve absente et l'action humaine possible. Aucune branche n'est
+    présumée et aucune valeur de remplacement n'est créée. Le déclencheur
+    preference porte sur l'agrégation inter-axes : il reste actif tant
+    qu'aucune préférence propriétaire versionnée n'existe et n'empêche
+    jamais la comparaison par axe, qui ne pondère rien."""
+    declencheurs: list[dict] = []
+
+    def _declencheur(
+        famille: str,
+        declenche: bool,
+        constat: str,
+        preuve_absente: str | None = None,
+        action_humaine: str | None = None,
+    ) -> None:
+        declencheurs.append(
+            {
+                "famille": famille,
+                "declenche": declenche,
+                "constat": constat,
+                "preuve_absente": preuve_absente,
+                "action_humaine": action_humaine,
+            }
+        )
+
+    ids_registre = [donnees["configuration_id"] for _, donnees in configurations]
+    if verrou_charge is None:
+        _declencheur(
+            "identite",
+            True,
+            "aucun verrou de campagne ne fige les identités complètes du "
+            "panel abonnement",
+            "verrou de campagne versionné figeant produit, plan et "
+            "configuration par empreintes",
+            "produire le verrou par la commande verrouiller, sous décision "
+            "propriétaire",
+        )
+    else:
+        ids_verrou = [
+            entree["configuration_id"] for entree in verrou_charge[1]["panel"]
+        ]
+        if ids_verrou != ids_registre:
+            _declencheur(
+                "identite",
+                True,
+                "les identités verrouillées divergent du registre officiel "
+                "courant",
+                "verrou de campagne aligné une à une sur le registre "
+                "officiel courant",
+                "reproduire le verrou sur le registre courant, sous "
+                "décision propriétaire",
+            )
+        else:
+            _declencheur(
+                "identite",
+                False,
+                f"les {len(ids_registre)} identités verrouillées "
+                "correspondent une à une au registre officiel versionné",
+            )
+
+    artefacts_manquants = []
+    if couverture is None:
+        artefacts_manquants.append(
+            "registre de couverture publié par la commande etat"
+        )
+    if table_metriques is None:
+        artefacts_manquants.append(
+            "table de métriques produite par la commande metriques"
+        )
+    if cout_abonnement is None:
+        artefacts_manquants.append(
+            "document de coût d'abonnement produit par la commande cout"
+        )
+    if artefacts_manquants:
+        _declencheur(
+            "provenance",
+            True,
+            "la chaîne de provenance des mesures est incomplète",
+            " ; ".join(artefacts_manquants),
+            "produire chaque artefact absent par sa commande, depuis les "
+            "seules preuves versionnées, sans valeur de remplacement",
+        )
+    else:
+        _declencheur(
+            "provenance",
+            False,
+            "couverture, table de métriques et coût d'abonnement "
+            "versionnés sont présents et cités par empreintes",
+        )
+
+    if verrou_charge is None:
+        _declencheur(
+            "fraicheur",
+            True,
+            "aucune fenêtre de fraîcheur n'existe sans verrou de campagne",
+            "verrou de campagne portant la règle de fraîcheur "
+            "EXACT_LOCK_EVENT_BASED_NO_TTL",
+            "produire le verrou par la commande verrouiller, sous décision "
+            "propriétaire",
+        )
+    else:
+        verrou = verrou_charge[1]
+        references = [
+            (
+                verrou["sources_plans"]["chemin"],
+                verrou["sources_plans"]["sha256"],
+            )
+        ] + [
+            (
+                entree["configuration"]["chemin"],
+                entree["configuration"]["sha256"],
+            )
+            for entree in verrou["panel"]
+        ]
+        divergents = []
+        for chemin, sha_verrouille in references:
+            try:
+                sha_courant = _sha256_fichier(racine / chemin)
+            except OSError:
+                sha_courant = None
+            if sha_courant != sha_verrouille:
+                divergents.append(chemin)
+        if divergents:
+            _declencheur(
+                "fraicheur",
+                True,
+                "événement matériel LOCKED_ARTIFACT_CHANGED constaté sur "
+                + ", ".join(divergents)
+                + " — effet HOLD_STOP_NO_CROSS_EVENT_COMPARISON",
+                "preuves reproduites sous un nouvel événement de verrou",
+                "reproduire verrou et preuves sous un nouvel événement de "
+                "verrou, sous décision propriétaire",
+            )
+        else:
+            _declencheur(
+                "fraicheur",
+                False,
+                "chaque artefact verrouillé porte encore son empreinte "
+                "exacte : la règle EXACT_LOCK_EVENT_BASED_NO_TTL ne "
+                "constate aucun événement matériel",
+            )
+
+    if table_metriques is None:
+        comparables: list[dict] = []
+        _declencheur(
+            "comparabilite",
+            True,
+            "aucun front de comparaison n'existe sans table de métriques",
+            "table de métriques versionnée portant les statuts de "
+            "comparabilité",
+            "produire la table par la commande metriques depuis les "
+            "preuves versionnées",
+        )
+    else:
+        comparables = [
+            ligne
+            for ligne in table_metriques[1]["configurations"]
+            if ligne["comparabilite"]["statut"] == "COMPARABLE"
+        ]
+        if len(comparables) < 2:
+            _declencheur(
+                "comparabilite",
+                True,
+                "front de comparaison insuffisant : "
+                f"{len(comparables)} configuration(s) comparable(s), "
+                "2 au minimum",
+                "observations d'acquisition supplémentaires portées par "
+                "des reçus immuables",
+                "autoriser de nouveaux créneaux d'acquisition par décision "
+                "propriétaire, puis produire leurs reçus",
+            )
+        else:
+            _declencheur(
+                "comparabilite",
+                False,
+                f"{len(comparables)} configurations comparables partagent "
+                "carte, paquet, harnais, règles d'incident et fenêtre de "
+                "fraîcheur",
+            )
+
+    _declencheur(
+        "preference",
+        True,
+        "aucune préférence propriétaire versionnée ne pondère les trois "
+        "axes : tout ordre unique inter-axes reste impossible",
+        "préférence propriétaire versionnée ordonnant les trois axes",
+        "publier une préférence par décision propriétaire si un ordre "
+        "unique inter-axes était voulu ; en son absence la comparaison "
+        "reste strictement par axe",
+    )
+
+    bloquants = [
+        entree["famille"]
+        for entree in declencheurs
+        if entree["declenche"] and entree["famille"] != "preference"
+    ]
+    return {
+        "declencheurs": declencheurs,
+        "bloquants": bloquants,
+        "branche": "comparaison" if not bloquants else "abstention",
+        "comparables": comparables,
+    }
+
+
+def _texte_abstention_axe(preuve_absente: str, action_humaine: str) -> str:
+    """Formule unique de l'abstention d'un axe : jetons conservés
+    littéraux, preuve absente et action humaine nommées, aucune valeur de
+    remplacement."""
+    return (
+        f" Preuve absente : {preuve_absente}. Action humaine possible : "
+        f"{action_humaine}. Aucune valeur de remplacement n'est créée."
+    )
+
+
+def _section_restitution_complete(
+    etat_relatif: str,
+    empreintes: dict[str, str],
+    evaluation: dict,
+    couverture: dict | None,
+    table_metriques: tuple[str, dict, str] | None,
+    cout_abonnement: tuple[str, dict, str] | None,
+    verrou_charge: tuple[str, dict, str] | None,
+) -> str:
+    """Section de restitution complète V1-XS-14 : les cinq déclencheurs
+    d'abstention évalués et publiés, puis la branche décidée par les
+    preuves — abstention nommant preuve absente et action humaine, ou
+    comparaison située strictement intra-panel abonnement sur les trois
+    axes figés, sans ordre unique toutes dimensions ni total inter-axes."""
+    rules = "docs/RULES.md"
+    src_etat = _span_source(
+        etat_relatif, empreintes[etat_relatif], "état V1 versionné"
+    )
+    src_rules = _span_source(rules, empreintes[rules], "U-018 et U-019")
+    src_verrou = (
+        _span_source(verrou_charge[0], verrou_charge[2], SECTION_VERROU)
+        if verrou_charge is not None
+        else ""
+    )
+    src_table = (
+        _span_source(
+            table_metriques[0], table_metriques[2], SECTION_TABLE_METRIQUES
+        )
+        if table_metriques is not None
+        else ""
+    )
+    src_cout = (
+        _span_source(
+            cout_abonnement[0], cout_abonnement[2], SECTION_COUT_ABONNEMENT
+        )
+        if cout_abonnement is not None
+        else ""
+    )
+    sources_par_famille = {
+        "identite": src_etat + src_verrou + src_rules,
+        "provenance": src_etat + src_table + src_cout + src_rules,
+        "fraicheur": src_etat + src_verrou + src_rules,
+        "comparabilite": src_etat + src_table + src_rules,
+        "preference": src_etat + src_rules,
+    }
+
+    articles: list[str] = []
+    for entree in evaluation["declencheurs"]:
+        famille = entree["famille"]
+        if entree["declenche"]:
+            contenu = (
+                f"<p>Déclencheur <code>{_echapper(famille)}</code> — "
+                f"déclenché : {_echapper(entree['constat'])}. Preuve "
+                f"absente : {_echapper(entree['preuve_absente'])}. Action "
+                "humaine possible : "
+                f"{_echapper(entree['action_humaine'])}. Aucune valeur de "
+                "remplacement n'est créée.</p>"
+            )
+            jeton = "oui"
+        else:
+            contenu = (
+                f"<p>Déclencheur <code>{_echapper(famille)}</code> — non "
+                f"déclenché : {_echapper(entree['constat'])}.</p>"
+            )
+            jeton = "non"
+        articles.append(
+            _article(
+                "deduction",
+                contenu + sources_par_famille[famille],
+                f' data-declencheur-abstention="{famille}"'
+                f' data-declenche="{jeton}"'
+                ' data-premisses="évaluation U-018 depuis les seuls'
+                " artefacts versionnés cités en source de cet article,"
+                ' sans nouvelle preuve"',
+            )
+        )
+
+    if evaluation["branche"] == "abstention":
+        bloquants = " ".join(
+            f"<code>{_echapper(famille)}</code>"
+            for famille in evaluation["bloquants"]
+        )
+        articles.append(
+            _article(
+                "deduction",
+                "<p><code>ABSTENTION</code> — aucune comparaison "
+                "intra-panel n'est rendue : déclencheur(s) bloquant(s) "
+                f"actif(s) : {bloquants}. Chaque déclencheur actif nomme "
+                "ci-dessus sa preuve absente et l'action humaine "
+                "possible. Une absence de preuve n'est jamais transformée "
+                "en résultat favorable et aucune valeur de remplacement "
+                "n'est créée.</p>" + src_etat + src_rules,
+                ' data-comparaison-situee="abstention"'
+                ' data-premisses="déclencheurs U-018 évalués ci-dessus'
+                ' depuis les seuls artefacts versionnés cités"',
+            )
+        )
+    else:
+        verrou = verrou_charge[1]
+        dates = sorted(
+            {entree["attestation"]["date"] for entree in verrou["panel"]}
+        )
+        dates_texte = " · ".join(
+            f'<code data-comparaison-date="{_echapper(date)}">'
+            f"{_echapper(date)}</code>"
+            for date in dates
+        )
+        fraicheur = verrou["fraicheur"]
+        comparables = evaluation["comparables"]
+        absences = [
+            ligne
+            for ligne in table_metriques[1]["configurations"]
+            if ligne["comparabilite"]["statut"] != "COMPARABLE"
+        ]
+        absences_textes = []
+        for ligne in absences:
+            comparabilite = ligne["comparabilite"]
+            if comparabilite["statut"] == "SANS_OBSERVATION":
+                detail = (
+                    f"<code>{_echapper(comparabilite['statut'])}</code>, "
+                    f"cause <code>{_echapper(comparabilite['cause'])}</code>"
+                )
+            else:
+                detail = (
+                    f"<code>{_echapper(comparabilite['statut'])}</code>, "
+                    f"motif : {_echapper(comparabilite['motif'])}"
+                )
+            identifiant = _echapper(ligne["configuration_id"])
+            absences_textes.append(
+                f'<code data-comparaison-absence="{identifiant}">'
+                f"{identifiant}</code> ({detail})"
+            )
+        canon = _canon_panel(couverture)
+        articles.append(
+            _article(
+                "fait",
+                "<p>Comparaison située strictement intra-panel "
+                "abonnement — profil <code>abonnement</code> · date(s) "
+                f"d'attestation du panel verrouillé : {dates_texte} · "
+                "fenêtre de fraîcheur "
+                f'<code data-comparaison-fenetre="{_echapper(fraicheur["regle"])}">'
+                f"{_echapper(fraicheur['regle'])}</code> (effet "
+                f"<code>{_echapper(fraicheur['effet'])}</code>) · panel "
+                f"situé : {_echapper(canon)}. Absences hors du front de "
+                f"comparaison, toutes publiées : "
+                + " · ".join(absences_textes)
+                + ". Cette comparaison ne rend aucun ordre unique toutes "
+                "dimensions, aucun total inter-axes et aucune conclusion "
+                "hors du profil abonnement.</p>"
+                + src_verrou
+                + src_etat
+                + src_table,
+                ' data-comparaison-situee="cadre"'
+                ' data-comparaison-profil="abonnement"',
+            )
+        )
+
+        taux_textes = " · ".join(
+            f"<code>{_echapper(ligne['configuration_id'])}</code> "
+            f"<code>{_echapper(ligne['taux'])}</code>"
+            for ligne in comparables
+        )
+        # Une ligne comparable à dénominateur décidable nul porte un taux
+        # littéralement NON_DEFINI : aucune fraction n'est construite et
+        # l'axe s'abstient plutôt que d'inventer une valeur
+        if any(
+            ligne["denominateur_decidable"] == 0 for ligne in comparables
+        ):
+            articles.append(
+                _article(
+                    "deduction",
+                    "<p>Axe <code>taux-acceptable</code> — taux de "
+                    "sorties officiellement acceptables, maximisé — "
+                    "<code>ABSTENTION</code> de cet axe : au moins une "
+                    "configuration comparable porte un dénominateur "
+                    "décidable nul et son taux reste littéralement "
+                    "<code>NON_DEFINI</code>, hors de toute comparaison "
+                    "numérique. Valeurs préenregistrées : "
+                    f"{taux_textes}."
+                    + _texte_abstention_axe(
+                        "une décision officielle décidable pour chaque "
+                        "configuration comparable",
+                        "établir la décision officielle manquante par "
+                        "validation automatique puis verdict humain, sous "
+                        "le parcours officiel",
+                    )
+                    + "</p>"
+                    + src_table
+                    + src_rules,
+                    f' data-axe-comparaison="{AXE_TAUX}"'
+                    f' data-axe-abstention="{AXE_TAUX}"'
+                    ' data-premisses="taux littéraux de la table de'
+                    ' métriques versionnée citée en source, jetons'
+                    ' conservés littéraux, aucune fraction construite sur'
+                    ' un dénominateur nul"',
+                )
+            )
+        else:
+            fractions = {
+                ligne["configuration_id"]: Fraction(
+                    ligne["numerateur"], ligne["denominateur_decidable"]
+                )
+                for ligne in comparables
+            }
+            maximum = max(fractions.values())
+            maximisantes = [
+                identifiant
+                for identifiant, fraction in fractions.items()
+                if fraction == maximum
+            ]
+            if len(maximisantes) == 1:
+                constat_taux = (
+                    "La valeur maximale appartient à "
+                    f"<code>{_echapper(maximisantes[0])}</code>, sur cet "
+                    "axe seulement."
+                )
+            else:
+                constat_taux = (
+                    "Aucun maximum strict : les configurations "
+                    "comparables portent des taux égaux ; aucune "
+                    "configuration ne maximise cet axe."
+                )
+            articles.append(
+                _article(
+                    "deduction",
+                    "<p>Axe <code>taux-acceptable</code> — taux de "
+                    "sorties officiellement acceptables, maximisé. "
+                    "Valeurs préenregistrées : "
+                    f"{taux_textes}. {constat_taux}</p>"
+                    + src_table
+                    + src_rules,
+                    f' data-axe-comparaison="{AXE_TAUX}"'
+                    ' data-premisses="taux littéraux de la table de'
+                    ' métriques versionnée citée en source, comparés sans'
+                    ' arrondi ni pondération"',
+                )
+            )
+
+        metrique_cout = cout_abonnement[1]["metrique"]["valeur"]
+        articles.append(
+            _article(
+                "deduction",
+                "<p>Axe <code>cout-par-sortie-acceptable</code> — coût "
+                "d'abonnement par sortie officiellement acceptable, "
+                "minimisé — <code>ABSTENTION</code> de cet axe : la "
+                "métrique versionnée reste littéralement "
+                f"<code>{_echapper(metrique_cout)}</code> et aucune "
+                "conversion n'est admise."
+                + _texte_abstention_axe(
+                    "au moins une sortie officiellement acceptable, il en "
+                    "existe zéro",
+                    "autoriser de nouveaux créneaux d'acquisition par "
+                    "décision propriétaire, puis établir l'acceptabilité "
+                    "officielle par PASS automatique plus verdict humain "
+                    "ACCEPTABLE",
+                )
+                + "</p>"
+                + src_cout
+                + src_rules,
+                f' data-axe-comparaison="{AXE_COUT}"'
+                f' data-axe-abstention="{AXE_COUT}"'
+                ' data-premisses="métrique littérale du document de coût'
+                " d'abonnement versionné cité en source, jetons conservés"
+                ' littéraux"',
+            )
+        )
+
+        latences = {
+            ligne["configuration_id"]: ligne["latence_configuration"][
+                "distribution_ms"
+            ]
+            for ligne in comparables
+        }
+        latences_textes = " · ".join(
+            f"<code>{_echapper(identifiant)}</code> <code>"
+            f"[{_echapper(', '.join(str(valeur) for valeur in distribution))}]"
+            "</code> ms"
+            for identifiant, distribution in latences.items()
+        )
+        if all(len(distribution) == 1 for distribution in latences.values()):
+            minimum = min(
+                distribution[0] for distribution in latences.values()
+            )
+            minimisantes = [
+                identifiant
+                for identifiant, distribution in latences.items()
+                if distribution[0] == minimum
+            ]
+            if len(minimisantes) == 1:
+                constat_latence = (
+                    "La valeur minimale préenregistrée appartient à "
+                    f"<code>{_echapper(minimisantes[0])}</code>, sur cet "
+                    "axe seulement."
+                )
+            else:
+                constat_latence = (
+                    "Aucun minimum strict : les distributions "
+                    "préenregistrées portent des valeurs égales ; aucune "
+                    "configuration ne minimise cet axe."
+                )
+            contenu_latence = (
+                "<p>Axe <code>latence-preenregistree</code> — latence "
+                "préenregistrée, minimisée. Distributions complètes "
+                f"préenregistrées : {latences_textes}. Chaque "
+                "distribution porte une valeur unique : la comparaison "
+                "ne calcule aucune statistique nouvelle. "
+                f"{constat_latence}</p>"
+            )
+            attributs_latence = (
+                f' data-axe-comparaison="{AXE_LATENCE}"'
+                ' data-premisses="distributions complètes préenregistrées'
+                ' de la table de métriques versionnée citée en source,'
+                ' valeurs uniques comparées sans statistique nouvelle"'
+            )
+        else:
+            contenu_latence = (
+                "<p>Axe <code>latence-preenregistree</code> — latence "
+                "préenregistrée, minimisée — <code>ABSTENTION</code> de "
+                "cet axe : la règle <code>DISTRIBUTION_COMPLETE</code> ne "
+                "préenregistre aucune statistique et au moins une "
+                "distribution porte plusieurs valeurs. Distributions "
+                f"complètes publiées : {latences_textes}."
+                + _texte_abstention_axe(
+                    "statistique de latence préenregistrée",
+                    "adopter par décision propriétaire une statistique "
+                    "préenregistrée de latence",
+                )
+                + "</p>"
+            )
+            attributs_latence = (
+                f' data-axe-comparaison="{AXE_LATENCE}"'
+                f' data-axe-abstention="{AXE_LATENCE}"'
+                ' data-premisses="distributions complètes préenregistrées'
+                ' de la table de métriques versionnée citée en source,'
+                ' aucune statistique nouvelle calculée"'
+            )
+        articles.append(
+            _article(
+                "deduction",
+                contenu_latence + src_table + src_rules,
+                attributs_latence,
+            )
+        )
+
+    return (
+        '<section id="restitution-complete"'
+        ' data-restitution-complete="section">'
+        "<h2>Restitution complète V1 : abstention ou comparaison "
+        "située</h2>"
+        "<p>Section produite par <code>restituer</code> : chaque "
+        "déclencheur d'abstention U-018 est évalué depuis les seules "
+        "preuves versionnées, puis la branche est décidée par ces "
+        "preuves — abstention nommant preuve absente et action humaine "
+        "possible, ou comparaison strictement intra-panel abonnement sur "
+        "trois axes figés. Aucun ordre unique toutes dimensions, aucun "
+        "total inter-axes, aucune conclusion hors du profil abonnement. "
+        "La lisibilité de cette section n'améliore aucune preuve.</p>"
+        + "".join(articles)
+        + "</section>"
+    )
+
+
 def _rendre_page(racine: Path) -> bytes:
     etat = _charger_etat(racine)
     repertoire = _repertoire_recus(racine, etat)
@@ -14850,6 +15479,30 @@ def _rendre_page(racine: Path) -> bytes:
             )
         )
 
+    # Restitution complète V1-XS-14 : les déclencheurs d'abstention sont
+    # évalués depuis les artefacts déjà chargés, jamais présumés ; la
+    # comparaison située n'est rendue que si aucun déclencheur bloquant
+    # n'est actif
+    evaluation_complete = _evaluer_restitution_complete(
+        racine,
+        configurations,
+        couverture_etat,
+        table_metriques,
+        cout_abonnement,
+        verrou_charge,
+    )
+    sections.append(
+        _section_restitution_complete(
+            etat_relatif,
+            empreintes,
+            evaluation_complete,
+            couverture_etat,
+            table_metriques,
+            cout_abonnement,
+            verrou_charge,
+        )
+    )
+
     if configurations:
         article_identites_inconnues = _article(
             "fait",
@@ -15281,7 +15934,8 @@ def verifier_restitution(racine: Path) -> int:
     echecs: list[str] = []
     chemin_page = racine / CHEMIN_PAGE
     try:
-        page = chemin_page.read_bytes().decode("utf-8")
+        octets_page = chemin_page.read_bytes()
+        page = octets_page.decode("utf-8")
     except (OSError, UnicodeDecodeError) as erreur:
         print(f"ECHEC page illisible : {erreur}")
         return 1
@@ -15828,6 +16482,129 @@ def verifier_restitution(racine: Path) -> int:
             f"dans la page, {nombre_quotas_cout} trouvées"
         )
 
+    # Restitution complète V1-XS-14 : les déclencheurs et la branche sont
+    # réévalués indépendamment depuis les artefacts rechargés ci-dessus,
+    # puis la section rendue, les axes, la date, la fenêtre, les absences
+    # et l'abstention monétaire sont contrôlés dans la page — un axe omis,
+    # une date ou des absences omises et toute conversion de jeton
+    # normatif sont des refus, jamais des réparations
+    evaluation_complete = _evaluer_restitution_complete(
+        racine,
+        configurations,
+        couverture_etat,
+        table_metriques,
+        cout_abonnement,
+        verrou_charge,
+    )
+    attendu_section_complete = _section_restitution_complete(
+        etat_relatif,
+        empreintes,
+        evaluation_complete,
+        couverture_etat,
+        table_metriques,
+        cout_abonnement,
+        verrou_charge,
+    )
+    if attendu_section_complete not in page:
+        echecs.append(
+            "section de restitution complète infidèle ou absente"
+        )
+    nombre_sections_completes = page.count(
+        ' data-restitution-complete="section"'
+    )
+    if nombre_sections_completes != 1:
+        echecs.append(
+            "1 section de restitution complète attendue dans la page, "
+            f"{nombre_sections_completes} trouvée"
+        )
+    nombre_declencheurs = page.count(' data-declencheur-abstention="')
+    if nombre_declencheurs != len(FAMILLES_DECLENCHEURS):
+        echecs.append(
+            f"{len(FAMILLES_DECLENCHEURS)} déclencheurs d'abstention "
+            f"attendus dans la page, {nombre_declencheurs} trouvés"
+        )
+    for famille in FAMILLES_DECLENCHEURS:
+        if page.count(f' data-declencheur-abstention="{famille}"') != 1:
+            echecs.append(
+                f"déclencheur d'abstention omis ou dupliqué : {famille}"
+            )
+    if evaluation_complete["branche"] == "comparaison":
+        for axe in AXES_COMPARAISON:
+            if page.count(f' data-axe-comparaison="{axe}"') != 1:
+                echecs.append(f"axe de comparaison omis ou dupliqué : {axe}")
+        if page.count(' data-axe-comparaison="') != len(AXES_COMPARAISON):
+            echecs.append(
+                f"{len(AXES_COMPARAISON)} axes de comparaison attendus "
+                "dans la page"
+            )
+        if page.count(' data-comparaison-situee="cadre"') != 1:
+            echecs.append("cadre de comparaison située omis ou dupliqué")
+        dates_attendues = sorted(
+            {
+                entree["attestation"]["date"]
+                for entree in verrou_charge[1]["panel"]
+            }
+        )
+        for date in dates_attendues:
+            if f' data-comparaison-date="{date}"' not in page:
+                echecs.append(f"date de comparaison omise : {date}")
+        if page.count(' data-comparaison-fenetre="') != 1:
+            echecs.append("fenêtre de fraîcheur de comparaison omise")
+        absences_attendues = [
+            ligne["configuration_id"]
+            for ligne in table_metriques[1]["configurations"]
+            if ligne["comparabilite"]["statut"] != "COMPARABLE"
+        ]
+        if page.count(' data-comparaison-absence="') != len(
+            absences_attendues
+        ):
+            echecs.append(
+                f"{len(absences_attendues)} absences de comparaison "
+                "attendues dans la page — absences omises ou altérées"
+            )
+        for identifiant in absences_attendues:
+            if f' data-comparaison-absence="{identifiant}"' not in page:
+                echecs.append(f"absence de comparaison omise : {identifiant}")
+        if (
+            cout_abonnement[1]["metrique"]["valeur"] == "NON_DEFINI"
+            and page.count(f' data-axe-abstention="{AXE_COUT}"') != 1
+        ):
+            echecs.append(
+                "abstention de l'axe monétaire absente ou convertie "
+                "alors que la métrique versionnée reste NON_DEFINI"
+            )
+        if (
+            any(
+                ligne["denominateur_decidable"] == 0
+                for ligne in evaluation_complete["comparables"]
+            )
+            and page.count(f' data-axe-abstention="{AXE_TAUX}"') != 1
+        ):
+            echecs.append(
+                "abstention de l'axe taux absente ou convertie alors "
+                "qu'un taux comparable reste NON_DEFINI"
+            )
+        if page.count(' data-comparaison-situee="abstention"') != 0:
+            echecs.append(
+                "abstention de comparaison présente alors que les preuves "
+                "autorisent la comparaison située"
+            )
+    else:
+        if page.count(' data-comparaison-situee="abstention"') != 1:
+            echecs.append(
+                "1 abstention de comparaison attendue dans la page"
+            )
+        if page.count(' data-axe-comparaison="') != 0:
+            echecs.append(
+                "axe de comparaison présent alors que les preuves "
+                "imposent l'abstention"
+            )
+        if page.count(' data-comparaison-situee="cadre"') != 0:
+            echecs.append(
+                "cadre de comparaison présent alors que les preuves "
+                "imposent l'abstention"
+            )
+
     for relatif, enveloppe, sha in recus_officiels:
         attendu = _article_acquisition_officielle(relatif, sha, enveloppe)
         if attendu not in page:
@@ -15875,6 +16652,17 @@ def verifier_restitution(racine: Path) -> int:
         if sequence in page_basse:
             echecs.append(f"ressource distante interdite présente : {sequence!r}")
 
+    # Refus V1-XS-14 : aucun motif de classement général, de vainqueur
+    # universel ni de score agrégé n'est toléré nulle part dans la page
+    for motif in MOTIFS_RESTITUTION_INTERDITS:
+        if motif in page_basse:
+            echecs.append(f"motif interdit présent : {motif!r}")
+    for motif in MOTIFS_INTER_PROFILS_INTERDITS:
+        if motif in page_basse:
+            echecs.append(
+                f"comparaison inter-profils interdite présente : {motif!r}"
+            )
+
     for jeton in (*jetons_factuels, *JETONS_NORMATIFS):
         if jeton not in page:
             echecs.append(f"jeton attendu absent : {jeton!r}")
@@ -15920,6 +16708,15 @@ def verifier_restitution(racine: Path) -> int:
     if etapes != noms_attendus:
         echecs.append(
             f"six étapes futures attendues {noms_attendus}, trouvées {etapes}"
+        )
+
+    # Contrôle final V1-XS-14 : la page publiée doit rester byte-identique
+    # au rendu déterministe des sources courantes — toute injection
+    # additive, même bien formée, est refusée, jamais réparée
+    if octets_page != _rendre_page(racine):
+        echecs.append(
+            "page divergente du rendu déterministe courant — aucune "
+            "réparation"
         )
 
     if echecs:
