@@ -13,6 +13,8 @@ Interface figée :
 - uv run tools/campagne_v1.py preflight --configuration <id>
 - uv run tools/campagne_v1.py verrouiller
 - uv run tools/campagne_v1.py valider
+- uv run tools/campagne_v1.py metriques
+- uv run tools/campagne_v1.py cout
 - uv run tools/campagne_v1.py restituer
 - uv run tools/campagne_v1.py verifier-restitution
 - uv run tools/campagne_v1.py preparer-recuperation
@@ -12574,6 +12576,484 @@ def _section_table_metriques(relatif: str, sha: str, table: dict) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# V1-XS-13 : coût d'abonnement par sortie officiellement acceptable
+# Autorité : D_V1_02 = NON_DEFINI_V1 (Issue #114, commentaire propriétaire
+# du 28 août 2026) — aucune règle d'attribution n'est adoptée en V1
+
+SCHEMA_COUT_ABONNEMENT = "campagne-v1/cout-abonnement-v1/1"
+CHEMIN_COUT_ABONNEMENT = _RACINE_CAMPAGNE_V1 / "cout-abonnement-v1.json"
+DECISION_COUT_REFERENCE = "D_V1_02"
+DECISION_COUT_VALEUR = "NON_DEFINI_V1"
+SOURCE_DECISION_COUT = (
+    "https://github.com/ayoahha/benchmark-lab-x/issues/114"
+    "#issuecomment-5447153001"
+)
+SECTION_COUT_ABONNEMENT = "coût d'abonnement V1 versionné"
+# Ordre fixe des champs de quota : le document écrit est byte-déterministe
+_CHAMPS_QUOTA_ORDRE = (
+    "unite",
+    "valeur",
+    "portee",
+    "reset_fenetre",
+    "reset_ancrage",
+    "reset_au_depassement",
+)
+
+
+def _construire_cout_abonnement(racine: Path) -> dict:
+    """Document de coût d'abonnement V1 construit depuis les seules
+    preuves versionnées locales : nombre de sorties officiellement
+    acceptables repris de la table de métriques publiée (jamais
+    recalculé), tarifs catalogue des sources de plans validées et quotas
+    déclarés du registre officiel.
+
+    D_V1_02 = NON_DEFINI_V1 : la métrique reste littéralement NON_DEFINI,
+    que le nombre de sorties soit nul ou positif ; aucune division,
+    allocation, valeur nulle ni valeur de remplacement n'est calculée.
+    Aucun total n'est produit ; le quota n'est jamais converti en
+    monnaie. Déterministe ; tout manquement est un refus nommé."""
+    table_charge = _charger_table_metriques(racine)
+    if table_charge is None:
+        raise ErreurRestitution(
+            "table de métriques absente : cout lit le nombre de sorties "
+            "officiellement acceptables publié par metriques (V1-XS-12B) "
+            "et ne le recalcule pas"
+        )
+    relatif_table, table, sha_table = table_charge
+    configurations = _configurations_officielles(racine)
+    identifiants = tuple(
+        donnees["configuration_id"] for _, donnees in configurations
+    )
+    plans, sha_plans = _charger_sources_plans(racine, identifiants)
+    sources = [
+        {"chemin": relatif_table, "sha256": sha_table},
+        {"chemin": CHEMIN_SOURCES_PLANS.as_posix(), "sha256": sha_plans},
+    ]
+    tarifs = []
+    quotas = []
+    for relatif, donnees in configurations:
+        identifiant = donnees["configuration_id"]
+        sha_configuration = _sha256_fichier(racine / relatif)
+        sources.append({"chemin": relatif, "sha256": sha_configuration})
+        plan = plans[identifiant]
+        tarif = {
+            "configuration_id": identifiant,
+            "nom": plan["nom"],
+            "prix_montant": plan["prix_montant"],
+            "prix_devise": plan["prix_devise"],
+            "periode": plan["periode"],
+            "source_url": plan["source_url"],
+            "date_publication": plan["date_publication"],
+            "date_consultation": plan["date_consultation"],
+            "classe_msw": plan["classe_msw"],
+            "attestation_reference": plan["attestation_reference"],
+        }
+        if plan["classe_msw"] == CLASSE_PLAN_DEDUCTION:
+            tarif["premisses"] = plan["premisses"]
+        tarifs.append(tarif)
+        quotas.append(
+            {
+                "configuration_id": identifiant,
+                "source": {"chemin": relatif, "sha256": sha_configuration},
+                "quotas": [
+                    {cle: quota[cle] for cle in _CHAMPS_QUOTA_ORDRE}
+                    for quota in donnees["quota"]
+                ],
+            }
+        )
+    return {
+        "schema_cout": SCHEMA_COUT_ABONNEMENT,
+        "product_version": "V1",
+        "measurement_profile": "abonnement",
+        "decision": {
+            "reference": DECISION_COUT_REFERENCE,
+            "valeur": DECISION_COUT_VALEUR,
+            "commentaire": SOURCE_DECISION_COUT,
+        },
+        "metrique": {
+            "nom": "cout_abonnement_par_sortie_officiellement_acceptable",
+            "valeur": "NON_DEFINI",
+        },
+        "sorties_officiellement_acceptables": {
+            "nombre": table["agregat"]["numerateur"],
+            "source": {"chemin": relatif_table, "sha256": sha_table},
+        },
+        "tarifs_catalogue": {
+            "semantique_prix": SEMANTIQUE_PRIX_PLANS,
+            "source": {
+                "chemin": CHEMIN_SOURCES_PLANS.as_posix(),
+                "sha256": sha_plans,
+            },
+            "configurations": tarifs,
+        },
+        "quotas_declares": {"configurations": quotas},
+        "sources": sources,
+    }
+
+
+def _ecrire_cout_abonnement(racine: Path) -> dict:
+    """Écriture déterministe et idempotente du reçu de coût, depuis les
+    seules sources courantes ; rend le document écrit."""
+    document = _construire_cout_abonnement(racine)
+    chemin_document = racine / CHEMIN_COUT_ABONNEMENT
+    chemin_document.write_bytes(
+        (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    return document
+
+
+def cout(racine: Path) -> int:
+    """Coût d'abonnement par sortie officiellement acceptable V1.
+
+    D_V1_02 = NON_DEFINI_V1 : la métrique reste littéralement NON_DEFINI ;
+    le nombre courant de sorties officiellement acceptables est lu de la
+    table de métriques versionnée, les tarifs catalogue mensuels sont
+    publiés comme tels sans total et les quotas déclarés sur un objet
+    distinct, sans conversion en monnaie.
+
+    L'écriture est déterministe et idempotente. Aucune acquisition, aucun
+    appel candidat, aucune dépense."""
+    document = _ecrire_cout_abonnement(racine)
+    nombre = document["sorties_officiellement_acceptables"]["nombre"]
+    print(f"coût d'abonnement écrit : {CHEMIN_COUT_ABONNEMENT.as_posix()}")
+    print(
+        f"décision {DECISION_COUT_REFERENCE} = {DECISION_COUT_VALEUR} : "
+        "métrique cout_abonnement_par_sortie_officiellement_acceptable = "
+        f"NON_DEFINI ({nombre} sortie(s) officiellement acceptable(s) ; "
+        "aucune division, allocation ni valeur de remplacement)"
+    )
+    print(
+        "tarifs catalogue mensuels : "
+        f"{len(document['tarifs_catalogue']['configurations'])} "
+        "configurations, sans total ; quotas déclarés sur un objet "
+        "distinct, sans conversion en monnaie"
+    )
+    return 0
+
+
+_CLES_COUT_ABONNEMENT = {
+    "schema_cout",
+    "product_version",
+    "measurement_profile",
+    "decision",
+    "metrique",
+    "sorties_officiellement_acceptables",
+    "tarifs_catalogue",
+    "quotas_declares",
+    "sources",
+}
+_CLES_TARIF_COUT = {
+    "configuration_id",
+    "nom",
+    "prix_montant",
+    "prix_devise",
+    "periode",
+    "source_url",
+    "date_publication",
+    "date_consultation",
+    "classe_msw",
+    "attestation_reference",
+}
+_CLES_QUOTA_COUT = set(_CHAMPS_QUOTA_ORDRE)
+
+
+def _valider_source_cout(nom: str, valeur: object) -> None:
+    if not isinstance(valeur, dict) or set(valeur) != {"chemin", "sha256"}:
+        raise ErreurRestitution(
+            f"document de coût d'abonnement : source hors schéma fermé "
+            f"({nom})"
+        )
+
+
+def _charger_cout_abonnement(racine: Path) -> tuple[str, dict, str] | None:
+    """Document de coût d'abonnement validé pour le rendu : (chemin
+    relatif, document, SHA-256), ou None lorsqu'il n'est pas
+    matérialisé. Toute dérive de forme et toute substitution de
+    NON_DEFINI sont un refus fail-closed, jamais une réparation."""
+    chemin = racine / CHEMIN_COUT_ABONNEMENT
+    if not os.path.lexists(chemin):
+        return None
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurRestitution(
+            "document de coût d'abonnement : fichier régulier non "
+            "symbolique attendu"
+        )
+    try:
+        document = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurRestitution(
+            f"document de coût d'abonnement illisible : {erreur}"
+        ) from erreur
+    if not isinstance(document, dict) or set(document) != _CLES_COUT_ABONNEMENT:
+        raise ErreurRestitution(
+            "document de coût d'abonnement : clés hors schéma fermé"
+        )
+    if document["schema_cout"] != SCHEMA_COUT_ABONNEMENT:
+        raise ErreurRestitution(
+            f"document de coût d'abonnement : schéma "
+            f"'{SCHEMA_COUT_ABONNEMENT}' attendu"
+        )
+    if (
+        document["product_version"] != "V1"
+        or document["measurement_profile"] != "abonnement"
+    ):
+        raise ErreurRestitution(
+            "document de coût d'abonnement : version produit ou profil de "
+            "mesure hors contrat V1 abonnement"
+        )
+    decision = document["decision"]
+    if not isinstance(decision, dict) or set(decision) != {
+        "reference",
+        "valeur",
+        "commentaire",
+    }:
+        raise ErreurRestitution(
+            "document de coût d'abonnement : décision hors schéma fermé"
+        )
+    if (
+        decision["reference"] != DECISION_COUT_REFERENCE
+        or decision["valeur"] != DECISION_COUT_VALEUR
+        or decision["commentaire"] != SOURCE_DECISION_COUT
+    ):
+        raise ErreurRestitution(
+            f"document de coût d'abonnement : décision "
+            f"{DECISION_COUT_REFERENCE} = {DECISION_COUT_VALEUR} attendue, "
+            "sans substitution"
+        )
+    metrique = document["metrique"]
+    if not isinstance(metrique, dict) or set(metrique) != {"nom", "valeur"}:
+        raise ErreurRestitution(
+            "document de coût d'abonnement : métrique hors schéma fermé"
+        )
+    if (
+        metrique["nom"]
+        != "cout_abonnement_par_sortie_officiellement_acceptable"
+        or metrique["valeur"] != "NON_DEFINI"
+    ):
+        raise ErreurRestitution(
+            "document de coût d'abonnement : la métrique reste "
+            "littéralement NON_DEFINI sous D_V1_02 — toute valeur de "
+            "remplacement est refusée"
+        )
+    sorties = document["sorties_officiellement_acceptables"]
+    if not isinstance(sorties, dict) or set(sorties) != {"nombre", "source"}:
+        raise ErreurRestitution(
+            "document de coût d'abonnement : sorties officiellement "
+            "acceptables hors schéma fermé"
+        )
+    if (
+        isinstance(sorties["nombre"], bool)
+        or not isinstance(sorties["nombre"], int)
+        or sorties["nombre"] < 0
+    ):
+        raise ErreurRestitution(
+            "document de coût d'abonnement : nombre de sorties "
+            "officiellement acceptables entier positif ou nul attendu"
+        )
+    _valider_source_cout("sorties_officiellement_acceptables", sorties["source"])
+    tarifs = document["tarifs_catalogue"]
+    if not isinstance(tarifs, dict) or set(tarifs) != {
+        "semantique_prix",
+        "source",
+        "configurations",
+    }:
+        raise ErreurRestitution(
+            "document de coût d'abonnement : tarifs catalogue hors schéma "
+            "fermé"
+        )
+    if tarifs["semantique_prix"] != SEMANTIQUE_PRIX_PLANS:
+        raise ErreurRestitution(
+            "document de coût d'abonnement : sémantique des prix "
+            f"'{SEMANTIQUE_PRIX_PLANS}' attendue"
+        )
+    _valider_source_cout("tarifs_catalogue", tarifs["source"])
+    if not isinstance(tarifs["configurations"], list):
+        raise ErreurRestitution(
+            "document de coût d'abonnement : configurations de tarifs "
+            "hors schéma fermé"
+        )
+    for tarif in tarifs["configurations"]:
+        if not isinstance(tarif, dict):
+            raise ErreurRestitution(
+                "document de coût d'abonnement : tarif hors schéma fermé"
+            )
+        cles_attendues = set(_CLES_TARIF_COUT)
+        if tarif.get("classe_msw") == CLASSE_PLAN_DEDUCTION:
+            cles_attendues.add("premisses")
+        if set(tarif) != cles_attendues:
+            raise ErreurRestitution(
+                "document de coût d'abonnement : tarif hors schéma fermé "
+                f"({tarif.get('configuration_id')})"
+            )
+        if tarif["prix_devise"] != "USD" or tarif["periode"] != "MONTH":
+            raise ErreurRestitution(
+                "document de coût d'abonnement : tarif catalogue mensuel "
+                f"en USD attendu ({tarif['configuration_id']})"
+            )
+    quotas = document["quotas_declares"]
+    if not isinstance(quotas, dict) or set(quotas) != {"configurations"}:
+        raise ErreurRestitution(
+            "document de coût d'abonnement : quotas déclarés hors schéma "
+            "fermé — objet distinct de tout montant"
+        )
+    if not isinstance(quotas["configurations"], list):
+        raise ErreurRestitution(
+            "document de coût d'abonnement : configurations de quotas "
+            "hors schéma fermé"
+        )
+    for entree in quotas["configurations"]:
+        if not isinstance(entree, dict) or set(entree) != {
+            "configuration_id",
+            "source",
+            "quotas",
+        }:
+            raise ErreurRestitution(
+                "document de coût d'abonnement : entrée de quotas hors "
+                "schéma fermé"
+            )
+        _valider_source_cout(
+            f"quotas {entree['configuration_id']}", entree["source"]
+        )
+        if not isinstance(entree["quotas"], list) or any(
+            not isinstance(quota, dict) or set(quota) != _CLES_QUOTA_COUT
+            for quota in entree["quotas"]
+        ):
+            raise ErreurRestitution(
+                "document de coût d'abonnement : quota hors schéma fermé "
+                f"({entree['configuration_id']}) — aucune conversion en "
+                "monnaie n'est admise"
+            )
+    sources = document["sources"]
+    if not isinstance(sources, list) or not sources:
+        raise ErreurRestitution(
+            "document de coût d'abonnement : sources hors schéma fermé"
+        )
+    for source in sources:
+        _valider_source_cout("sources", source)
+    return CHEMIN_COUT_ABONNEMENT.as_posix(), document, _sha256_fichier(chemin)
+
+
+def _section_cout_abonnement(relatif: str, sha: str, document: dict) -> str:
+    """Section du coût d'abonnement V1 : métrique littéralement
+    NON_DEFINI sous D_V1_02, tarifs catalogue mensuels comme tels sans
+    total, quotas déclarés sur des lignes distinctes sans conversion."""
+    decision = document["decision"]
+    metrique = document["metrique"]
+    sorties = document["sorties_officiellement_acceptables"]
+    tarifs = document["tarifs_catalogue"]
+    src_cout = _span_source(relatif, sha, SECTION_COUT_ABONNEMENT)
+    src_metriques = _span_source(
+        sorties["source"]["chemin"],
+        sorties["source"]["sha256"],
+        SECTION_TABLE_METRIQUES,
+    )
+    src_plans = _span_source(
+        tarifs["source"]["chemin"],
+        tarifs["source"]["sha256"],
+        SECTION_SOURCES_PLANS,
+    )
+    articles = [
+        _article(
+            "fait",
+            f"<p>Décision propriétaire <code>{decision['reference']}</code> "
+            f"= <code>{decision['valeur']}</code> : aucune règle "
+            "d'attribution du coût d'abonnement à une sortie "
+            "officiellement acceptable n'est adoptée en V1. La métrique "
+            f"<code>{_echapper(metrique['nom'])}</code> vaut littéralement "
+            f"<code>{metrique['valeur']}</code>, que le nombre de sorties "
+            "officiellement acceptables soit nul ou positif : aucune "
+            "division, aucune allocation, aucune valeur nulle ni valeur "
+            "de remplacement n'est calculée. Nombre courant de sorties "
+            "officiellement acceptables, lu de la table de métriques "
+            f"versionnée : <code>{sorties['nombre']}</code>.</p>"
+            + src_cout
+            + src_metriques,
+            ' data-cout-metrique="non-defini"',
+        )
+    ]
+    for tarif in tarifs["configurations"]:
+        contenu = (
+            f"<p><strong>{_echapper(tarif['configuration_id'])}</strong> — "
+            f"tarif catalogue <code>{_echapper(tarif['nom'])}</code> : "
+            f"<code>{_echapper(tarif['prix_montant'])}</code> "
+            f"<code>{_echapper(tarif['prix_devise'])}</code> par période "
+            f"<code>{_echapper(tarif['periode'])}</code> · publication "
+            f"<code>{_echapper(tarif['date_publication'])}</code> · "
+            "consultation "
+            f"<code>{_echapper(tarif['date_consultation'])}</code> · "
+            f"classe <code>{_echapper(tarif['classe_msw'])}</code> · "
+            "source officielle "
+            f"<code>{_neutraliser_schema(_echapper(tarif['source_url']))}"
+            "</code>. Tarif catalogue standard mensuel, hors taxe, remise "
+            "et facturation locale : il ne prouve pas le montant "
+            "réellement facturé et n'entre dans aucun total.</p>"
+            + src_plans
+            + src_cout
+        )
+        if tarif["classe_msw"] == CLASSE_PLAN_DEDUCTION:
+            premisses = " ; ".join(tarif["premisses"])
+            articles.append(
+                _article(
+                    "deduction",
+                    contenu,
+                    f' data-cout-tarif="{tarif["configuration_id"]}"'
+                    f' data-premisses="{premisses}"',
+                )
+            )
+        else:
+            articles.append(
+                _article(
+                    "fait",
+                    contenu,
+                    f' data-cout-tarif="{tarif["configuration_id"]}"',
+                )
+            )
+    for entree in document["quotas_declares"]["configurations"]:
+        lignes_quota = "".join(
+            "<li>quota "
+            + " · ".join(
+                f"{cle} <code>{_echapper(quota[cle])}</code>"
+                for cle in _CHAMPS_QUOTA_ORDRE
+            )
+            + "</li>"
+            for quota in entree["quotas"]
+        )
+        articles.append(
+            _article(
+                "fait",
+                f"<p><strong>{_echapper(entree['configuration_id'])}</strong>"
+                " — quotas déclarés dans le registre officiel :"
+                f"<ul>{lignes_quota}</ul>"
+                "Objet distinct de tout montant : aucune conversion entre "
+                "quota et monnaie n'est faite.</p>"
+                + _span_source(
+                    entree["source"]["chemin"],
+                    entree["source"]["sha256"],
+                    SECTION_REGISTRE,
+                )
+                + src_cout,
+                f' data-cout-quota="{entree["configuration_id"]}"',
+            )
+        )
+    return (
+        '<section id="cout-abonnement-v1"><h2>'
+        "Coût d'abonnement par sortie officiellement acceptable</h2>"
+        "<p>Section produite par <code>cout</code> (V1-XS-13) sous la "
+        "décision propriétaire <code>D_V1_02 = NON_DEFINI_V1</code> : la "
+        "métrique reste littéralement <code>NON_DEFINI</code>, les tarifs "
+        "catalogue mensuels sont présentés comme tels, sans total, et les "
+        "quotas déclarés sur des lignes distinctes, sans conversion en "
+        "monnaie. Cette section ne produit aucune recommandation, aucun "
+        "classement et aucune comparaison de coût.</p>"
+        + "".join(articles)
+        + "</section>"
+    )
+
+
 SECTION_DOSSIERS_REVUE = "manifeste de dossiers de revue aveugle V1 versionné"
 SECTION_ENGAGEMENT_ORDRE = "engagement d'ordre de revue aveugle V1 versionné"
 SECTION_CONTROLE_FUITES = "contrôle d'absence de fuite des dossiers V1 versionné"
@@ -13905,6 +14385,7 @@ def _rendre_page(racine: Path) -> bytes:
         )
     couverture_etat = etat.get("couverture")
     table_metriques = _charger_table_metriques(racine)
+    cout_abonnement = _charger_cout_abonnement(racine)
     canon_panel = _canon_panel(couverture_etat)
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
@@ -13940,6 +14421,8 @@ def _rendre_page(racine: Path) -> bytes:
             "provenance_vocabulaire"
         ]
         empreintes[provenance_effort["chemin"]] = provenance_effort["sha256"]
+    if cout_abonnement is not None:
+        empreintes[cout_abonnement[0]] = cout_abonnement[2]
     relatif_sources_plans = CHEMIN_SOURCES_PLANS.as_posix()
     if verrou_charge is not None:
         empreintes[verrou_charge[0]] = verrou_charge[2]
@@ -14358,6 +14841,15 @@ def _rendre_page(racine: Path) -> bytes:
             )
         )
 
+    if cout_abonnement is not None:
+        # Le document de coût d'abonnement versionné est restitué tel
+        # quel, jamais recalculé au rendu
+        sections.append(
+            _section_cout_abonnement(
+                cout_abonnement[0], cout_abonnement[2], cout_abonnement[1]
+            )
+        )
+
     if configurations:
         article_identites_inconnues = _article(
             "fait",
@@ -14686,6 +15178,11 @@ def _rendre_page(racine: Path) -> bytes:
                 if recuperation is not None
                 else ()
             ),
+            *(
+                ((cout_abonnement[0], SECTION_COUT_ABONNEMENT),)
+                if cout_abonnement is not None
+                else ()
+            ),
             (etat_relatif, "état V1 versionné"),
         )
     )
@@ -14749,6 +15246,16 @@ def restituer(racine: Path) -> int:
     etat = _charger_etat(racine)
     repertoire = _repertoire_recus(racine, etat)
     repertoire.mkdir(parents=True, exist_ok=True)
+    # Reçu de coût d'abonnement : dérivé strictement des sources
+    # courantes ; un reçu existant est régénéré avant le rendu pour que
+    # la page ne restitue jamais une citation de source périmée. Un
+    # reçu absent n'est jamais créé ici : seule la sous-commande cout
+    # le produit.
+    chemin_cout = racine / CHEMIN_COUT_ABONNEMENT
+    if os.path.lexists(chemin_cout) and stat.S_ISREG(
+        os.lstat(chemin_cout).st_mode
+    ):
+        _ecrire_cout_abonnement(racine)
     contenu = _rendre_page(racine)
     chemin_page = racine / CHEMIN_PAGE
     chemin_page.parent.mkdir(parents=True, exist_ok=True)
@@ -15215,6 +15722,112 @@ def verifier_restitution(racine: Path) -> int:
             f"dans la page, {nombre_lignes_metriques} trouvées"
         )
 
+    # Document de coût d'abonnement V1-XS-13 : le document stocké est
+    # comparé à une reconstruction indépendante depuis les sources
+    # (table de métriques, sources de plans, registre officiel), puis la
+    # section rendue est contrôlée dans la page — toute substitution de
+    # NON_DEFINI est déjà refusée au chargement, jamais réparée
+    cout_abonnement = _charger_cout_abonnement(racine)
+    attendu_tarifs_cout = 0
+    attendu_quotas_cout = 0
+    if cout_abonnement is not None:
+        relatif_cout, document_stocke, sha_cout = cout_abonnement
+        empreintes[relatif_cout] = sha_cout
+        for source in document_stocke["sources"]:
+            chemin_source = source["chemin"]
+            if chemin_source not in empreintes:
+                empreintes[chemin_source] = _sha256_fichier(
+                    racine / chemin_source
+                )
+        document_attendu = _construire_cout_abonnement(racine)
+        attendu_tarifs_cout = len(
+            document_attendu["tarifs_catalogue"]["configurations"]
+        )
+        attendu_quotas_cout = len(
+            document_attendu["quotas_declares"]["configurations"]
+        )
+        identifiants_stockes = [
+            tarif["configuration_id"]
+            for tarif in document_stocke["tarifs_catalogue"]["configurations"]
+        ]
+        identifiants_attendus = [
+            tarif["configuration_id"]
+            for tarif in document_attendu["tarifs_catalogue"]["configurations"]
+        ]
+        if identifiants_stockes != identifiants_attendus:
+            echecs.append(
+                "registre de configurations du document de coût "
+                "d'abonnement infidèle : une configuration surnuméraire "
+                "ou absente — aucune réparation"
+            )
+        if (
+            document_stocke["sorties_officiellement_acceptables"]
+            != document_attendu["sorties_officiellement_acceptables"]
+        ):
+            echecs.append(
+                "nombre de sorties officiellement acceptables du document "
+                "de coût d'abonnement divergent de la table de métriques "
+                f"{CHEMIN_TABLE_METRIQUES.as_posix()} — aucune réparation"
+            )
+        if (
+            document_stocke["tarifs_catalogue"]
+            != document_attendu["tarifs_catalogue"]
+        ):
+            echecs.append(
+                "tarifs catalogue du document de coût d'abonnement "
+                "infidèles — aucune réparation"
+            )
+        if (
+            document_stocke["quotas_declares"]
+            != document_attendu["quotas_declares"]
+        ):
+            echecs.append(
+                "quotas déclarés du document de coût d'abonnement "
+                "infidèles — aucune réparation"
+            )
+        if (
+            document_stocke["decision"] != document_attendu["decision"]
+            or document_stocke["metrique"] != document_attendu["metrique"]
+            or document_stocke["sources"] != document_attendu["sources"]
+        ):
+            echecs.append(
+                "décision, métrique ou sources du document de coût "
+                "d'abonnement infidèles — aucune réparation"
+            )
+        attendu_section_cout = _section_cout_abonnement(
+            relatif_cout, sha_cout, document_stocke
+        )
+        if attendu_section_cout not in page:
+            echecs.append(
+                "section du coût d'abonnement infidèle ou absente"
+            )
+    nombre_sections_cout = page.count('<section id="cout-abonnement-v1">')
+    attendu_sections_cout = 0 if cout_abonnement is None else 1
+    if nombre_sections_cout != attendu_sections_cout:
+        echecs.append(
+            f"{attendu_sections_cout} section de coût d'abonnement "
+            f"attendue dans la page, {nombre_sections_cout} trouvée"
+        )
+    nombre_metriques_cout = page.count(' data-cout-metrique="non-defini"')
+    if nombre_metriques_cout != attendu_sections_cout:
+        echecs.append(
+            f"{attendu_sections_cout} métrique de coût d'abonnement "
+            f"NON_DEFINI attendue dans la page, {nombre_metriques_cout} "
+            "trouvée"
+        )
+    nombre_tarifs_cout = page.count(' data-cout-tarif="')
+    if nombre_tarifs_cout != attendu_tarifs_cout:
+        echecs.append(
+            f"{attendu_tarifs_cout} tarifs catalogue attendus dans la "
+            f"page, {nombre_tarifs_cout} trouvés"
+        )
+    nombre_quotas_cout = page.count(' data-cout-quota="')
+    if nombre_quotas_cout != attendu_quotas_cout:
+        echecs.append(
+            f"{attendu_quotas_cout} lignes de quotas déclarés attendues "
+            f"dans la page, {nombre_quotas_cout} trouvées"
+        )
+
     for relatif, enveloppe, sha in recus_officiels:
         attendu = _article_acquisition_officielle(relatif, sha, enveloppe)
         if attendu not in page:
@@ -15341,8 +15954,8 @@ _USAGE = (
     "| acquerir --completion --configuration <id> "
     "| preflight --configuration <id> "
     "| qualifier | verrouiller | valider | dossiers | geler | etat "
-    "| metriques | restituer | verifier-restitution | preparer-recuperation "
-    "| preparer-completion"
+    "| metriques | cout | restituer | verifier-restitution "
+    "| preparer-recuperation | preparer-completion"
 )
 
 
@@ -15381,16 +15994,22 @@ def principal(
         except ErreurRestitution as erreur:
             print(f"ECHEC {erreur}")
             return 1
+    if arguments == ["cout"]:
+        try:
+            return cout(racine)
+        except (ErreurRestitution, ErreurSourcesPlans) as erreur:
+            print(f"ECHEC {erreur}")
+            return 1
     if arguments == ["restituer"]:
         try:
             return restituer(racine)
-        except ErreurRestitution as erreur:
+        except (ErreurRestitution, ErreurSourcesPlans) as erreur:
             print(f"ECHEC {erreur}")
             return 1
     if arguments == ["verifier-restitution"]:
         try:
             return verifier_restitution(racine)
-        except ErreurRestitution as erreur:
+        except (ErreurRestitution, ErreurSourcesPlans) as erreur:
             print(f"ECHEC {erreur}")
             return 1
     if arguments == ["preparer-recuperation"]:
