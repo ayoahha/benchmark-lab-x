@@ -474,6 +474,304 @@ class RestitutionCompleteAbstentionTests(unittest.TestCase):
         code, sortie = self._commande("verifier-restitution")
         self.assertEqual(code, 0, sortie)
 
+    def test_completion_present_sans_verrou_jamais_cite_ni_promu(self):
+        # Arbre partiel : verrou de complétion présent sans verrou de
+        # campagne ni préflight — aucun span ne le cite, donc son
+        # empreinte n'entre pas dans la provenance ; restituer et
+        # verifier-restitution restent cohérents
+        destination = self.racine / M.CHEMIN_VERROU_COMPLETION
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(RACINE / M.CHEMIN_VERROU_COMPLETION, destination)
+        code, sortie = self._commande("restituer")
+        self.assertEqual(code, 0, sortie)
+        page = self.page.read_text(encoding="utf-8")
+        self.assertNotIn("verrou-completion.json", page)
+        self.assertNotIn("APTITUDE_STATIQUE_PRETE", page)
+        code, sortie = self._commande("verifier-restitution")
+        self.assertEqual(code, 0, sortie)
+
+
+class RetoursProprietairesTests(_ArbrePreuvesReelles):
+    """Les douze retours propriétaires de la revue humaine : instantanés
+    historiques datés, blockers explicites, autorités distinguées et
+    parcours V1 au statut dérivé des preuves. Aucune preuve n'est
+    modifiée ; seule la lisibilité change."""
+
+    def test_encadre_blocages_reels_en_tete(self):
+        page = self._restituer()
+        self.assertEqual(page.count('<section id="blocages-reels"'), 1)
+        # L'encadré précède l'état courant : il est lu en premier
+        self.assertLess(
+            page.index('<section id="blocages-reels"'),
+            page.index('<section id="etat-v1">'),
+        )
+        self.assertIn("Blocages réels à lever", page)
+        encadre = page.split('<section id="blocages-reels"', 1)[1].split(
+            "</section>", 1
+        )[0]
+        for bloc in ("historique", "inconnues", "actions"):
+            self.assertEqual(
+                encadre.count(f' data-blocage="{bloc}"'), 1, bloc
+            )
+        self.assertIn("NOT_GRANTED", encadre)
+        self.assertIn("D-V1-04", encadre)
+        self.assertIn("identité réellement servie", encadre)
+        self.assertIn("D-V1-01", encadre)
+
+    def test_panel_inconnu_etiquete_instantane_historique(self):
+        page = self._restituer()
+        section = page.split('<section id="panel-officiel">', 1)[1].split(
+            "</section>", 1
+        )[0]
+        self.assertIn("instantané historique", section)
+        self.assertIn("D-V1-01", section)
+        self.assertIn("2026-08-22", section)
+        # L'état validé et daté est montré séparément, sans réécrire
+        # les INCONNU historiques
+        self.assertEqual(section.count(' data-plans-valides="resume"'), 1)
+        self.assertIn("sources-plans-v1.toml", section)
+        self.assertIn('href="#verrou-campagne"', section)
+        self.assertIn("INCONNU", section)
+
+    def test_explication_ready_identite_servie_inconnue(self):
+        page = self._restituer()
+        for identifiant in _COMPARABLES:
+            motif = re.compile(
+                '<article class="affirmation"[^>]*'
+                f' data-explication-preflight="{identifiant}"[^>]*>'
+                ".*?</article>",
+                re.DOTALL,
+            )
+            article = motif.search(page)
+            self.assertIsNotNone(article, identifiant)
+            texte = article.group(0)
+            self.assertIn("non génératif", texte)
+            self.assertIn("identite_reellement_servie", texte)
+            self.assertIn("INCONNU", texte)
+            self.assertIn("Blocage exact", texte)
+            self.assertIn("observation générative", texte)
+            self.assertIn("autorité propriétaire", texte)
+            self.assertIn('class="blocage"', texte)
+
+    def test_explication_missing_observation_cinq_configurations(self):
+        page = self._restituer()
+        for identifiant in _ABSENTS:
+            motif = re.compile(
+                '<article class="affirmation"[^>]*'
+                f' data-explication-preflight="{identifiant}"[^>]*>'
+                ".*?</article>",
+                re.DOTALL,
+            )
+            article = motif.search(page)
+            self.assertIsNotNone(article, identifiant)
+            texte = article.group(0)
+            # La CLI n'est jamais dite absente : le reçu prouve des
+            # observations locales
+            self.assertIn("n'est pas absente", texte)
+            self.assertIn("ne prouve aucun des faits distants", texte)
+            self.assertIn("READY", texte)
+            self.assertIn("APTITUDE_STATIQUE_PRETE", texte)
+            self.assertIn("ne prouve jamais", texte)
+            self.assertIn("Blocage restant", texte)
+            self.assertIn('class="blocage"', texte)
+            self.assertIn("verrou-completion.json", texte)
+
+    def test_autorites_not_granted_historique_et_cinq_restants(self):
+        page = self._restituer()
+        section = page.split(
+            '<section id="autorite-acquisition">', 1
+        )[1].split("</section>", 1)[0]
+        # NOT_GRANTED historique jamais formulé comme interdiction
+        # actuelle sur les deux créneaux exécutés sous D-V1-04
+        self.assertIn("état historique", section)
+        self.assertIn("aucune interdiction actuelle", section)
+        self.assertIn("verrou-completion.json", section)
+        self.assertIn("zéro créneau exécuté", section)
+        self.assertIn("nouvelle autorité propriétaire bornée", section)
+        # Portée réellement dérivée : D-V1-04 ne nomme aucune des
+        # configurations en attente ; aucune négative universelle sur
+        # des artefacts non chargés
+        self.assertIn("ne nomme aucune de ces configurations", section)
+        self.assertNotIn("Aucun artefact d'autorité versionné", page)
+
+    def test_explication_fail_g001(self):
+        page = self._restituer()
+        section = page.split(
+            '<section id="validation-automatique">', 1
+        )[1].split("</section>", 1)[0]
+        self.assertEqual(
+            section.count(' data-explication-validation="fail-g-001"'), 1
+        )
+        self.assertIn("G-005", section)
+        self.assertIn("G-001", section)
+        self.assertIn("CANDIDATE_ERROR", section)
+        self.assertIn("enveloppe", section)
+        self.assertIn("vocabulaire fermé", section)
+        self.assertIn("dans l'ordre", section)
+        self.assertIn("registre-verite.md", section)
+
+    def test_juge_fantome_et_relecteur_non_sollicite(self):
+        page = self._restituer()
+        section = page.split('<section id="verdicts-humains"', 1)[1].split(
+            "</section>", 1
+        )[0]
+        self.assertIn("DISABLED", section)
+        self.assertIn("juge synthétique", section)
+        self.assertIn("pas un blocage", section)
+        self.assertIn("D-V1-06", section)
+        self.assertIn("zéro dossier", section)
+        self.assertIn("aucune", section)
+        self.assertIn("PASS", section)
+        self.assertIn("ne peut pas la fabriquer", section)
+        # DISABLED est un fait ; le rationnel du juge fantôme est une
+        # déduction raisonnée, prémisses visibles, U-015 citée
+        article = re.search(
+            '<article class="affirmation"[^>]*'
+            ' data-explication-verdicts="juge-fantome"[^>]*>.*?</article>',
+            section,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(article)
+        self.assertIn('data-classe="deduction"', article.group(0))
+        self.assertIn("data-premisses=", article.group(0))
+        self.assertIn("U-015", article.group(0))
+
+    def test_plans_sans_universelle_validee_datee(self):
+        page = self._restituer()
+        # L'universelle « validés et datés » ne correspond pas aux
+        # sources : quatre dates de publication restent NON_DEFINI et
+        # l'entrée Codex reste une déduction raisonnée
+        self.assertNotIn("validés et datés", page)
+        article = re.search(
+            '<article class="affirmation"[^>]*'
+            ' data-plans-valides="resume"[^>]*>.*?</article>',
+            page,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(article)
+        texte = article.group(0)
+        self.assertIn("date de consultation", texte)
+        self.assertIn("FAIT_ETABLI", texte)
+        self.assertIn("DEDUCTION_RAISONNEE", texte)
+        self.assertIn("NON_DEFINI", texte)
+        self.assertIn("4 entrée(s)", texte)
+        self.assertIn("V1_XS_07_PLAN_CONTRACT", texte)
+
+    def test_identites_incompletes_jamais_realisees(self):
+        # Dérivation unitaire : la configuration réelle porte des champs
+        # INCONNU, l'identité n'est pas complète ; une copie sans INCONNU
+        # devient complète
+        chemin = (
+            self.racine
+            / _CAMPAGNE
+            / "registre-panel-v1"
+            / "claude-code-fable-5.toml"
+        )
+        import tomllib
+
+        donnees = tomllib.loads(chemin.read_text(encoding="utf-8"))
+        self.assertFalse(M._identite_complete(donnees))
+
+        def _remplacer(valeur):
+            if isinstance(valeur, dict):
+                return {cle: _remplacer(val) for cle, val in valeur.items()}
+            if isinstance(valeur, list):
+                return [_remplacer(val) for val in valeur]
+            return "x" if valeur == "INCONNU" else valeur
+
+        self.assertTrue(M._identite_complete(_remplacer(donnees)))
+        # Sur la page : l'étape panel reste PARTIEL, jamais RÉALISÉ,
+        # tant que les identités requises restent incomplètes
+        page = self._restituer()
+        article = re.search(
+            '<article class="affirmation"[^>]*'
+            ' data-etape="panel-abonnement"[^>]*>.*?</article>',
+            page,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(article)
+        self.assertIn(
+            'data-parcours-statut="partiel"', article.group(0)
+        )
+        self.assertIn("INCONNU", article.group(0))
+        self.assertIn("matérialisé", article.group(0))
+
+    def test_verrou_completion_rendu_suit_la_source(self):
+        # Le rendu reprend les champs aptitude_statique du JSON : une
+        # divergence du fichier source se retrouve dans la page, jamais
+        # un littéral dupliqué dans le code
+        chemin = self.racine / M.CHEMIN_VERROU_COMPLETION
+        verrou = json.loads(chemin.read_text(encoding="utf-8"))
+        verrou["aptitude_statique"]["signifie"] = "SENS_DIVERGENT_TEST"
+        verrou["aptitude_statique"]["ne_prouve_jamais"] = [
+            "PREUVE_DIVERGENTE_TEST"
+        ]
+        chemin.write_text(
+            json.dumps(verrou, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        page = self._restituer()
+        self.assertIn("SENS_DIVERGENT_TEST", page)
+        self.assertIn("PREUVE_DIVERGENTE_TEST", page)
+        code, sortie = self._verifier()
+        self.assertEqual(code, 0, sortie)
+
+    def test_parcours_v1_statuts_derives_des_preuves(self):
+        page = self._restituer()
+        self.assertEqual(page.count(' data-parcours-statut="realise"'), 4)
+        self.assertEqual(page.count(' data-parcours-statut="partiel"'), 1)
+        self.assertEqual(page.count(' data-parcours-statut="bloque"'), 1)
+        # Aucune étape « à venir » quand des preuves existent
+        self.assertEqual(page.count('data-marqueur="a-venir"'), 0)
+        noms = re.findall(r' data-etape="([^"]+)"', page)
+        self.assertEqual(noms, [nom for nom, _, _, _ in M.ETAPES_FUTURES])
+        self.assertIn("RÉALISÉ", page)
+        self.assertIn("PARTIEL", page)
+        self.assertIn("BLOQUÉ", page)
+        section = page.split('<section id="etapes-futures">', 1)[1].split(
+            "</section>", 1
+        )[0]
+        # Panel : PARTIEL, identités requises incomplètes (INCONNU)
+        self.assertIn(
+            ' data-etape="panel-abonnement" data-parcours-statut="partiel"',
+            section,
+        )
+        # Reçus immuables : RÉALISÉ sur son propre critère « chaque
+        # acquisition », dénominateur = acquisitions, pas configurations
+        article_recus = re.search(
+            '<article class="affirmation"[^>]*'
+            ' data-etape="recus-immuables"[^>]*>.*?</article>',
+            section,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(article_recus)
+        self.assertIn(
+            'data-parcours-statut="realise"', article_recus.group(0)
+        )
+        self.assertIn("4 acquisition(s)", article_recus.group(0))
+        self.assertIn("4 reçu(s)", article_recus.group(0))
+        self.assertIn("2 configuration(s)", article_recus.group(0))
+        self.assertIn("ne complète pas le panel", article_recus.group(0))
+        # Acceptabilité : bloquée par zéro PASS sur le lot courant
+        self.assertIn("zéro verdict automatique", section)
+
+    def test_refuse_statut_parcours_altere(self):
+        page = self._restituer()
+        sortie = self._verifier_apres_injection(
+            page,
+            page.replace(
+                ' data-parcours-statut="bloque"',
+                ' data-parcours-statut="realise"',
+            ),
+        )
+        self.assertIn("parcours", sortie)
+
+    def test_verifier_conforme_et_regeneration_byte_identique(self):
+        premiere = self._restituer()
+        code, sortie = self._verifier()
+        self.assertEqual(code, 0, sortie)
+        self.assertEqual(self._restituer(), premiere)
+
 
 if __name__ == "__main__":
     unittest.main()

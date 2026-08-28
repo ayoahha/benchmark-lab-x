@@ -697,17 +697,68 @@ class IntegrationCompletionTests(_BaseCompletion):
         code, sortie = self._appeler(["preparer-completion"])
         self.assertEqual(code, 0, sortie)
 
-    def test_restitution_identique_avec_ou_sans_verrou(self):
+    def test_restitution_cite_le_verrou_de_completion_sans_le_promouvoir(self):
+        # Contrat de rendu V1-XS-14 (retours propriétaires) : le verrou de
+        # complétion est cité par la page comme source d'explication —
+        # APTITUDE_STATIQUE_PRETE ne prouve jamais READY ni un résultat —
+        # sans changer aucun verdict, aucune preuve ni la conclusion
         code, _ = self._appeler(["restituer"])
         self.assertEqual(code, 0)
-        page_sans = (self.racine / M.CHEMIN_PAGE).read_bytes()
+        page_sans = (self.racine / M.CHEMIN_PAGE).read_text(encoding="utf-8")
+        self.assertNotIn("verrou-completion.json", page_sans)
+        code, sortie = self._appeler(["verifier-restitution"])
+        self.assertEqual(code, 0, sortie)
         code, _ = self._appeler(["preparer-completion"])
         self.assertEqual(code, 0)
         code, _ = self._appeler(["restituer"])
         self.assertEqual(code, 0)
-        self.assertEqual(
-            (self.racine / M.CHEMIN_PAGE).read_bytes(), page_sans
+        page_avec = (self.racine / M.CHEMIN_PAGE).read_text(encoding="utf-8")
+        self.assertNotEqual(page_avec, page_sans)
+        empreinte = hashlib.sha256(
+            self.chemin_verrou_completion.read_bytes()
+        ).hexdigest()
+        relatif = M.CHEMIN_VERROU_COMPLETION.as_posix()
+        self.assertIn(
+            f'data-chemin="{relatif}" data-sha256="{empreinte}"', page_avec
         )
+        self.assertIn("APTITUDE_STATIQUE_PRETE", page_avec)
+        self.assertIn("ne prouve jamais", page_avec)
+        # La conclusion et les jetons factuels restent inchangés
+        self.assertIn("conclusion: ABSTENTION", page_avec)
+        # Les verdicts, comptages et sections de preuve restent
+        # byte-identiques : la citation du verrou n'altère ni l'état, ni
+        # la validation, ni la couverture, ni le parcours
+        # La couverture publiée est retirée par le bac (_helpers_v1) :
+        # la section couverture-v1 n'existe pas ici, dans aucun des deux
+        # états ; les sections présentes doivent rester byte-identiques
+        self.assertNotIn('<section id="couverture-v1"', page_sans)
+        self.assertNotIn('<section id="couverture-v1"', page_avec)
+        for identifiant_section in (
+            '<section id="etat-v1">',
+            '<section id="validation-automatique">',
+            '<section id="etapes-futures">',
+        ):
+            avec = page_avec.split(identifiant_section, 1)[1].split(
+                "</section>", 1
+            )[0]
+            sans = page_sans.split(identifiant_section, 1)[1].split(
+                "</section>", 1
+            )[0]
+            self.assertEqual(avec, sans, identifiant_section)
+        for invariant in (
+            ' data-validation="',
+            ' data-preflight="',
+            ' data-acquisition-officielle="',
+            "FAIL",
+            "HARNESS_ERROR",
+        ):
+            self.assertEqual(
+                page_avec.count(invariant),
+                page_sans.count(invariant),
+                invariant,
+            )
+        code, sortie = self._appeler(["verifier-restitution"])
+        self.assertEqual(code, 0, sortie)
 
 
 if __name__ == "__main__":
