@@ -43,6 +43,7 @@ VERSION_VUE = "restitution-humaine-v1/vue/1"
 _RACINE_CAMPAGNE_V1 = Path("tasks/dev/pre-cadrage-entretien-client/campagne-v1")
 CHEMIN_ETAT = _RACINE_CAMPAGNE_V1 / "etat-v1.json"
 CHEMIN_PAGE = _RACINE_CAMPAGNE_V1 / "restitution-humaine-v1" / "index.html"
+CHEMIN_TABLE_METRIQUES = _RACINE_CAMPAGNE_V1 / "metriques-v1.json"
 
 # Registre officiel de campagne V1 : le panel vit dans ces fichiers, jamais dans le code.
 REGISTRE_OFFICIEL = _RACINE_CAMPAGNE_V1 / "registre-panel-v1"
@@ -11788,6 +11789,791 @@ def etat(racine: Path) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Métriques V1-XS-12B : table déterministe lue du registre de couverture
+# versionné produit par etat (V1-XS-12A), des reçus sous-jacents et du
+# verrou, jamais d'un recalcul de la couverture
+
+SCHEMA_TABLE_METRIQUES = "campagne-v1/metriques-v1/1"
+SECTION_TABLE_METRIQUES = "table de métriques V1 versionnée"
+
+# Décisions du dénominateur décidable (PRD 8.2) : sorties officiellement
+# acceptables, sorties candidat non acceptables et pannes fournisseur
+# attribuables à la configuration ; HARNESS_ERROR et UNABLE_TO_JUDGE en
+# sont exclus. Constante distincte de la couverture (PRD 8.5) : les deux
+# règles partagent aujourd'hui leurs membres sans être la même règle
+_DECISIONS_DECIDABLES = (
+    ETAT_OFFICIELLEMENT_ACCEPTABLE,
+    ETAT_CANDIDAT_NON_ACCEPTABLE,
+    *_PANNES_FOURNISSEUR_ATTRIBUABLES,
+)
+
+# Sept composantes d'effort humain du contrat U-025, publiées séparément,
+# sans conversion monétaire ; toute composante sans preuve reste INCONNU.
+# Le vocabulaire figé est celui de la source locale versionnée citée
+COMPOSANTES_EFFORT_HUMAIN = (
+    "configuration",
+    "integration",
+    "execution",
+    "human_review",
+    "verification",
+    "maintenance",
+    "report_production",
+)
+CHEMIN_VOCABULAIRE_EFFORT = Path(
+    "tasks/dev/pre-cadrage-entretien-client/preuves-u025/p3-v1/README.md"
+)
+# Épingle figée de la source du vocabulaire d'effort : la provenance est
+# documentée sans lecture du fichier à l'exécution ; le test de garde
+# épingle cette empreinte à la source versionnée courante
+EMPREINTE_VOCABULAIRE_EFFORT = (
+    "85ac048784f3c16700bfd2397b481e8f69e49a211c2754333dcc635c8db48c85"
+)
+
+# Politique de latence (PRD 8.4) : le verrou courant ne déclare aucune
+# statistique, la campagne publie donc la distribution complète des
+# latences de configuration. La branche pure injectée reconnaît
+# uniquement la politique LATENCY_MEDIAN_SUCCESS_E2E et valide le
+# contrat exact de la source locale versionnée épinglée ci-dessous :
+# médiane des seules durées E2E explicitement réussies, échecs rapportés
+# séparément et exclus de la médiane, INDEFINIE sans succès ; toute
+# politique ou tout contrat divergent est refusé de façon nommée
+REGLE_LATENCE_DISTRIBUTION_COMPLETE = "DISTRIBUTION_COMPLETE"
+POLITIQUE_LATENCE_MEDIAN_SUCCES_E2E = "LATENCY_MEDIAN_SUCCESS_E2E"
+CHEMIN_CONTRAT_LATENCE = Path(
+    "tasks/dev/pre-cadrage-entretien-client/preuves-u025/p3-v1/lock.json"
+)
+# Épingle figée de la source du contrat de latence : la provenance est
+# documentée sans lecture du fichier à l'exécution ; le test de garde
+# épingle cette empreinte à la source versionnée courante
+EMPREINTE_CONTRAT_LATENCE = (
+    "43a46d9bd4b4ad3cf1c5d2482544f6bc65422b812f66b43a7e0baae32edf7f52"
+)
+CONTRAT_LATENCE_EXACT = {
+    "policy": POLITIQUE_LATENCE_MEDIAN_SUCCES_E2E,
+    "start": "monotonic clock immediately before provider operation",
+    "end": "complete candidate bytes or terminal provider error received",
+    "successful_statistic": "median",
+    "failed_attempts": "reported separately and excluded from success median",
+    "no_success": "INDEFINIE",
+    "segments": [
+        "provider_and_wrapper",
+        "automatic_controls",
+        "human_review",
+        "decision",
+    ],
+}
+
+
+def _mediane_ms(valeurs: list[int]) -> int | float:
+    """Médiane exacte d'une distribution non vide de latences."""
+    triees = sorted(valeurs)
+    milieu = len(triees) // 2
+    if len(triees) % 2:
+        return triees[milieu]
+    bas, haut = triees[milieu - 1], triees[milieu]
+    return (bas + haut) // 2 if (bas + haut) % 2 == 0 else (bas + haut) / 2
+
+
+def _latence_configuration(
+    succes_ms: list[int],
+    politique: str | None,
+    echecs_ms: list[int] | None = None,
+    contrat: dict | None = None,
+) -> dict:
+    """Latence de la configuration : distribution complète tant qu'aucune
+    politique n'est déclarée. La branche pure injectée
+    LATENCY_MEDIAN_SUCCESS_E2E valide le contrat exact de la source
+    versionnée, calcule la médiane des seules durées E2E explicitement
+    réussies, rapporte les échecs séparément en les excluant de la
+    médiane et retourne exactement INDEFINIE sans succès ; la
+    distribution des succès et les échecs restent visibles."""
+    if politique is None:
+        return {
+            "regle": REGLE_LATENCE_DISTRIBUTION_COMPLETE,
+            "distribution_ms": succes_ms,
+        }
+    if politique != POLITIQUE_LATENCE_MEDIAN_SUCCES_E2E:
+        raise ErreurRestitution(
+            f"politique de latence inconnue : '{politique}' — seule "
+            f"'{POLITIQUE_LATENCE_MEDIAN_SUCCES_E2E}' est reconnue"
+        )
+    if contrat != CONTRAT_LATENCE_EXACT:
+        raise ErreurRestitution(
+            "contrat de latence divergent de la source versionnée "
+            f"{CHEMIN_CONTRAT_LATENCE.as_posix()} @ "
+            f"{EMPREINTE_CONTRAT_LATENCE}"
+        )
+    return {
+        "regle": politique,
+        "valeur_ms": (
+            _mediane_ms(succes_ms)
+            if succes_ms
+            else CONTRAT_LATENCE_EXACT["no_success"]
+        ),
+        "distribution_ms": list(succes_ms),
+        "echecs_ms": list(echecs_ms or []),
+    }
+
+
+def _empreinte_ou_absente(racine: Path, relatif: str) -> str | None:
+    """SHA-256 du fichier visé, ou None lorsqu'il est absent."""
+    try:
+        return _sha256_fichier(racine / relatif)
+    except OSError:
+        return None
+
+
+def _motifs_divergence_comparabilite(
+    racine: Path,
+    creneau: dict,
+    recus_config: list[tuple[str, dict, str]],
+    entrees_config: list[dict] | None,
+    entree_verrou: dict | None,
+    descripteurs_recuperation: dict[tuple[str, str], dict] | None,
+) -> list[str]:
+    """Motifs exacts de divergence de comparabilité d'une configuration,
+    axes dans l'ordre figé : carte, paquet, harnais, règles d'incident,
+    fenêtre de fraîcheur. Liste vide : configuration comparable. Aucune
+    réparation, aucune divergence masquée."""
+    motifs: list[str] = []
+    sha_carte = _empreinte_ou_absente(racine, CHEMIN_CARTE)
+    for relatif, enveloppe, _ in recus_config:
+        charge = enveloppe["payload"]
+        carte = charge["carte"]
+        if carte["chemin"] != CHEMIN_CARTE or carte["sha256"] != sha_carte:
+            motifs.append(
+                f"divergence de carte : le reçu {relatif} porte "
+                f"{carte['chemin']} @ {carte['sha256']} au lieu de "
+                f"{CHEMIN_CARTE} @ {sha_carte}"
+            )
+        paquet = charge["paquet"]
+        if (
+            paquet["chemin"] != CHEMIN_PAQUET
+            or paquet["sha256"] != EMPREINTE_MANIFESTE_APPROUVEE
+        ):
+            motifs.append(
+                f"divergence de paquet : le reçu {relatif} porte "
+                f"{paquet['chemin']} @ {paquet['sha256']} au lieu du "
+                f"paquet approuvé {CHEMIN_PAQUET} @ "
+                f"{EMPREINTE_MANIFESTE_APPROUVEE}"
+            )
+        recuperation = charge.get("recuperation")
+        if recuperation is not None:
+            if descripteurs_recuperation is None:
+                raise ErreurRestitution(
+                    "verrou de récupération absent alors qu'un reçu de "
+                    "récupération existe : l'identité du harnais n'est "
+                    "pas vérifiable"
+                )
+            descripteur = descripteurs_recuperation.get(
+                (creneau["configuration_id"], recuperation["acquisition_id"])
+            )
+            requete = charge["requete"]
+            if (
+                descripteur is None
+                or requete["argv_resolu"] != descripteur["argv"]
+                or requete["mode_stdin"] != descripteur["stimulus_utf8"]
+            ):
+                motifs.append(
+                    f"divergence de harnais : la requête du reçu {relatif} "
+                    "diverge du descripteur verrouillé de l'acquisition "
+                    f"{recuperation['acquisition_id']}"
+                )
+    if entrees_config is not None:
+        incidents_attendus = [
+            entree["cause_recue"]
+            for entree in entrees_config
+            if entree["verdict"] is None
+        ]
+    else:
+        incidents_attendus = [
+            enveloppe["payload"]["execution"]["incident"]
+            for _, enveloppe, _ in recus_config
+            if enveloppe["payload"]["execution"]["etat"] == "INCIDENT"
+        ]
+    if creneau["incidents"] != incidents_attendus:
+        motifs.append(
+            "divergence des règles d'incident : le registre de couverture "
+            f"porte {creneau['incidents']} mais les preuves portent "
+            f"{incidents_attendus}"
+        )
+    if entree_verrou is None:
+        motifs.append(
+            "divergence de fenêtre de fraîcheur : configuration absente "
+            "du panel verrouillé"
+        )
+    else:
+        epingle = entree_verrou["configuration"]
+        empreinte_configuration = _empreinte_ou_absente(
+            racine, epingle["chemin"]
+        )
+        if (
+            empreinte_configuration is None
+            or empreinte_configuration != epingle["sha256"]
+        ):
+            motifs.append(
+                "divergence de fenêtre de fraîcheur : CONFIGURATION_CHANGED "
+                f"sur {epingle['chemin']} (règle {REGLE_FRAICHEUR_VERROU})"
+            )
+        preflight = entree_verrou["preflight"]
+        empreinte_preflight = _empreinte_ou_absente(
+            racine, preflight["chemin"]
+        )
+        if empreinte_preflight is None or empreinte_preflight != preflight[
+            "sha256"
+        ]:
+            motifs.append(
+                "divergence de fenêtre de fraîcheur : "
+                f"LOCKED_ARTIFACT_CHANGED sur {preflight['chemin']} "
+                f"(règle {REGLE_FRAICHEUR_VERROU})"
+            )
+    return motifs
+
+
+def _ligne_metriques_creneau(creneau: dict) -> dict:
+    """Numérateur et dénominateur décidable d'un créneau du registre de
+    couverture publié : la décision portée par le créneau est lue, jamais
+    recalculée."""
+    decision = creneau["decision"]
+    numerateur = 1 if decision == ETAT_OFFICIELLEMENT_ACCEPTABLE else 0
+    denominateur = 1 if decision in _DECISIONS_DECIDABLES else 0
+    return {
+        "configuration_id": creneau["configuration_id"],
+        "decision": decision,
+        "numerateur": numerateur,
+        "denominateur_decidable": denominateur,
+        "taux": (
+            f"{numerateur}/{denominateur}" if denominateur else "NON_DEFINI"
+        ),
+    }
+
+
+def _construire_table_metriques(racine: Path) -> dict:
+    """Table de métriques V1 construite depuis les sources versionnées :
+    registre de couverture publié par etat (repris à l'identique, jamais
+    recalculé), reçus officiels, verrou de campagne et verrou de
+    récupération. Déterministe ; tout manquement est un refus nommé."""
+    etat_v1 = _charger_etat(racine)
+    couverture = etat_v1.get("couverture")
+    if couverture is None:
+        raise ErreurRestitution(
+            "registre de couverture absent de l'état V1 : metriques lit la "
+            "couverture publiée par etat (V1-XS-12A) et ne la recalcule pas"
+        )
+    _valider_couverture_etat(couverture)
+    verrou_charge = _charger_verrou_restitution(racine)
+    if verrou_charge is None:
+        raise ErreurRestitution(
+            "verrou de campagne absent : la fenêtre de fraîcheur déclarée "
+            "au verrou n'est pas lisible"
+        )
+    verrou = verrou_charge[1]
+    repertoire = _repertoire_recus(racine, etat_v1)
+    _compter_recus(repertoire)
+    _, recus_officiels = _partitionner_recus(racine, etat_v1)
+    configurations = _configurations_officielles(racine)
+    _verifier_triplets_configuration(racine, recus_officiels, configurations)
+    registre_charge = _charger_registre_validation(racine)
+    entrees_par_config: dict[str, list[dict]] = {}
+    if registre_charge is not None:
+        for entree in registre_charge[1]["entrees"]:
+            entrees_par_config.setdefault(entree["configuration_id"], []).append(
+                entree
+            )
+    recuperation = _charger_verrou_recuperation(racine)
+    descripteurs_recuperation = (
+        None
+        if recuperation is None
+        else {
+            (entree["configuration_id"], entree["acquisition_id"]): entree[
+                "descripteur"
+            ]
+            for entree in recuperation[1]["configurations"]
+        }
+    )
+    panel_verrou = {
+        entree["configuration_id"]: entree for entree in verrou["panel"]
+    }
+    recus_par_config: dict[str, list[tuple[str, dict, str]]] = {}
+    latences_par_config: dict[str, list[int]] = {}
+    for relatif, enveloppe, sha in recus_officiels:
+        identifiant = enveloppe["payload"]["configuration"]["identifiant"]
+        recus_par_config.setdefault(identifiant, []).append(
+            (relatif, enveloppe, sha)
+        )
+        execution = enveloppe["payload"]["execution"]
+        if execution["etat"] == "OBSERVED":
+            latences_par_config.setdefault(identifiant, []).append(
+                execution["latence_ms"]
+            )
+    lignes = []
+    for creneau in couverture["creneaux"]:
+        ligne = _ligne_metriques_creneau(creneau)
+        # PRD 8.4 : la latence de la configuration, lue des reçus observés,
+        # est distinguée du délai complet avant décision officielle ; ce
+        # délai exige les temps de validation automatique et d'obtention
+        # du verdict humain, que les preuves courantes n'établissent pas
+        ligne["latence_configuration"] = _latence_configuration(
+            latences_par_config.get(creneau["configuration_id"], []),
+            None,
+        )
+        ligne["delai_avant_decision_officielle"] = INCONNU
+        identifiant = creneau["configuration_id"]
+        recus_config = recus_par_config.get(identifiant, [])
+        if not creneau["couvert"] and not recus_config:
+            # Aucun reçu d'acquisition : la configuration reste visible
+            # avec sa cause réelle, ses cinq axes de comparabilité ne
+            # sont pas évalués faute de preuve et elle n'entre pas dans
+            # le front de comparaison
+            ligne["comparabilite"] = {
+                "statut": "SANS_OBSERVATION",
+                "cause": creneau["cause"],
+            }
+        else:
+            motifs = _motifs_divergence_comparabilite(
+                racine,
+                creneau,
+                recus_config,
+                (
+                    entrees_par_config.get(identifiant, [])
+                    if registre_charge is not None
+                    else None
+                ),
+                panel_verrou.get(identifiant),
+                descripteurs_recuperation,
+            )
+            ligne["comparabilite"] = (
+                {"statut": "COMPARABLE"}
+                if not motifs
+                else {"statut": "RETIREE", "motif": " ; ".join(motifs)}
+            )
+        lignes.append(ligne)
+    comparables = [
+        ligne
+        for ligne in lignes
+        if ligne["comparabilite"]["statut"] == "COMPARABLE"
+    ]
+    numerateur = sum(ligne["numerateur"] for ligne in comparables)
+    denominateur = sum(ligne["denominateur_decidable"] for ligne in comparables)
+    table = {
+        "schema_table": SCHEMA_TABLE_METRIQUES,
+        "product_version": "V1",
+        "measurement_profile": "abonnement",
+        "couverture_reprise": {
+            "source": {
+                "chemin": CHEMIN_ETAT.as_posix(),
+                "sha256": _sha256_fichier(racine / CHEMIN_ETAT),
+            },
+            "regle": couverture["regle"],
+            "numerateur": couverture["numerateur"],
+            "denominateur": couverture["denominateur"],
+            "fraction": couverture["fraction"],
+        },
+        "regle_latence_configuration": REGLE_LATENCE_DISTRIBUTION_COMPLETE,
+        "fraicheur": {
+            "regle": verrou["fraicheur"]["regle"],
+            "effet": verrou["fraicheur"]["effet"],
+        },
+        "effort_humain": {
+            "provenance_vocabulaire": {
+                "chemin": CHEMIN_VOCABULAIRE_EFFORT.as_posix(),
+                "sha256": EMPREINTE_VOCABULAIRE_EFFORT,
+            },
+            "composantes": [
+                {"composante": composante, "valeur": INCONNU}
+                for composante in COMPOSANTES_EFFORT_HUMAIN
+            ],
+        },
+        "configurations": lignes,
+        "agregat": {
+            "numerateur": numerateur,
+            "denominateur_decidable": denominateur,
+            "taux": f"{numerateur}/{denominateur}" if denominateur else "NON_DEFINI",
+            "configurations_comparables": len(comparables),
+            "configurations_retirees": sum(
+                1
+                for ligne in lignes
+                if ligne["comparabilite"]["statut"] == "RETIREE"
+            ),
+            "configurations_sans_observation": sum(
+                1
+                for ligne in lignes
+                if ligne["comparabilite"]["statut"] == "SANS_OBSERVATION"
+            ),
+        },
+    }
+    return table
+
+
+def metriques(racine: Path) -> int:
+    """Table de métriques V1 : numérateur OFFICIALLY_ACCEPTABLE et
+    dénominateur décidable par configuration et pour l'agrégat, couverture
+    reprise à l'identique du registre publié par etat.
+
+    L'écriture est déterministe et idempotente. Aucune acquisition, aucun
+    appel candidat, aucune dépense."""
+    table = _construire_table_metriques(racine)
+    chemin_table = racine / CHEMIN_TABLE_METRIQUES
+    chemin_table.write_bytes(
+        (json.dumps(table, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    )
+    print(f"table de métriques écrite : {CHEMIN_TABLE_METRIQUES.as_posix()}")
+    return 0
+
+
+_CLES_TABLE_METRIQUES = {
+    "schema_table",
+    "product_version",
+    "measurement_profile",
+    "couverture_reprise",
+    "regle_latence_configuration",
+    "fraicheur",
+    "effort_humain",
+    "configurations",
+    "agregat",
+}
+_CLES_LIGNE_METRIQUES = {
+    "configuration_id",
+    "decision",
+    "numerateur",
+    "denominateur_decidable",
+    "taux",
+    "latence_configuration",
+    "delai_avant_decision_officielle",
+    "comparabilite",
+}
+
+
+def _valider_latence_metriques(latence: object, contexte: str) -> None:
+    """Bloc de latence de configuration d'une ligne de métriques, schéma
+    fermé."""
+    if not isinstance(latence, dict) or "regle" not in latence:
+        raise ErreurRestitution(
+            f"table de métriques : latence de configuration hors schéma "
+            f"fermé ({contexte})"
+        )
+    if latence["regle"] == REGLE_LATENCE_DISTRIBUTION_COMPLETE:
+        attendues = {"regle", "distribution_ms"}
+    elif latence["regle"] == POLITIQUE_LATENCE_MEDIAN_SUCCES_E2E:
+        attendues = {"regle", "valeur_ms", "distribution_ms", "echecs_ms"}
+    else:
+        raise ErreurRestitution(
+            f"table de métriques : règle de latence inconnue ({contexte})"
+        )
+    if set(latence) != attendues or not isinstance(
+        latence["distribution_ms"], list
+    ):
+        raise ErreurRestitution(
+            f"table de métriques : latence de configuration hors schéma "
+            f"fermé ({contexte})"
+        )
+
+
+def _charger_table_metriques(racine: Path) -> tuple[str, dict, str] | None:
+    """Table de métriques validée pour le rendu : (chemin relatif, table,
+    SHA-256), ou None lorsqu'elle n'est pas matérialisée. Toute dérive de
+    forme est un refus fail-closed, jamais une réparation."""
+    chemin = racine / CHEMIN_TABLE_METRIQUES
+    if not os.path.lexists(chemin):
+        return None
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurRestitution(
+            "table de métriques : fichier régulier non symbolique attendu"
+        )
+    try:
+        table = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as erreur:
+        raise ErreurRestitution(
+            f"table de métriques illisible : {erreur}"
+        ) from erreur
+    if not isinstance(table, dict) or set(table) != _CLES_TABLE_METRIQUES:
+        raise ErreurRestitution("table de métriques : clés hors schéma fermé")
+    if table["schema_table"] != SCHEMA_TABLE_METRIQUES:
+        raise ErreurRestitution(
+            f"table de métriques : schéma '{SCHEMA_TABLE_METRIQUES}' attendu"
+        )
+    if (
+        table["product_version"] != "V1"
+        or table["measurement_profile"] != "abonnement"
+    ):
+        raise ErreurRestitution(
+            "table de métriques : version produit ou profil de mesure "
+            "hors contrat V1 abonnement"
+        )
+    reprise = table["couverture_reprise"]
+    if not isinstance(reprise, dict) or set(reprise) != {
+        "source",
+        "regle",
+        "numerateur",
+        "denominateur",
+        "fraction",
+    }:
+        raise ErreurRestitution(
+            "table de métriques : couverture reprise hors schéma fermé"
+        )
+    source = reprise["source"]
+    if not isinstance(source, dict) or set(source) != {"chemin", "sha256"}:
+        raise ErreurRestitution(
+            "table de métriques : source de couverture hors schéma fermé"
+        )
+    effort = table["effort_humain"]
+    if not isinstance(effort, dict) or set(effort) != {
+        "provenance_vocabulaire",
+        "composantes",
+    }:
+        raise ErreurRestitution(
+            "table de métriques : effort humain hors schéma fermé — "
+            "provenance du vocabulaire et composantes attendues"
+        )
+    provenance = effort["provenance_vocabulaire"]
+    if not isinstance(provenance, dict) or set(provenance) != {
+        "chemin",
+        "sha256",
+    }:
+        raise ErreurRestitution(
+            "table de métriques : provenance du vocabulaire d'effort "
+            "hors schéma fermé"
+        )
+    composantes = effort["composantes"]
+    if (
+        not isinstance(composantes, list)
+        or [c.get("composante") for c in composantes if isinstance(c, dict)]
+        != list(COMPOSANTES_EFFORT_HUMAIN)
+        or any(
+            not isinstance(c, dict)
+            or set(c) != {"composante", "valeur"}
+            or not isinstance(c["valeur"], str)
+            for c in composantes
+        )
+    ):
+        raise ErreurRestitution(
+            "table de métriques : effort humain hors schéma fermé — les "
+            "sept composantes du contrat U-025, séparées, sont attendues"
+        )
+    lignes = table["configurations"]
+    if not isinstance(lignes, list):
+        raise ErreurRestitution(
+            "table de métriques : configurations hors schéma fermé"
+        )
+    for ligne in lignes:
+        if not isinstance(ligne, dict) or set(ligne) != _CLES_LIGNE_METRIQUES:
+            raise ErreurRestitution(
+                "table de métriques : ligne de configuration hors schéma "
+                "fermé"
+            )
+        _valider_latence_metriques(
+            ligne["latence_configuration"], ligne["configuration_id"]
+        )
+        if ligne["delai_avant_decision_officielle"] != INCONNU:
+            raise ErreurRestitution(
+                "table de métriques : délai complet avant décision "
+                "officielle hors contrat — INCONNU tant que les temps de "
+                "validation et de verdict humain ne sont pas établis "
+                f"({ligne['configuration_id']})"
+            )
+        comparabilite = ligne["comparabilite"]
+        if not isinstance(comparabilite, dict) or (
+            comparabilite.get("statut") == "COMPARABLE"
+            and set(comparabilite) != {"statut"}
+        ) or (
+            comparabilite.get("statut") == "RETIREE"
+            and (
+                set(comparabilite) != {"statut", "motif"}
+                or not isinstance(comparabilite["motif"], str)
+            )
+        ) or (
+            comparabilite.get("statut") == "SANS_OBSERVATION"
+            and (
+                set(comparabilite) != {"statut", "cause"}
+                or comparabilite["cause"] not in _CAUSES_NON_COUVERTES
+            )
+        ) or comparabilite.get("statut") not in (
+            "COMPARABLE",
+            "RETIREE",
+            "SANS_OBSERVATION",
+        ):
+            raise ErreurRestitution(
+                "table de métriques : comparabilité hors schéma fermé — "
+                "une configuration retirée porte un motif exact, une "
+                "configuration sans observation porte sa cause exacte"
+            )
+    agregat = table["agregat"]
+    if not isinstance(agregat, dict) or set(agregat) != {
+        "numerateur",
+        "denominateur_decidable",
+        "taux",
+        "configurations_comparables",
+        "configurations_retirees",
+        "configurations_sans_observation",
+    }:
+        raise ErreurRestitution(
+            "table de métriques : agrégat hors schéma fermé"
+        )
+    return CHEMIN_TABLE_METRIQUES.as_posix(), table, _sha256_fichier(chemin)
+
+
+SECTION_VOCABULAIRE_EFFORT = "vocabulaire d'effort humain U-025 versionné"
+
+
+def _texte_latence_metriques(latence: dict) -> str:
+    """Latence de la configuration rendue selon la politique de latence,
+    distribution toujours visible."""
+    distribution = ", ".join(str(valeur) for valeur in latence["distribution_ms"])
+    if latence["regle"] == REGLE_LATENCE_DISTRIBUTION_COMPLETE:
+        return (
+            "latence de la configuration — aucune statistique "
+            "préenregistrée, distribution complète publiée : "
+            f"<code>[{_echapper(distribution)}]</code> ms"
+        )
+    echecs = ", ".join(str(valeur) for valeur in latence["echecs_ms"])
+    return (
+        "latence de la configuration — politique "
+        f"<code>{_echapper(latence['regle'])}</code> : médiane des durées "
+        "E2E explicitement réussies "
+        f"<code>{_echapper(str(latence['valeur_ms']))}</code> ms · "
+        f"distribution des succès <code>[{_echapper(distribution)}]</code> "
+        "ms · échecs rapportés séparément et exclus de la médiane "
+        f"<code>[{_echapper(echecs)}]</code> ms"
+    )
+
+
+def _article_metriques_configuration(
+    relatif: str, sha: str, ligne: dict
+) -> str:
+    """Ligne de métriques d'une configuration : numérateur, dénominateur
+    décidable et taux sans masquage, latence de la configuration distinguée
+    du délai complet avant décision officielle (PRD 8.4), statut de
+    comparabilité et motif exact de tout retrait."""
+    decision = (
+        ligne["decision"] if ligne["decision"] is not None else "aucune"
+    )
+    comparabilite = ligne["comparabilite"]
+    if comparabilite["statut"] == "COMPARABLE":
+        texte_comparabilite = (
+            "comparabilité <code>COMPARABLE</code> : aucune divergence de "
+            "carte, paquet, harnais, règles d'incident ni fenêtre de "
+            "fraîcheur"
+        )
+    elif comparabilite["statut"] == "SANS_OBSERVATION":
+        texte_comparabilite = (
+            "comparabilité <code>SANS_OBSERVATION</code> — cause exacte "
+            f"<code>{_echapper(comparabilite['cause'])}</code> : aucune "
+            "observation d'acquisition ; les cinq axes de comparabilité "
+            "(carte, paquet, harnais, règles d'incident, fenêtre de "
+            "fraîcheur) ne sont pas évalués faute de preuve et la "
+            "configuration n'entre pas dans le front de comparaison"
+        )
+    else:
+        texte_comparabilite = (
+            "comparabilité <code>RETIREE</code> — la configuration est "
+            "retirée du front de comparaison sans disparaître ; motif "
+            f"exact : {_echapper(comparabilite['motif'])}"
+        )
+    return _article(
+        "fait",
+        f"<p><strong>{_echapper(ligne['configuration_id'])}</strong> — "
+        "décision du registre de couverture "
+        f"<code>{_echapper(decision)}</code> · numérateur "
+        f"<code>{ligne['numerateur']}</code> sortie(s) officiellement "
+        "acceptable(s) · dénominateur décidable "
+        f"<code>{ligne['denominateur_decidable']}</code> · taux "
+        f"<code>{_echapper(ligne['taux'])}</code>. "
+        f"{_texte_latence_metriques(ligne['latence_configuration'])}. "
+        "Délai complet avant décision officielle "
+        f"<code>{_echapper(ligne['delai_avant_decision_officielle'])}</code>"
+        " : distinct de la latence de configuration (PRD 8.4), il exige "
+        "les temps de validation automatique et d'obtention du verdict "
+        "humain, que les preuves courantes n'établissent pas. "
+        f"{texte_comparabilite}.</p>"
+        + _span_source(relatif, sha, SECTION_TABLE_METRIQUES),
+        f' data-metriques-configuration="{ligne["configuration_id"]}"',
+    )
+
+
+def _section_table_metriques(relatif: str, sha: str, table: dict) -> str:
+    """Section de la table de métriques V1 : couverture reprise à
+    l'identique avec sa source, agrégat, effort humain en sept
+    composantes, une ligne par configuration."""
+    reprise = table["couverture_reprise"]
+    agregat = table["agregat"]
+    effort = table["effort_humain"]
+    src_table = _span_source(relatif, sha, SECTION_TABLE_METRIQUES)
+    src_couverture = _span_source(
+        reprise["source"]["chemin"],
+        reprise["source"]["sha256"],
+        SECTION_COUVERTURE_ETAT,
+    )
+    src_vocabulaire = _span_source(
+        effort["provenance_vocabulaire"]["chemin"],
+        effort["provenance_vocabulaire"]["sha256"],
+        SECTION_VOCABULAIRE_EFFORT,
+    )
+    composantes = " · ".join(
+        f"<code>{_echapper(composante['composante'])}</code> "
+        f"<code>{_echapper(composante['valeur'])}</code>"
+        for composante in effort["composantes"]
+    )
+    return (
+        '<section id="metriques-v1"><h2>Table de métriques V1</h2>'
+        "<p>Table déterministe et régénérable produite par "
+        "<code>metriques</code> : la couverture est reprise à l'identique "
+        "du registre publié par <code>etat</code> (V1-XS-12A), jamais "
+        "recalculée ; chaque configuration porte son numérateur de sorties "
+        "officiellement acceptables et son dénominateur décidable "
+        "explicite, sans masquage de la taille du dénominateur ; seules "
+        "les configurations portant une preuve d'acquisition entrent dans "
+        "le front de comparaison — une configuration divergente est "
+        "retirée du front sans disparaître, avec le motif exact de son "
+        "retrait, et une configuration sans observation reste visible "
+        "avec sa cause exacte.</p>"
+        + _article(
+            "fait",
+            "<p>Couverture reprise à l'identique : "
+            f"<code>{_echapper(reprise['fraction'])}</code> "
+            f"(règle <code>{_echapper(reprise['regle'])}</code>), lue "
+            "dans le registre de couverture versionné cité ici avec son "
+            "empreinte — aucune couverture n'est recalculée par "
+            "<code>metriques</code>.</p>" + src_couverture + src_table,
+            ' data-metriques-couverture="reprise"',
+        )
+        + _article(
+            "fait",
+            f"<p>Agrégat des configurations comparables : numérateur "
+            f"<code>{agregat['numerateur']}</code> · dénominateur "
+            f"décidable <code>{agregat['denominateur_decidable']}</code> · "
+            f"taux <code>{_echapper(agregat['taux'])}</code> · "
+            f"configurations comparables "
+            f"<code>{agregat['configurations_comparables']}</code> · "
+            f"retirées <code>{agregat['configurations_retirees']}</code> · "
+            "sans observation "
+            f"<code>{agregat['configurations_sans_observation']}</code>. "
+            "Règle de latence de la configuration "
+            f"<code>{_echapper(table['regle_latence_configuration'])}</code>"
+            " · fenêtre de fraîcheur "
+            f"<code>{_echapper(table['fraicheur']['regle'])}</code> "
+            f"(effet <code>{_echapper(table['fraicheur']['effet'])}</code>"
+            ").</p>" + src_table,
+            ' data-metriques-agregat="front"',
+        )
+        + _article(
+            "fait",
+            "<p>Effort humain en sept composantes séparées, sans "
+            "conversion monétaire ; le vocabulaire figé est celui de la "
+            "source versionnée citée ici avec son empreinte ; toute "
+            "composante sans preuve reste <code>INCONNU</code> : "
+            f"{composantes}.</p>" + src_vocabulaire + src_table,
+            ' data-metriques-effort="composantes"',
+        )
+        + "".join(
+            _article_metriques_configuration(relatif, sha, ligne)
+            for ligne in table["configurations"]
+        )
+        + "</section>"
+    )
+
+
 SECTION_DOSSIERS_REVUE = "manifeste de dossiers de revue aveugle V1 versionné"
 SECTION_ENGAGEMENT_ORDRE = "engagement d'ordre de revue aveugle V1 versionné"
 SECTION_CONTROLE_FUITES = "contrôle d'absence de fuite des dossiers V1 versionné"
@@ -13118,6 +13904,7 @@ def _rendre_page(racine: Path) -> bytes:
             verrou_charge,
         )
     couverture_etat = etat.get("couverture")
+    table_metriques = _charger_table_metriques(racine)
     canon_panel = _canon_panel(couverture_etat)
     jeton_panel, jeton_acquisitions, jeton_conclusion = _jetons_attendus(
         etat, len(recus_officiels), len(configurations)
@@ -13145,6 +13932,14 @@ def _rendre_page(racine: Path) -> bytes:
         empreintes[recuperation[0]] = recuperation[2]
     if autorisation_recuperation is not None:
         empreintes[autorisation_recuperation[0]] = autorisation_recuperation[2]
+    if table_metriques is not None:
+        empreintes[table_metriques[0]] = table_metriques[2]
+        # Épingle figée du vocabulaire d'effort cité par la table : la
+        # provenance est figée, sans lecture du fichier à l'exécution
+        provenance_effort = table_metriques[1]["effort_humain"][
+            "provenance_vocabulaire"
+        ]
+        empreintes[provenance_effort["chemin"]] = provenance_effort["sha256"]
     relatif_sources_plans = CHEMIN_SOURCES_PLANS.as_posix()
     if verrou_charge is not None:
         empreintes[verrou_charge[0]] = verrou_charge[2]
@@ -13551,6 +14346,15 @@ def _rendre_page(racine: Path) -> bytes:
         sections.append(
             _section_couverture_etat(
                 etat_relatif, empreintes[etat_relatif], couverture_etat
+            )
+        )
+
+    if table_metriques is not None:
+        # La table de métriques versionnée est restituée telle quelle,
+        # jamais recalculée au rendu
+        sections.append(
+            _section_table_metriques(
+                table_metriques[0], table_metriques[2], table_metriques[1]
             )
         )
 
@@ -14329,6 +15133,88 @@ def verifier_restitution(racine: Path) -> int:
             f"dans la page, {nombre_creneaux_couverture} trouvés"
         )
 
+    # Table de métriques V1-XS-12B : la table stockée est comparée à une
+    # reconstruction indépendante depuis les sources (couverture reprise,
+    # motifs de retrait, latence, effort), puis chaque fragment rendu est
+    # contrôlé dans la page
+    table_metriques = _charger_table_metriques(racine)
+    attendu_lignes_metriques = 0
+    if table_metriques is not None:
+        relatif_table, table_stockee, sha_table = table_metriques
+        empreintes[relatif_table] = sha_table
+        # Épingle figée du vocabulaire d'effort cité par la table : la
+        # provenance est figée, sans lecture du fichier à l'exécution
+        provenance_effort = table_stockee["effort_humain"][
+            "provenance_vocabulaire"
+        ]
+        empreintes[provenance_effort["chemin"]] = provenance_effort["sha256"]
+        table_attendue = _construire_table_metriques(racine)
+        attendu_lignes_metriques = len(table_attendue["configurations"])
+        identifiants_stockes = [
+            ligne["configuration_id"] for ligne in table_stockee["configurations"]
+        ]
+        identifiants_attendus = [
+            ligne["configuration_id"] for ligne in table_attendue["configurations"]
+        ]
+        if identifiants_stockes != identifiants_attendus:
+            echecs.append(
+                "registre de configurations de la table de métriques "
+                "infidèle : une configuration surnuméraire ou absente — "
+                "aucune réparation"
+            )
+        if table_stockee["couverture_reprise"] != table_attendue[
+            "couverture_reprise"
+        ]:
+            echecs.append(
+                "couverture reprise divergente de la couverture source "
+                f"{CHEMIN_ETAT.as_posix()} : "
+                f"{table_attendue['couverture_reprise']['fraction']} "
+                "attendu, "
+                f"{table_stockee['couverture_reprise']['fraction']} "
+                "stocké — aucune réparation"
+            )
+        lignes_stockees = {
+            ligne["configuration_id"]: ligne
+            for ligne in table_stockee["configurations"]
+        }
+        for ligne_attendue in table_attendue["configurations"]:
+            identifiant = ligne_attendue["configuration_id"]
+            ligne_stockee = lignes_stockees.get(identifiant)
+            if (
+                ligne_stockee is None
+                or ligne_stockee["comparabilite"]
+                != ligne_attendue["comparabilite"]
+            ):
+                echecs.append(
+                    f"motif de retrait absent ou inexact : {identifiant}"
+                )
+            elif ligne_stockee != ligne_attendue:
+                echecs.append(
+                    f"ligne de métriques infidèle : {identifiant}"
+                )
+        if table_stockee["agregat"] != table_attendue["agregat"]:
+            echecs.append("agrégat de la table de métriques infidèle")
+        if table_stockee["effort_humain"] != table_attendue["effort_humain"]:
+            echecs.append("effort humain de la table de métriques infidèle")
+        attendu_section_metriques = _section_table_metriques(
+            relatif_table, sha_table, table_stockee
+        )
+        if attendu_section_metriques not in page:
+            echecs.append("section de la table de métriques infidèle ou absente")
+    nombre_sections_metriques = page.count('<section id="metriques-v1">')
+    attendu_sections_metriques = 0 if table_metriques is None else 1
+    if nombre_sections_metriques != attendu_sections_metriques:
+        echecs.append(
+            f"{attendu_sections_metriques} section de table de métriques "
+            f"attendue dans la page, {nombre_sections_metriques} trouvée"
+        )
+    nombre_lignes_metriques = page.count(' data-metriques-configuration="')
+    if nombre_lignes_metriques != attendu_lignes_metriques:
+        echecs.append(
+            f"{attendu_lignes_metriques} lignes de métriques attendues "
+            f"dans la page, {nombre_lignes_metriques} trouvées"
+        )
+
     for relatif, enveloppe, sha in recus_officiels:
         attendu = _article_acquisition_officielle(relatif, sha, enveloppe)
         if attendu not in page:
@@ -14455,7 +15341,7 @@ _USAGE = (
     "| acquerir --completion --configuration <id> "
     "| preflight --configuration <id> "
     "| qualifier | verrouiller | valider | dossiers | geler | etat "
-    "| restituer | verifier-restitution | preparer-recuperation "
+    "| metriques | restituer | verifier-restitution | preparer-recuperation "
     "| preparer-completion"
 )
 
@@ -14486,6 +15372,12 @@ def principal(
     if arguments == ["etat"]:
         try:
             return etat(racine)
+        except ErreurRestitution as erreur:
+            print(f"ECHEC {erreur}")
+            return 1
+    if arguments == ["metriques"]:
+        try:
+            return metriques(racine)
         except ErreurRestitution as erreur:
             print(f"ECHEC {erreur}")
             return 1
