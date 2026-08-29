@@ -34,6 +34,8 @@ sys.path.insert(0, str(RACINE / "tools"))
 
 import campagne_v1 as M  # noqa: E402
 
+from tests._helpers_v1 import realigner_chaine_recus  # noqa: E402
+
 _CAMPAGNE = Path("tasks/dev/pre-cadrage-entretien-client/campagne-v1")
 _SOURCES_PAQUET = RACINE / "tasks/dev/pre-cadrage-entretien-client"
 _FICHIERS_PAQUET = (
@@ -336,40 +338,14 @@ class CoutRafraichissementTests(_ArbrePreuvesReelles, unittest.TestCase):
             "dff58875d0412f275dfc1d781617214e2557ae1eeaf9177885f50b05a8591c2f"
             ".json"
         )
-        repertoire = self.racine / _CAMPAGNE / "recus-v1"
-        cible = repertoire / ancien_nom
-        enveloppe = json.loads(cible.read_text(encoding="utf-8"))
-        mutation(enveloppe["payload"])
-        adresse = M.adresse_canonique(enveloppe["payload"])
-        enveloppe["content_address"]["sha256"] = adresse
-        octets = M.octets_canoniques(enveloppe)
-        cible.unlink()
-        (repertoire / f"{adresse}.json").write_bytes(octets)
-        sha_recu = hashlib.sha256(octets).hexdigest()
-        registre_chemin = self.racine / M.CHEMIN_REGISTRE_VALIDATION
-        registre = json.loads(registre_chemin.read_text(encoding="utf-8"))
-        for entree in registre["entrees"]:
-            if entree["recu"].endswith(ancien_nom):
-                entree["recu"] = (
-                    f"{_CAMPAGNE.as_posix()}/recus-v1/{adresse}.json"
-                )
-                entree["recu_sha256"] = sha_recu
-        octets_registre = M.octets_canoniques(registre)
-        registre_chemin.write_bytes(octets_registre)
-        sha_registre = hashlib.sha256(octets_registre).hexdigest()
-        chemin_etat = self.racine / M.CHEMIN_ETAT
-        etat = json.loads(chemin_etat.read_text(encoding="utf-8"))
-        registre_relatif = M.CHEMIN_REGISTRE_VALIDATION.as_posix()
-        for creneau in etat["couverture"]["creneaux"]:
-            for preuve in creneau["preuves"]:
-                if preuve["chemin"].endswith(ancien_nom):
-                    preuve["chemin"] = (
-                        f"{_CAMPAGNE.as_posix()}/recus-v1/{adresse}.json"
-                    )
-                    preuve["sha256"] = sha_recu
-                elif preuve["chemin"] == registre_relatif:
-                    preuve["sha256"] = sha_registre
-        chemin_etat.write_bytes(M.octets_canoniques(etat))
+        realigner_chaine_recus(
+            M,
+            self.racine,
+            _CAMPAGNE,
+            M.CHEMIN_REGISTRE_VALIDATION,
+            M.CHEMIN_ETAT,
+            mutations={ancien_nom: mutation},
+        )
 
     def test_restituer_rafraichit_le_recu_apres_regeneration_metriques(self):
         code, sortie = self._cout()
