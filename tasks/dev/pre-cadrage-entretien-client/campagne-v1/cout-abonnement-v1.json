@@ -15,7 +15,7 @@
     "nombre": 0,
     "source": {
       "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/metriques-v1.json",
-      "sha256": "70ee8044b8f19c9b462e395987ebd577438bbcc2468f057dd094fc22c5ba0594"
+      "sha256": "7c08a8bf811d93942a6967aac5ababc1542739958c018b249203bb46bf59d0f1"
     }
   },
   "tarifs_catalogue": {
@@ -242,7 +242,7 @@
   "sources": [
     {
       "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/metriques-v1.json",
-      "sha256": "70ee8044b8f19c9b462e395987ebd577438bbcc2468f057dd094fc22c5ba0594"
+      "sha256": "7c08a8bf811d93942a6967aac5ababc1542739958c018b249203bb46bf59d0f1"
     },
     {
       "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/sources-plans-v1.toml",

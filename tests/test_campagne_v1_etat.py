@@ -7,9 +7,9 @@ Chaque test passe par `principal(["etat"])` avec une racine de dépôt
 temporaire : les preuves versionnées réelles y sont copiées, ou des
 doubles locaux valides y sont construits pour les causes absentes du lot
 réel (QUOTA_EXHAUSTED attribuable ou non prouvé, UNABLE_TO_JUDGE humain,
-créneau sans aucune preuve). La couverture attendue du lot réel est 2/7 :
-deux décisions officielles CANDIDATE_NOT_ACCEPTABLE et cinq causes
-MISSING_OBSERVATION prouvées par les préflights HOLD. Aucun appel
+créneau sans aucune preuve). La couverture attendue du lot réel est 6/7 :
+six décisions officielles CANDIDATE_NOT_ACCEPTABLE et un incident
+HARNESS_ERROR non couvert. Aucun appel
 candidat, aucune acquisition et aucune dépense n'ont lieu.
 """
 
@@ -31,6 +31,8 @@ sys.path.insert(0, str(RACINE / "tools"))
 
 import campagne_v1 as M  # noqa: E402
 
+from tests._helpers_v1 import realigner_chaine_recus  # noqa: E402
+
 _CAMPAGNE = Path("tasks/dev/pre-cadrage-entretien-client/campagne-v1")
 _SOURCES_PAQUET = RACINE / "tasks/dev/pre-cadrage-entretien-client"
 _FICHIERS_PAQUET = (
@@ -51,8 +53,16 @@ _PANEL = (
     "grok-build-grok-4-6",
     "zai-glm-5-3",
 )
-_ACQUISES = ("antigravity-gemini-3-7-flash", "zai-glm-5-3")
-_NON_ACQUISES = tuple(ident for ident in _PANEL if ident not in _ACQUISES)
+_DECIDABLES = tuple(ident for ident in _PANEL if ident != "cursor-kimi-k3")
+_NON_DECIDABLES = ("cursor-kimi-k3",)
+_INCIDENTS_ATTENDUS = {
+    "antigravity-gemini-3-7-flash": ["HARNESS_ERROR"],
+    "claude-code-fable-5": [],
+    "claude-code-opus-5": [],
+    "codex-gpt-5-6-sol": [],
+    "grok-build-grok-4-6": [],
+    "zai-glm-5-3": ["HARNESS_ERROR"],
+}
 
 
 def _sortie_acceptable() -> str:
@@ -177,82 +187,32 @@ class _ArbrePreuvesReelles(_EtatBase):
         officiel -001, puis réaligne chaînage et registre de validation :
         la seule divergence restante porte sur le triplet lui-même."""
         repertoire = self.racine / _CAMPAGNE / "recus-v1"
-        enveloppes = {
-            chemin.name: json.loads(chemin.read_text(encoding="utf-8"))
+        cible_chemin = next(
+            chemin
             for chemin in repertoire.iterdir()
-        }
-        cible = next(
-            nom
-            for nom, enveloppe in enveloppes.items()
-            if enveloppe["payload"]["configuration"]["identifiant"]
-            == identifiant_cible
-            and "recuperation" not in enveloppe["payload"]
+            if (
+                json.loads(chemin.read_text(encoding="utf-8"))["payload"][
+                    "configuration"
+                ]["identifiant"]
+                == identifiant_cible
+                and "recuperation"
+                not in json.loads(chemin.read_text(encoding="utf-8"))[
+                    "payload"
+                ]
+            )
         )
-        cible_configuration = enveloppes[cible]["payload"]["configuration"]
-        ancien_creneau = enveloppes[cible]["payload"]["creneau"]
-        cible_configuration.update(mutations)
-        if "identifiant" in mutations:
-            stimulus = enveloppes[cible]["payload"]["stimulus"]["sha256"]
-            enveloppes[cible]["payload"]["creneau"] = (
-                f"{cible_configuration['identifiant']}:{stimulus}"
-            )
-        successeurs = {
-            enveloppe["payload"]["predecesseur_adresse_contenu"]: nom
-            for nom, enveloppe in enveloppes.items()
-        }
-        ordre = [
-            next(
-                nom
-                for nom, enveloppe in enveloppes.items()
-                if enveloppe["payload"]["predecesseur_adresse_contenu"] is None
-            )
-        ]
-        while enveloppes[ordre[-1]]["content_address"]["sha256"] in successeurs:
-            ordre.append(
-                successeurs[
-                    enveloppes[ordre[-1]]["content_address"]["sha256"]
-                ]
-            )
-        nouvelles_adresses: dict[str, str] = {}
-        reecritures: dict[str, tuple[str, str]] = {}
-        rang_cible = ordre.index(cible)
-        for nom in ordre[rang_cible:]:
-            enveloppe = enveloppes[nom]
-            predecesseur = enveloppe["payload"][
-                "predecesseur_adresse_contenu"
-            ]
-            if predecesseur in nouvelles_adresses:
-                enveloppe["payload"]["predecesseur_adresse_contenu"] = (
-                    nouvelles_adresses[predecesseur]
-                )
-            adresse = M.adresse_canonique(enveloppe["payload"])
-            enveloppe["content_address"]["sha256"] = adresse
-            octets = M.octets_canoniques(enveloppe)
-            anciene_adresse = nom[: -len(".json")]
-            (repertoire / nom).unlink()
-            (repertoire / f"{adresse}.json").write_bytes(octets)
-            nouvelles_adresses[anciene_adresse] = adresse
-            relatif = f"{_CAMPAGNE.as_posix()}/recus-v1/{nom}"
-            reecritures[relatif] = (
-                f"{_CAMPAGNE.as_posix()}/recus-v1/{adresse}.json",
-                hashlib.sha256(octets).hexdigest(),
-            )
-        registre_chemin = self.racine / M.CHEMIN_REGISTRE_VALIDATION
-        registre = json.loads(registre_chemin.read_text(encoding="utf-8"))
-        for entree in registre["entrees"]:
-            if entree["recu"] in reecritures:
-                entree["recu"], entree["recu_sha256"] = reecritures[
-                    entree["recu"]
-                ]
-                if (
-                    "identifiant" in mutations
-                    and entree["configuration_id"] == identifiant_cible
-                    and entree["creneau"] == ancien_creneau
-                ):
-                    entree["creneau"] = enveloppes[cible]["payload"][
-                        "creneau"
-                    ]
-        registre_chemin.write_bytes(M.octets_canoniques(registre))
+        cible = cible_chemin.name
+        def muter(charge: dict) -> None:
+            charge["configuration"].update(mutations)
+
+        realigner_chaine_recus(
+            M,
+            self.racine,
+            _CAMPAGNE,
+            M.CHEMIN_REGISTRE_VALIDATION,
+            M.CHEMIN_ETAT,
+            mutations={cible: muter},
+        )
 
 
 class EtatPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
@@ -278,15 +238,14 @@ class EtatPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
             "Couverture",
         ):
             self.assertIn(attendu, sortie)
-        # Fraction exacte du lot réel : deux décisions officielles sur les
+        # Fraction exacte du lot réel : six décisions officielles sur les
         # sept configurations déclarées
-        self.assertIn("2/7", sortie)
+        self.assertIn("6/7", sortie)
         for ident in _PANEL:
             self.assertIn(ident, sortie)
         # Jetons littéraux préservés : incidents HARNESS_ERROR historiques,
-        # causes MISSING_OBSERVATION prouvées, décisions FAIL gelées
+        # incident HARNESS_ERROR non couvert, décisions FAIL gelées
         self.assertIn("HARNESS_ERROR", sortie)
-        self.assertIn("MISSING_OBSERVATION", sortie)
         self.assertIn("CANDIDATE_NOT_ACCEPTABLE", sortie)
         # Aucune preuve de quota épuisé dans le lot réel : le jeton ne
         # peut pas apparaître
@@ -319,25 +278,27 @@ class EtatPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.assertEqual("recus-v1", etat["repertoire_recus"])
 
         couverture = etat["couverture"]
-        self.assertEqual(2, couverture["numerateur"])
+        self.assertEqual(6, couverture["numerateur"])
         self.assertEqual(7, couverture["denominateur"])
-        self.assertEqual("2/7", couverture["fraction"])
+        self.assertEqual("6/7", couverture["fraction"])
         self.assertEqual(
             list(_PANEL),
             [entree["configuration_id"] for entree in couverture["creneaux"]],
         )
         creneaux = self._creneaux()
-        for ident in _ACQUISES:
+        for ident in _DECIDABLES:
             self.assertTrue(creneaux[ident]["couvert"], ident)
             self.assertEqual(
                 "CANDIDATE_NOT_ACCEPTABLE", creneaux[ident]["decision"]
             )
             self.assertIsNone(creneaux[ident]["cause"])
-            self.assertEqual(["HARNESS_ERROR"], creneaux[ident]["incidents"])
-        for ident in _NON_ACQUISES:
+            self.assertEqual(
+                _INCIDENTS_ATTENDUS[ident], creneaux[ident]["incidents"]
+            )
+        for ident in _NON_DECIDABLES:
             self.assertFalse(creneaux[ident]["couvert"], ident)
             self.assertIsNone(creneaux[ident]["decision"])
-            self.assertEqual("MISSING_OBSERVATION", creneaux[ident]["cause"])
+            self.assertEqual("HARNESS_ERROR", creneaux[ident]["cause"])
         # Chaque créneau porte ses preuves : fichiers réels, empreintes exactes
         for entree in couverture["creneaux"]:
             self.assertTrue(entree["preuves"], entree["configuration_id"])
@@ -356,24 +317,43 @@ class EtatPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.assertEqual(octets, self.chemin_etat.read_bytes())
 
     def test_creneau_sans_preuve_reste_preuve_manquante_jamais_echec(self):
-        # grok-build-grok-4-6 perd son reçu de préflight dans la copie :
-        # plus aucune preuve ne couvre son créneau
+        # Le scénario isolé retire toutes les preuves Cursor courantes avant
+        # de vérifier qu'une absence de preuve ne devient jamais un échec
         (
             self.racine
             / _CAMPAGNE
             / "preflights-v1"
-            / "grok-build-grok-4-6.json"
+            / "cursor-kimi-k3.json"
         ).unlink()
+        realigner_chaine_recus(
+            M,
+            self.racine,
+            _CAMPAGNE,
+            M.CHEMIN_REGISTRE_VALIDATION,
+            M.CHEMIN_ETAT,
+            configurations_retirees={"cursor-kimi-k3"},
+        )
+        chemin_manifeste = self.racine / M.CHEMIN_MANIFESTE_DOSSIERS
+        manifeste = json.loads(chemin_manifeste.read_text(encoding="utf-8"))
+        manifeste["lot_vide"]["comptage_statuts"] = {
+            "ABSENTE": 2,
+            "FAIL": 6,
+        }
+        chemin_manifeste.write_bytes(M.octets_canoniques(manifeste))
+        etat = json.loads(self.chemin_etat.read_text(encoding="utf-8"))
+        etat.pop("couverture", None)
+        etat.pop("execution_completion", None)
+        self.chemin_etat.write_bytes(M.octets_canoniques(etat))
         code, sortie = self._etat()
         self.assertEqual(0, code, sortie)
-        grok = self._creneaux()["grok-build-grok-4-6"]
-        self.assertFalse(grok["couvert"])
-        self.assertIsNone(grok["decision"])
-        self.assertEqual("PREUVE_MANQUANTE", grok["cause"])
+        cursor = self._creneaux()["cursor-kimi-k3"]
+        self.assertFalse(cursor["couvert"])
+        self.assertIsNone(cursor["decision"])
+        self.assertEqual("PREUVE_MANQUANTE", cursor["cause"])
         lignes = [
             ligne
             for ligne in sortie.splitlines()
-            if "grok-build-grok-4-6" in ligne
+            if "cursor-kimi-k3" in ligne
         ]
         self.assertTrue(any("preuve manquante" in ligne for ligne in lignes))
         self.assertFalse(
@@ -387,10 +367,10 @@ class EtatPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.assertEqual(0, M.principal(["restituer"], racine=self.racine))
         page = self.page.read_text(encoding="utf-8")
         self.assertIn('data-couverture-v1="section"', page)
-        self.assertIn("2/7", page)
+        self.assertIn("6/7", page)
         for ident in _PANEL:
             self.assertIn(f'data-couverture-creneau="{ident}"', page)
-        self.assertIn("MISSING_OBSERVATION", page)
+        self.assertIn("HARNESS_ERROR", page)
         self.assertIn("CANDIDATE_NOT_ACCEPTABLE", page)
         self.assertEqual(
             0, M.principal(["verifier-restitution"], racine=self.racine)
@@ -401,9 +381,9 @@ class EtatPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual(0, M.principal(["restituer"], racine=self.racine))
         page = self.page.read_text(encoding="utf-8")
-        # Canon exact du contrat, valeurs attendues indépendantes 2/7
+        # Canon exact du contrat, valeurs attendues indépendantes 6/7
         self.assertIn(
-            "Panel abonnement : 2 décisions disponibles sur 7 ; "
+            "Panel abonnement : 6 décisions disponibles sur 7 ; "
             "aucune sortie officiellement acceptable",
             page,
         )
@@ -413,15 +393,15 @@ class EtatPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
             "panel: 7 configurations déclarées, non mesurées", page
         )
         self.assertNotIn("aucune n'est mesurée", page)
-        # Le marquage des cinq configurations sans observation est conservé
+        # Le seul créneau non couvert porte l'incident exact
         self.assertEqual(
-            5,
+            1,
             page.count(
-                'non couvert : cause prouvée <code>MISSING_OBSERVATION</code>'
+                'non couvert : cause prouvée <code>HARNESS_ERROR</code>'
             ),
         )
         self.assertEqual(
-            2,
+            6,
             page.count("couvert : décision <code>CANDIDATE_NOT_ACCEPTABLE</code>"),
         )
         self.assertEqual(
@@ -480,14 +460,14 @@ class EtatPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.page.write_text(
             tete
             + separateur
-            + queue.replace("MISSING_OBSERVATION", "QUOTA_EXHAUSTED", 1),
+            + queue.replace("HARNESS_ERROR", "QUOTA_EXHAUSTED", 1),
             encoding="utf-8",
         )
         code, sortie = verifier()
         self.assertEqual(1, code)
         self.assertIn("couverture", sortie)
         # Conversion de la fraction exacte
-        self.page.write_text(page.replace("2/7", "3/7"), encoding="utf-8")
+        self.page.write_text(page.replace("6/7", "5/7"), encoding="utf-8")
         code, sortie = verifier()
         self.assertEqual(1, code)
         self.assertIn("couverture", sortie)
@@ -516,7 +496,10 @@ class EtatTripletRegistreRecuTests(_ArbrePreuvesReelles, unittest.TestCase):
     def test_divergence_identifiant_refusee_de_facon_nommee(self):
         self._substituer_triplet(
             "antigravity-gemini-3-7-flash",
-            identifiant="claude-code-fable-5",
+            chemin=(
+                f"{M.REGISTRE_OFFICIEL.as_posix()}/"
+                "claude-code-fable-5.toml"
+            ),
         )
         code, sortie = self._etat()
         self.assertEqual(1, code)
@@ -536,7 +519,10 @@ class EtatTripletRegistreRecuTests(_ArbrePreuvesReelles, unittest.TestCase):
     def test_substitution_refusee_avant_restitution_et_publication(self):
         self._substituer_triplet(
             "antigravity-gemini-3-7-flash",
-            identifiant="claude-code-fable-5",
+            chemin=(
+                f"{M.REGISTRE_OFFICIEL.as_posix()}/"
+                "claude-code-fable-5.toml"
+            ),
         )
         for arguments in ("restituer", "verifier-restitution"):
             avec_contexte = io.StringIO()
@@ -561,8 +547,8 @@ class EtatTripletRegistreRecuTests(_ArbrePreuvesReelles, unittest.TestCase):
         antigravity.update(
             couvert=False, decision=None, cause="MISSING_OBSERVATION"
         )
-        couverture["numerateur"] = 1
-        couverture["fraction"] = "1/7"
+        couverture["numerateur"] = 5
+        couverture["fraction"] = "5/7"
         self.chemin_etat.write_bytes(M.octets_canoniques(contenu))
         # La page est rendue depuis la couverture stockée altérée : seule la
         # redérivation indépendante peut détecter la divergence

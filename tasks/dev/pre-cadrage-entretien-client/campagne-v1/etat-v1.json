@@ -7,9 +7,9 @@
   "couverture": {
     "schema_couverture": "campagne-v1/etat-v1/couverture/1",
     "regle": "PRD 8.5 : part du plan pour laquelle une décision officielle ou un échec fournisseur attribuable est disponible",
-    "numerateur": 2,
+    "numerateur": 6,
     "denominateur": 7,
-    "fraction": "2/7",
+    "fraction": "6/7",
     "creneaux": [
       {
         "configuration_id": "antigravity-gemini-3-7-flash",
@@ -31,49 +31,61 @@
           },
           {
             "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/validation-automatique-v1/registre-couverture-verdicts.json",
-            "sha256": "cde593a67394044e10fd092d3423e138c1e00061ed2b7010d536686411ca3eee"
+            "sha256": "6cfab2c18eb0292158b2ed4efc01155bb4d2f56157d6426da2adedbac1542d7c"
           }
         ]
       },
       {
         "configuration_id": "claude-code-fable-5",
-        "couvert": false,
-        "decision": null,
-        "cause": "MISSING_OBSERVATION",
-        "detail": "préflight HOLD : client, version, authentification et plan observés par les sondes non génératives ; identité du modèle servi, exposition de l'effort et quota restent inobservables sans commande générative : la route n'est pas prouvée prête",
+        "couvert": true,
+        "decision": "CANDIDATE_NOT_ACCEPTABLE",
+        "cause": null,
+        "detail": "sortie candidate au verdict mécanique FAIL : candidate non acceptable, aucun verdict humain requis",
         "incidents": [],
         "preuves": [
           {
-            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/preflights-v1/claude-code-fable-5.json",
-            "sha256": "b839add0e3d83daa8af937b7e7951c17e8ee4a783afe267801a212a24b1465aa"
+            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/recus-v1/bfb792049bca2fc8a56da2dd9b71a0be5fb665547ff56c1241b7dd091ac5d71c.json",
+            "sha256": "dc189057ff0e2e5a60c7a541628884e1e4bb0ce493530552edc01e11ec321712"
+          },
+          {
+            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/validation-automatique-v1/registre-couverture-verdicts.json",
+            "sha256": "6cfab2c18eb0292158b2ed4efc01155bb4d2f56157d6426da2adedbac1542d7c"
           }
         ]
       },
       {
         "configuration_id": "claude-code-opus-5",
-        "couvert": false,
-        "decision": null,
-        "cause": "MISSING_OBSERVATION",
-        "detail": "préflight HOLD : client, version, authentification et plan observés par les sondes non génératives ; identité du modèle servi, exposition de l'effort et quota restent inobservables sans commande générative : la route n'est pas prouvée prête",
+        "couvert": true,
+        "decision": "CANDIDATE_NOT_ACCEPTABLE",
+        "cause": null,
+        "detail": "sortie candidate au verdict mécanique FAIL : candidate non acceptable, aucun verdict humain requis",
         "incidents": [],
         "preuves": [
           {
-            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/preflights-v1/claude-code-opus-5.json",
-            "sha256": "a4a7a4477303a5b80d606f4e78e7a9d596b2a353b681dcf9528fbf540ca55895"
+            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/recus-v1/1fa3c7fff1779dd9a86064762f9f9a2253fc957dfb9e3c75e7b9fdbe79d8b7b6.json",
+            "sha256": "47f6cbcce80d5b87a2e7063aa531b6687ca7626575702ef2c795418d491cec33"
+          },
+          {
+            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/validation-automatique-v1/registre-couverture-verdicts.json",
+            "sha256": "6cfab2c18eb0292158b2ed4efc01155bb4d2f56157d6426da2adedbac1542d7c"
           }
         ]
       },
       {
         "configuration_id": "codex-gpt-5-6-sol",
-        "couvert": false,
-        "decision": null,
-        "cause": "MISSING_OBSERVATION",
-        "detail": "préflight HOLD : client, version, authentification et catalogue observés par les sondes non génératives ; 'gpt-5.6-sol' et l'effort 'high' sont explicitement annoncés par la correspondance de catalogue exacte, qui ne prouve jamais le modèle réellement servi ; plan du compte, quota et identité réellement servie restent inobservables sans commande générative : la route n'est pas prouvée prête",
+        "couvert": true,
+        "decision": "CANDIDATE_NOT_ACCEPTABLE",
+        "cause": null,
+        "detail": "sortie candidate au verdict mécanique FAIL : candidate non acceptable, aucun verdict humain requis",
         "incidents": [],
         "preuves": [
           {
-            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/preflights-v1/codex-gpt-5-6-sol.json",
-            "sha256": "7d08aa324ed5f5c6f6e14830625929e31c3a71f2adbdbb5e4d34ff77ab4050fa"
+            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/recus-v1/f2a567a8560c7a4afe0727a4c3d940094e838f4470c77f38e06f7549ea269a01.json",
+            "sha256": "23287b4779d82c164069c5c7dc6bf78127eed6d0c95c847640c25fa1d97200f6"
+          },
+          {
+            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/validation-automatique-v1/registre-couverture-verdicts.json",
+            "sha256": "6cfab2c18eb0292158b2ed4efc01155bb4d2f56157d6426da2adedbac1542d7c"
           }
         ]
       },
@@ -81,27 +93,37 @@
         "configuration_id": "cursor-kimi-k3",
         "couvert": false,
         "decision": null,
-        "cause": "MISSING_OBSERVATION",
-        "detail": "préflight HOLD : client, version, sélection native exacte, authentification, tier du compte et correspondance de catalogue exacte observés par les cinq probes non génératives ; la présence exacte de 'kimi-k3-high' projette le modèle exposé et l'effort 'high', jamais l'identité réellement servie ; quota, consommation de quota et identité réellement servie restent inobservables sans commande générative : la route n'est pas prouvée prête",
-        "incidents": [],
+        "cause": "HARNESS_ERROR",
+        "detail": "incident HARNESS_ERROR consigné : défaut du dispositif, jamais une pénalité de configuration",
+        "incidents": [
+          "HARNESS_ERROR"
+        ],
         "preuves": [
           {
-            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/preflights-v1/cursor-kimi-k3.json",
-            "sha256": "6425bbfb2ed0bbf80897ead963468db0503b9aa6b1139b2a89dcce5ea161b540"
+            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/recus-v1/4339e558eaba56918f9c8e08e92450e3238fd26c453c3b250926cff4dc3fd82f.json",
+            "sha256": "f32fa8475875fc9379249a13939f0d51345ffa34d991ff3131b2e68ea979ed15"
+          },
+          {
+            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/validation-automatique-v1/registre-couverture-verdicts.json",
+            "sha256": "6cfab2c18eb0292158b2ed4efc01155bb4d2f56157d6426da2adedbac1542d7c"
           }
         ]
       },
       {
         "configuration_id": "grok-build-grok-4-6",
-        "couvert": false,
-        "decision": null,
-        "cause": "MISSING_OBSERVATION",
-        "detail": "préflight HOLD : client, version, credential OAuth xAI configuré, option native --model et correspondance de catalogue exacte observés par les sondes non génératives et la projection locale du credential, qui ne prouve jamais la validité distante du credential ni le modèle réellement servi ; l'option --reasoning-effort seule ne prouve pas que l'effort 'high' est exposé pour 'grok-4.6' ; plan du compte, quota, effort exposé et identité réellement servie restent inobservables : la route n'est pas prouvée prête",
+        "couvert": true,
+        "decision": "CANDIDATE_NOT_ACCEPTABLE",
+        "cause": null,
+        "detail": "sortie candidate au verdict mécanique FAIL : candidate non acceptable, aucun verdict humain requis",
         "incidents": [],
         "preuves": [
           {
-            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/preflights-v1/grok-build-grok-4-6.json",
-            "sha256": "bd021d66d14426a75f9ecd516c72f4669a50bb6a80f956d339dc50d07ee266b6"
+            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/recus-v1/0f429a8feff174308d9da62a4df054824bfbbf224fe8137c7e4e1216f544b6df.json",
+            "sha256": "b041a76cb9c923b9e3e550233dca382766868c3806a02eafb0202caa9054762a"
+          },
+          {
+            "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/validation-automatique-v1/registre-couverture-verdicts.json",
+            "sha256": "6cfab2c18eb0292158b2ed4efc01155bb4d2f56157d6426da2adedbac1542d7c"
           }
         ]
       },
@@ -125,9 +147,57 @@
           },
           {
             "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/validation-automatique-v1/registre-couverture-verdicts.json",
-            "sha256": "cde593a67394044e10fd092d3423e138c1e00061ed2b7010d536686411ca3eee"
+            "sha256": "6cfab2c18eb0292158b2ed4efc01155bb4d2f56157d6426da2adedbac1542d7c"
           }
         ]
+      }
+    ]
+  },
+  "execution_completion": {
+    "autorisation": {
+      "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/completion-panel-v1/autorisation-completion-v1.json",
+      "sha256": "853ca91b90674ab5a2d74147839a39d365429fe9c946660c8eca517c836e3502"
+    },
+    "creneaux": [
+      {
+        "configuration_id": "claude-code-fable-5",
+        "acquisition_id": "ACQ-V1-CLAUDE-CODE-FABLE-5-001",
+        "route_execution": "HOLD",
+        "cause_route": "un reçu officiel occupe déjà un créneau de la configuration",
+        "telemetrie_abonnement": "OBSERVABLE_COMPTE_NON_COLLECTE",
+        "resultat_mesure": "ABSENT"
+      },
+      {
+        "configuration_id": "claude-code-opus-5",
+        "acquisition_id": "ACQ-V1-CLAUDE-CODE-OPUS-5-001",
+        "route_execution": "HOLD",
+        "cause_route": "créneau -001 consommé : aucun second appel",
+        "telemetrie_abonnement": "OBSERVABLE_COMPTE_NON_COLLECTE",
+        "resultat_mesure": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/recus-v1/1fa3c7fff1779dd9a86064762f9f9a2253fc957dfb9e3c75e7b9fdbe79d8b7b6.json"
+      },
+      {
+        "configuration_id": "codex-gpt-5-6-sol",
+        "acquisition_id": "ACQ-V1-CODEX-GPT-5-6-SOL-001",
+        "route_execution": "HOLD",
+        "cause_route": "un reçu officiel occupe déjà un créneau de la configuration",
+        "telemetrie_abonnement": "OBSERVABLE_COMPTE_NON_COLLECTE",
+        "resultat_mesure": "ABSENT"
+      },
+      {
+        "configuration_id": "cursor-kimi-k3",
+        "acquisition_id": "ACQ-V1-CURSOR-KIMI-K3-001",
+        "route_execution": "HOLD",
+        "cause_route": "un reçu officiel occupe déjà un créneau de la configuration",
+        "telemetrie_abonnement": "OBSERVABLE_COMPTE_NON_COLLECTE",
+        "resultat_mesure": "ABSENT"
+      },
+      {
+        "configuration_id": "grok-build-grok-4-6",
+        "acquisition_id": "ACQ-V1-GROK-BUILD-GROK-4-6-001",
+        "route_execution": "HOLD",
+        "cause_route": "un reçu officiel occupe déjà un créneau de la configuration",
+        "telemetrie_abonnement": "OBSERVABLE_COMPTE_NON_COLLECTE",
+        "resultat_mesure": "ABSENT"
       }
     ]
   }
