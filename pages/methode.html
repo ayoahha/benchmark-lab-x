@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Méthode et limites · Benchmark Lab-X</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="saut" href="#contenu">Aller au contenu</a>
+    <div class="enveloppe">
+      <header>
+        <div>
+          <p class="marque">Benchmark Lab-X · laboratoire éditorial</p>
+          <p class="lieu">Preuves, jetons, conflit de protocole</p>
+        </div>
+        <nav aria-label="Vues du prototype">
+          <ul>
+            <li><a href="./index.html">Accueil</a></li>
+            <li><a href="./v0.html">Campagne V0</a></li>
+            <li><a href="./v1.html">Campagne V1</a></li>
+            <li><a href="./methode.html" aria-current="page">Méthode et limites</a></li>
+          </ul>
+        </nav>
+      </header>
+      <main id="contenu" tabindex="-1">
+        <p class="statut">Méthode</p>
+        <h1>Ce que les preuves portent, et où elles s'arrêtent</h1>
+        <p class="lede">Une sortie est officiellement acceptable seulement avec un <code>PASS</code> automatique et un <code>ACCEPTABLE</code> humain. Ici, aucun des deux n'est réuni. Les pages de ce prototype reprennent des faits déjà enregistrés. Elles n'en créent aucun.</p>
+
+        <h2>Conflit stimulus / validateur</h2>
+        <p>Le fichier <code>stimulus.md</code> montre l'enveloppe demandée dans un bloc <code>```yaml</code>. Le validateur <code>tools/validateur_pre_cadrage_v0.py</code> refuse toute sortie dont la première ligne n'est pas <code>---</code> : c'est la porte <code>G-001</code>.</p>
+        <p>Rejeu local, sans appel candidat : la forme montrée par le stimulus rend <code>G-001 = FAIL</code>. Le même contenu sous frontmatter <code>---</code> rend <code>G-001 = PASS</code>, puis s'arrête sur <code>G-003</code> faute d'ancres dans le témoin minimal. Les six candidats V1 extraits contiennent <code>artifact_type</code> ; aucun ne commence par <code>---</code>. Trois commencent par <code>```yaml</code>, trois par un préambule textuel.</p>
+
+        <h2>Jetons conservés tels quels</h2>
+        <dl class="etats">
+          <dt><code>INCONNU</code></dt>
+          <dd>Valeur non observée. Ni zéro, ni échec, ni estimation.</dd>
+          <dt><code>NON_DEFINI</code></dt>
+          <dd>La métrique n'existe pas dans cette situation, par exemple un taux à dénominateur décidable nul.</dd>
+          <dt><code>HARNESS_ERROR</code></dt>
+          <dd>Défaut du dispositif de mesure. La configuration n'est pas pénalisée ; la couverture baisse.</dd>
+          <dt><code>CANDIDATE_NOT_ACCEPTABLE</code></dt>
+          <dd>Sortie existante, rejetée par les contrôles automatiques. Résultat officiel, qui compte dans la couverture.</dd>
+          <dt><code>ABSTENTION</code></dt>
+          <dd>Les preuves ne suffisent pas à décider. Lab-X refuse alors de fabriquer un choix.</dd>
+        </dl>
+
+        <h2>Limites de lecture</h2>
+        <p>Les profils V0 (API) et V1 (abonnement) restent séparés. Le verrou V1 du 22 août 2026 est un instantané historique : il conserve des <code>MISSING_OBSERVATION</code> d'époque. L'état courant de couverture se lit dans <code>etat-v1.json</code>, où une seule configuration n'est pas couverte : <code>cursor-kimi-k3</code>.</p>
+        <p>Les latences affichées décrivent des sorties déjà rejetées, ou une panne de harnais. Elles ne fondent aucun ordre de préférence.</p>
+
+        <h2>Sources versionnées</h2>
+        <p class="sources">Sources V0 : <code>tasks/dev/pre-cadrage-entretien-client/campagne-v0/metriques-decision-m10-1-v1/table-metriques.json</code>, <code>campagne-v0/rapport-decision-m10-2-v1/rapport-interne.md</code>, <code>campagne-v0/panel-identites-v1/panel-identites.json</code>, <code>campagne-v0/validation-automatique-m8-2-v1/registre-couverture-verdicts.json</code>.</p>
+        <p class="sources">Sources V1 : <code>tasks/dev/pre-cadrage-entretien-client/campagne-v1/etat-v1.json</code>, <code>campagne-v1/metriques-v1.json</code>, <code>campagne-v1/validation-automatique-v1/registre-couverture-verdicts.json</code>.</p>
+        <p class="sources">Protocole : <code>tasks/dev/pre-cadrage-entretien-client/stimulus.md</code>, <code>tasks/dev/pre-cadrage-entretien-client/temoins-qualification.md</code>, <code>tools/validateur_pre_cadrage_v0.py</code>.</p>
+      </main>
+      <footer>
+        <p>Site statique : HTML et CSS seulement, liens relatifs, aucune requête réseau.</p>
+      </footer>
+    </div>
+  </body>
+</html>

@@ -13,8 +13,10 @@ n'est exécutée : `acquerir` sous toute forme, `preflight`, `qualifier`,
 Les valeurs attendues sont des littéraux indépendants : les codes de
 sortie viennent du contrat de la surface figée 5.4 (`0` succès, `1` refus
 fail-closed nommé, `2` HOLD), les empreintes de répertoire viennent du
-commentaire de scellement de l'Issue #116, et le journal versionné sert
-d'attendu figé que le rejeu doit reproduire.
+commentaire de scellement de l'Issue #116. Le journal historique V1
+reste l'attestation immuable de cette Issue ; le rejeu courant se
+vérifie contre le journal V2, sans prétendre que les empreintes HTML
+de V1 décrivent le générateur actuel.
 """
 
 from __future__ import annotations
@@ -46,7 +48,23 @@ _FICHIERS_PAQUET = (
     "temoins-qualification.md",
 )
 _GUIDE = RACINE / M.CHEMIN_GUIDE_UTILISATION
-_JOURNAL = _GUIDE.parent / "journal-rejeu-local.json"
+_JOURNAL_V1 = _GUIDE.parent / "journal-rejeu-local.json"
+_JOURNAL_V2 = _GUIDE.parent / "journal-rejeu-local-v2.json"
+_JOURNAL_V1_SHA256 = (
+    "d9b9a606304867662d69d954e7f97b1c8ac6d5a295af5a30fba0c73f9084ae69"
+)
+_BASE_V1_HISTORIQUE = "368455ea08abb861709baf16ead0f438ec1acb29"
+_BASE_COURANTE = "81c217e0a585e89c0151090d6cef9581b8a2c741"
+_CONTRAT_V1_XS_15 = (
+    "16ff9fba1ca16b87850405aad97311f5b746dfd2ab9cc8fd51216ef1960694e4"
+)
+_CONTRAT_ISSUE_150 = (
+    "e7f2614dcde6f71edc116a1a7cb3dab6adbcc70c1b1211028b7c0d8ce8b58f91"
+)
+_AMENDEMENT_150 = (
+    "https://github.com/ayoahha/benchmark-lab-x/issues/150"
+    "#issuecomment-5463707774"
+)
 
 # Empreintes figées par le commentaire de scellement de l'Issue #116
 _RECUS_SCELLES = (
@@ -267,7 +285,7 @@ class _RacineJetable(unittest.TestCase):
         return hashlib.sha256((racine / M.CHEMIN_PAGE).read_bytes()).hexdigest()
 
     def _journal(self) -> dict:
-        return json.loads(_JOURNAL.read_text(encoding="utf-8"))
+        return json.loads(_JOURNAL_V2.read_text(encoding="utf-8"))
 
     def _contexte(self, nom: str) -> dict:
         for contexte in self._journal()["contextes"]:
@@ -471,12 +489,19 @@ class AjoutPuisRegenerationTests(_RacineJetable):
 
 
 class JournalRejeuLocalTests(unittest.TestCase):
-    """Le journal versionné est lisible, déterministe et fermé aux
-    acquisitions."""
+    """Le journal historique V1 est lisible, déterministe, immuable et
+    fermé aux acquisitions. Ses empreintes HTML décrivent le générateur
+    de l'Issue #116, pas le générateur courant."""
 
     def setUp(self):
-        self.journal = json.loads(_JOURNAL.read_text(encoding="utf-8"))
-        self.brut = _JOURNAL.read_text(encoding="utf-8")
+        self.journal = json.loads(_JOURNAL_V1.read_text(encoding="utf-8"))
+        self.brut = _JOURNAL_V1.read_text(encoding="utf-8")
+
+    def test_journal_v1_sha256_immuable(self):
+        self.assertEqual(
+            hashlib.sha256(_JOURNAL_V1.read_bytes()).hexdigest(),
+            _JOURNAL_V1_SHA256,
+        )
 
     def test_journal_deterministe_trie_et_termine_par_un_saut_de_ligne(self):
         rendu = (
@@ -489,13 +514,25 @@ class JournalRejeuLocalTests(unittest.TestCase):
 
     def test_identite_de_tranche_conforme_au_scellement(self):
         self.assertEqual(self.journal["ticket"], "V1-XS-15")
-        self.assertEqual(
-            self.journal["base_git"],
-            "368455ea08abb861709baf16ead0f438ec1acb29",
+        self.assertEqual(self.journal["base_git"], _BASE_V1_HISTORIQUE)
+        self.assertEqual(self.journal["contrat_sha256"], _CONTRAT_V1_XS_15)
+        self.assertIn("issues/116", self.journal["issue"])
+
+    def test_empreintes_html_v1_ne_decrivent_pas_le_generateur_courant(self):
+        courant = json.loads(_JOURNAL_V2.read_text(encoding="utf-8"))
+        historique = next(
+            c
+            for c in self.journal["contextes"]
+            if c["contexte"] == "lecture-seule"
         )
-        self.assertEqual(
-            self.journal["contrat_sha256"],
-            "16ff9fba1ca16b87850405aad97311f5b746dfd2ab9cc8fd51216ef1960694e4",
+        actuel = next(
+            c
+            for c in courant["contextes"]
+            if c["contexte"] == "lecture-seule"
+        )
+        self.assertNotEqual(self.journal["base_git"], courant["base_git"])
+        self.assertNotEqual(
+            historique["empreinte_html"], actuel["empreinte_html"]
         )
 
     def test_couture_publique_et_isolement_declares(self):
@@ -624,6 +661,105 @@ class JournalRejeuLocalTests(unittest.TestCase):
         self.assertIn("<racine-temporaire>", self.brut)
 
 
+class JournalRejeuLocalV2Tests(unittest.TestCase):
+    """Le journal V2 atteste le rejeu courant, filié au V1 historique."""
+
+    def setUp(self):
+        self.journal = json.loads(_JOURNAL_V2.read_text(encoding="utf-8"))
+        self.brut = _JOURNAL_V2.read_text(encoding="utf-8")
+
+    def test_journal_deterministe_trie_et_termine_par_un_saut_de_ligne(self):
+        rendu = (
+            json.dumps(
+                self.journal, ensure_ascii=False, indent=2, sort_keys=True
+            )
+            + "\n"
+        )
+        self.assertEqual(self.brut, rendu)
+
+    def test_filiation_et_contrat_courant(self):
+        self.assertEqual(self.journal["base_git"], _BASE_COURANTE)
+        self.assertEqual(self.journal["contrat_sha256"], _CONTRAT_ISSUE_150)
+        self.assertIn("issues/150", self.journal["issue"])
+        self.assertEqual(
+            self.journal["amendement_proprietaire"], _AMENDEMENT_150
+        )
+        self.assertEqual(
+            self.journal["amendement_sha256"],
+            "c047ecff068049c835bc7d0641b67da0a3310cbf566a2ab77edf8f7f2eca2aec",
+        )
+        predecesseur = self.journal["predecesseur"]
+        self.assertEqual(
+            predecesseur["chemin"],
+            "tasks/dev/pre-cadrage-entretien-client/campagne-v1/"
+            "guide-utilisation-v1/journal-rejeu-local.json",
+        )
+        self.assertEqual(predecesseur["sha256"], _JOURNAL_V1_SHA256)
+        self.assertIn("issues/116", predecesseur["issue"])
+        self.assertEqual(predecesseur["base_git_declaree"], _BASE_V1_HISTORIQUE)
+        self.assertEqual(predecesseur["ticket"], "V1-XS-15")
+
+    def test_couture_publique_et_isolement_declares(self):
+        self.assertIn("principal(", self.journal["couture_publique"])
+        self.assertIn("racine=", self.journal["couture_publique"])
+        self.assertIn("temporaire", self.journal["isolement"])
+        self.assertIn("registre officiel", self.journal["isolement"])
+
+    def test_trois_contextes_isoles_nommes(self):
+        noms = [contexte["contexte"] for contexte in self.journal["contextes"]]
+        self.assertEqual(
+            noms,
+            [
+                "lecture-seule",
+                "refus-provenance-de-prix",
+                "ajout-puis-regeneration",
+            ],
+        )
+
+    def test_chaque_contexte_porte_ses_manifestes_avant_et_apres(self):
+        for contexte in self.journal["contextes"]:
+            with self.subTest(contexte=contexte["contexte"]):
+                self.assertEqual(
+                    contexte["manifeste_recus_avant"], _RECUS_SCELLES
+                )
+                self.assertEqual(
+                    contexte["manifeste_recus_apres"], _RECUS_SCELLES
+                )
+                self.assertEqual(
+                    contexte["manifeste_preflights_avant"],
+                    _PREFLIGHTS_SCELLES,
+                )
+                self.assertEqual(
+                    contexte["manifeste_preflights_apres"],
+                    _PREFLIGHTS_SCELLES,
+                )
+
+    def test_acquisition_absente_du_journal_de_rejeu_local(self):
+        for contexte in self.journal["contextes"]:
+            for commande in contexte["commandes"]:
+                self.assertNotIn("acquerir", commande["invocation"])
+        for interdite in (
+            "acquerir",
+            "preflight",
+            "qualifier",
+            "verrouiller",
+            "valider",
+            "dossiers",
+            "geler",
+            "preparer-",
+        ):
+            with self.subTest(commande=interdite):
+                self.assertNotIn(
+                    f"campagne_v1.py {interdite}",
+                    json.dumps(self.journal["contextes"], ensure_ascii=False),
+                )
+
+    def test_aucun_chemin_absolu_de_racine_temporaire_publie(self):
+        self.assertNotIn("/var/folders/", self.brut)
+        self.assertNotIn("/tmp/", self.brut)
+        self.assertIn("<racine-temporaire>", self.brut)
+
+
 class GuideUtilisationTests(unittest.TestCase):
     """Le guide couvre les six étapes, la surface figée et ses renvois."""
 
@@ -698,6 +834,12 @@ class GuideUtilisationTests(unittest.TestCase):
         for surface in _SURFACES_FIGEES:
             with self.subTest(surface=surface):
                 self.assertIn(surface, self.texte)
+
+    def test_guide_distingue_journal_historique_et_journal_courant(self):
+        self.assertIn("journal-rejeu-local.json", self.texte)
+        self.assertIn("journal-rejeu-local-v2.json", self.texte)
+        self.assertIn("historique immuable", self.texte)
+        self.assertIn("comportement courant", self.texte)
 
     def test_commandes_rejouees_renvoient_au_journal_de_rejeu_local(self):
         self.assertIn("journal-rejeu-local.json", self.texte)

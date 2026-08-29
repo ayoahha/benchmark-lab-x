@@ -603,6 +603,61 @@ class RetoursProprietairesTests(_ArbrePreuvesReelles):
         self.assertIn("identité réellement servie", encadre)
         self.assertIn("D-V1-01", encadre)
 
+    def test_inconnues_actuelles_depuis_etat_pas_verrou_historique(self):
+        """Le volet inconnues actuelles se lit dans etat-v1.json.
+
+        Le verrou historique conserve cinq MISSING_OBSERVATION ; l'état
+        courant n'a qu'un créneau non couvert, cursor-kimi-k3. Redériver
+        le volet depuis le verrou ferait échouer ce test.
+        """
+        page = self._restituer()
+        encadre = page.split('<section id="blocages-reels"', 1)[1].split(
+            "</section>", 1
+        )[0]
+        inconnues = encadre.split(' data-blocage="inconnues"', 1)[1].split(
+            "</article>", 1
+        )[0]
+        historique = encadre.split(' data-blocage="historique"', 1)[1].split(
+            "</article>", 1
+        )[0]
+        etat = json.loads(
+            (self.racine / M.CHEMIN_ETAT).read_text(encoding="utf-8")
+        )
+        verrou = json.loads(
+            (self.racine / M.CHEMIN_VERROU).read_text(encoding="utf-8")
+        )
+        non_couverts = [
+            creneau["configuration_id"]
+            for creneau in etat["couverture"]["creneaux"]
+            if not creneau["couvert"]
+        ]
+        lock_attente = [
+            entree["configuration_id"]
+            for entree in verrou["panel"]
+            if entree["cause"] == "MISSING_OBSERVATION"
+        ]
+        self.assertEqual(non_couverts, ["cursor-kimi-k3"])
+        self.assertEqual(len(lock_attente), 5)
+        self.assertNotEqual(len(non_couverts), len(lock_attente))
+        self.assertNotIn(
+            f"{len(lock_attente)} configuration(s) restent en attente",
+            inconnues,
+        )
+        self.assertNotIn("5 configurations restent en attente", inconnues)
+        self.assertIn("cursor-kimi-k3", inconnues)
+        self.assertIn("HARNESS_ERROR", inconnues)
+        self.assertIn(M.CHEMIN_ETAT.as_posix(), inconnues)
+        for identifiant in lock_attente:
+            if identifiant in non_couverts:
+                continue
+            self.assertNotIn(
+                f' data-non-couvert="{identifiant}"', inconnues, identifiant
+            )
+        self.assertIn(' data-non-couvert="cursor-kimi-k3"', inconnues)
+        # Le verrou historique reste cité comme instantané, sans réécriture
+        self.assertIn("D-V1-01", historique)
+        self.assertIn("instantané", historique)
+
     def test_panel_inconnu_etiquete_instantane_historique(self):
         page = self._restituer()
         section = page.split('<section id="panel-officiel">', 1)[1].split(

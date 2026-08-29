@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Campagne V1 · Benchmark Lab-X</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="saut" href="#contenu">Aller au contenu</a>
+    <div class="enveloppe">
+      <header>
+        <div>
+          <p class="marque">Benchmark Lab-X · laboratoire éditorial</p>
+          <p class="lieu">Profil de mesure abonnement · page locale</p>
+        </div>
+        <nav aria-label="Vues du prototype">
+          <ul>
+            <li><a href="./index.html">Accueil</a></li>
+            <li><a href="./v0.html">Campagne V0</a></li>
+            <li><a href="./v1.html" aria-current="page">Campagne V1</a></li>
+            <li><a href="./methode.html">Méthode et limites</a></li>
+          </ul>
+        </nav>
+      </header>
+      <main id="contenu" tabindex="-1">
+        <p class="statut">Résultat V1</p>
+        <h1>Six verdicts mécaniques, une lecture bornée</h1>
+        <p class="lede">Le panel officiel compte sept configurations. La couverture est <code>6/7</code>. Six sorties candidates ont reçu le verdict mécanique enregistré <code>FAIL/G-001</code>. L'acceptabilité officielle est <code>0/6</code>. La décision enregistrée est <code>ABSTENTION</code>.</p>
+
+        <ul class="bandeau">
+          <li><span class="valeur"><code>6/7</code></span><span class="legende">couverture actuelle, lue dans <code>etat-v1.json</code></span></li>
+          <li><span class="valeur"><code>0/6</code></span><span class="legende">taux agrégé d'acceptabilité</span></li>
+          <li><span class="valeur">6 × <code>FAIL/G-001</code></span><span class="legende">verdict mécanique enregistré</span></li>
+          <li><span class="valeur"><code>cursor-kimi-k3</code></span><span class="legende">seule configuration non couverte, <code>HARNESS_ERROR</code></span></li>
+        </ul>
+
+        <h2>Verdict enregistré et interprétation permise</h2>
+        <div class="duo">
+          <article class="carte">
+            <h3>Verdict enregistré</h3>
+            <p>Les six sorties candidates portent <code>FAIL</code> sur la porte <code>G-001</code>, après un <code>G-005</code> conforme. L'origine consignée est <code>CANDIDATE_ERROR</code>. L'état officiel de ces six créneaux est <code>CANDIDATE_NOT_ACCEPTABLE</code>.</p>
+          </article>
+          <article class="carte">
+            <h3>Interprétation permise</h3>
+            <p>Ces six <code>FAIL/G-001</code> ne prouvent pas un échec qualitatif des six modèles. Le stimulus montre l'enveloppe sous forme de bloc <code>```yaml</code>. Le validateur exige un frontmatter qui commence par <code>---</code>. Aucun des six candidats extraits ne commence par <code>---</code>.</p>
+          </article>
+        </div>
+        <p>Trois sorties commencent par un bloc <code>```yaml</code> ; trois commencent par un préambule textuel. Toutes contiennent le champ <code>artifact_type</code>. Le rejeu minimal, sur le même contenu, donne <code>G-001 = FAIL</code> pour la forme montrée par le stimulus, puis <code>G-001 = PASS</code> et arrêt sur <code>G-003</code> pour la forme exigée, faute d'ancres dans le témoin minimal.</p>
+
+        <h2>Les sept configurations, ordre du panel</h2>
+        <div class="table-roule">
+          <table>
+            <caption>Faits repris de <code>etat-v1.json</code> et <code>metriques-v1.json</code>. Les latences sont des observations de sorties non acceptées, pas un ordre de préférence.</caption>
+            <thead>
+              <tr>
+                <th scope="col">Configuration</th>
+                <th scope="col">Couvert</th>
+                <th scope="col">Décision ou cause</th>
+                <th scope="col">Taux</th>
+                <th scope="col">Latence observée</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row"><code>antigravity-gemini-3-7-flash</code></th>
+                <td>oui</td>
+                <td><code>CANDIDATE_NOT_ACCEPTABLE</code></td>
+                <td><code>0/1</code></td>
+                <td>22925 ms</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>claude-code-fable-5</code></th>
+                <td>oui</td>
+                <td><code>CANDIDATE_NOT_ACCEPTABLE</code></td>
+                <td><code>0/1</code></td>
+                <td>37605 ms</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>claude-code-opus-5</code></th>
+                <td>oui</td>
+                <td><code>CANDIDATE_NOT_ACCEPTABLE</code></td>
+                <td><code>0/1</code></td>
+                <td>126870 ms</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>codex-gpt-5-6-sol</code></th>
+                <td>oui</td>
+                <td><code>CANDIDATE_NOT_ACCEPTABLE</code></td>
+                <td><code>0/1</code></td>
+                <td>78017 ms</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>cursor-kimi-k3</code></th>
+                <td>non</td>
+                <td><code>HARNESS_ERROR</code></td>
+                <td><code>NON_DEFINI</code></td>
+                <td>distribution vide</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>grok-build-grok-4-6</code></th>
+                <td>oui</td>
+                <td><code>CANDIDATE_NOT_ACCEPTABLE</code></td>
+                <td><code>0/1</code></td>
+                <td>179590 ms</td>
+              </tr>
+              <tr>
+                <th scope="row"><code>zai-glm-5-3</code></th>
+                <td>oui</td>
+                <td><code>CANDIDATE_NOT_ACCEPTABLE</code></td>
+                <td><code>0/1</code></td>
+                <td>199430 ms</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Le coût d'abonnement publié reste <code>NON_DEFINI</code>. L'identité réellement servie reste <code>INCONNU</code> pour le panel. Le verrou du 22 août 2026 reste un instantané historique ; l'état courant de couverture se lit dans <code>etat-v1.json</code>.</p>
+        <p class="sources">Sources : <code>tasks/dev/pre-cadrage-entretien-client/campagne-v1/etat-v1.json</code>, <code>campagne-v1/metriques-v1.json</code>, <code>campagne-v1/validation-automatique-v1/registre-couverture-verdicts.json</code>, <code>stimulus.md</code>, <code>tools/validateur_pre_cadrage_v0.py</code>.</p>
+      </main>
+      <footer>
+        <p>Les jetons <code>INCONNU</code>, <code>NON_DEFINI</code>, <code>HARNESS_ERROR</code>, <code>CANDIDATE_NOT_ACCEPTABLE</code> et <code>ABSTENTION</code> restent littéraux.</p>
+      </footer>
+    </div>
+  </body>
+</html>

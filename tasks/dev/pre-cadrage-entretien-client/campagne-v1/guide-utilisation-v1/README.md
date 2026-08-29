@@ -29,7 +29,12 @@ Quand aucune exécution n'a consigné le code, la case porte `non consigné`. Ce
 
 Deux classes de preuve, et une seule règle pour les séparer : l'effet de la commande, jamais la localité de sa route.
 
-**Rejeu local V1-XS-15.** Une commande locale, sans dépense, sans consommation de quota et sans écriture de reçu est rejouée par ce ticket sur une racine temporaire jetable, et son code est relevé dans [`journal-rejeu-local.json`](journal-rejeu-local.json). Huit sous-commandes relèvent de ce cas : `restituer`, `verifier-restitution`, `enregistrer`, `panel`, `autorisations`, `etat`, `metriques`, `cout`.
+**Rejeu local.** Une commande locale, sans dépense, sans consommation de quota et sans écriture de reçu est rejouée sur une racine temporaire jetable. Deux journaux coexistent, sans se remplacer :
+
+- [`journal-rejeu-local.json`](journal-rejeu-local.json) est l'attestation historique immuable de l'Issue #116 (V1-XS-15). Aucun octet n'en est modifié.
+- [`journal-rejeu-local-v2.json`](journal-rejeu-local-v2.json) est l'attestation déterministe du comportement courant, sous l'Issue #150. Le rejeu actuel se vérifie contre ce journal.
+
+Huit sous-commandes relèvent de ce cas : `restituer`, `verifier-restitution`, `enregistrer`, `panel`, `autorisations`, `etat`, `metriques`, `cout`. Les codes relevés dans les tableaux ci-dessous restent ceux du rejeu local V1-XS-15.
 
 **Sur pièces.** Une acquisition ou une commande distante n'est jamais relancée pour documenter le parcours : son invocation et son code sont repris du journal GitHub du ticket qui l'a exécutée. `acquerir --local --configuration <id>` relève de ce cas malgré sa route locale, parce qu'elle exécute une route et écrit un reçu append-only. La relancer écrirait un reçu de plus pour documenter une commande déjà exécutée.
 
@@ -201,7 +206,7 @@ Après toute mise à jour, régénérez la page par l'étape 5 : c'est `restitue
 
 ## Ce que le rejeu local a établi
 
-Le journal [`journal-rejeu-local.json`](journal-rejeu-local.json) porte trois contextes isolés, chacun sur une racine temporaire jetable créée par la couture publique `principal(..., racine=<temp>)`. Le registre officiel du dépôt n'est écrit dans aucun d'eux.
+Le journal historique [`journal-rejeu-local.json`](journal-rejeu-local.json) porte trois contextes isolés, scellés par l'Issue #116. Il reste byte-identique. Le journal courant [`journal-rejeu-local-v2.json`](journal-rejeu-local-v2.json) rejoue les mêmes coutures locales, sur racines temporaires jetables, avec le générateur actuel. Les deux journaux déclarent la couture publique `principal(..., racine=<temp>)`. Le registre officiel du dépôt n'est écrit dans aucun contexte.
 
 Faits établis par ce rejeu :
 

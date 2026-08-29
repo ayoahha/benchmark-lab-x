@@ -17613,6 +17613,19 @@ def _articles_parcours(
     return articles
 
 
+def _creneaux_non_couverts(etat: dict) -> list[dict]:
+    """Créneaux encore non couverts, lus dans l'état publié.
+
+    Le verrou historique n'est pas une source de couverture actuelle.
+    """
+    couverture = etat.get("couverture") or {}
+    return [
+        creneau
+        for creneau in couverture.get("creneaux", [])
+        if not creneau["couvert"]
+    ]
+
+
 def _section_blocages(
     empreintes: dict[str, str],
     verrou_charge: tuple[str, dict, str] | None,
@@ -17621,6 +17634,8 @@ def _section_blocages(
     recus_officiels: list[tuple[str, dict, str]],
     registre_validation: tuple[str, dict, str] | None,
     artefacts_verdicts: dict | None,
+    etat: dict,
+    etat_relatif: str,
 ) -> str:
     """Encadré prioritaire : faits historiques dépassés, inconnues encore
     réelles, autorité ou action exacte nécessaire. Rendu seulement quand
@@ -17685,20 +17700,36 @@ def _section_blocages(
         + span_autorisation,
         ' data-blocage="historique"',
     )
-    nombre_attente = len(
-        [
-            entree
-            for entree in verrou["panel"]
-            if entree["cause"] == "MISSING_OBSERVATION"
-        ]
-    )
+    non_couverts = _creneaux_non_couverts(etat)
     fragment_attente = ""
-    if nombre_attente:
-        fragment_attente = (
-            f" {nombre_attente} configuration(s) restent en attente "
-            "d'observation (<code>MISSING_OBSERVATION</code>) : leur "
-            "disponibilité distante, leur quota et leur identité servie "
-            "restent <code>INCONNU</code>."
+    attributs_non_couverts = ""
+    span_etat = ""
+    if non_couverts:
+        enumeres = ", ".join(
+            f"<code>{_echapper(creneau['configuration_id'])}</code> "
+            f"(cause <code>{_echapper(creneau['cause'])}</code>)"
+            for creneau in non_couverts
+        )
+        if len(non_couverts) == 1:
+            fragment_attente = (
+                " Une seule configuration n'est pas couverte : "
+                f"{enumeres}. Ce décompte actuel est lu dans l'état de "
+                "couverture versionné, pas dans l'instantané historique "
+                "du verrou."
+            )
+        else:
+            fragment_attente = (
+                f" {len(non_couverts)} configuration(s) ne sont pas "
+                f"couvertes : {enumeres}. Ce décompte actuel est lu dans "
+                "l'état de couverture versionné, pas dans l'instantané "
+                "historique du verrou."
+            )
+        attributs_non_couverts = "".join(
+            f' data-non-couvert="{_echapper(creneau["configuration_id"])}"'
+            for creneau in non_couverts
+        )
+        span_etat = _span_source(
+            etat_relatif, empreintes[etat_relatif], SECTION_COUVERTURE_ETAT
         )
     fragment_pass = ""
     span_registre = ""
@@ -17730,10 +17761,11 @@ def _section_blocages(
         + fragment_attente
         + fragment_pass
         + "</p>"
+        + span_etat
         + span_verrou
         + span_completion
         + span_registre,
-        ' data-blocage="inconnues"',
+        ' data-blocage="inconnues"' + attributs_non_couverts,
     )
     article_actions = ""
     if (
@@ -17971,6 +18003,8 @@ def _rendre_page(racine: Path) -> bytes:
         recus_officiels,
         registre_validation,
         artefacts_verdicts,
+        etat,
+        etat_relatif,
     )
     if encadre_blocages:
         sections.append(encadre_blocages)
@@ -19752,6 +19786,38 @@ def verifier_restitution(
             echecs.append(
                 f"comparaison inter-profils interdite présente : {motif!r}"
             )
+
+    if verrou_charge is not None and ' data-blocage="inconnues"' in page:
+        inconnues = page.split(' data-blocage="inconnues"', 1)[1].split(
+            "</article>", 1
+        )[0]
+        non_couverts = [
+            creneau["configuration_id"]
+            for creneau in _creneaux_non_couverts(etat)
+        ]
+        lock_attente = [
+            entree["configuration_id"]
+            for entree in verrou_charge[1]["panel"]
+            if entree["cause"] == "MISSING_OBSERVATION"
+        ]
+        if (
+            lock_attente
+            and len(lock_attente) != len(non_couverts)
+            and (
+                f"{len(lock_attente)} configuration(s) restent en attente"
+                in inconnues
+            )
+        ):
+            echecs.append(
+                "inconnues actuelles redérivées du verrou historique "
+                "plutôt que de etat-v1.json — aucune réparation"
+            )
+        for identifiant in non_couverts:
+            if identifiant not in inconnues:
+                echecs.append(
+                    "créneau non couvert de l'état absent des inconnues "
+                    f"actuelles : {identifiant}"
+                )
 
     for jeton in (*jetons_factuels, *JETONS_NORMATIFS):
         if jeton not in page:

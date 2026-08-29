@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Campagne V0 · Benchmark Lab-X</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="saut" href="#contenu">Aller au contenu</a>
+    <div class="enveloppe">
+      <header>
+        <div>
+          <p class="marque">Benchmark Lab-X · laboratoire éditorial</p>
+          <p class="lieu">Profil de mesure API · page locale</p>
+        </div>
+        <nav aria-label="Vues du prototype">
+          <ul>
+            <li><a href="./index.html">Accueil</a></li>
+            <li><a href="./v0.html" aria-current="page">Campagne V0</a></li>
+            <li><a href="./v1.html">Campagne V1</a></li>
+            <li><a href="./methode.html">Méthode et limites</a></li>
+          </ul>
+        </nav>
+      </header>
+      <main id="contenu" tabindex="-1">
+        <p class="statut">Résultat V0</p>
+        <h1>Une sortie, puis ABSTENTION</h1>
+        <p class="lede">Le panel officiel compte Grok 4.6 et Kimi K3. La couverture est <code>1/2</code>. L'acceptabilité officielle est <code>0/1</code>. La décision enregistrée est <code>ABSTENTION</code>.</p>
+
+        <ul class="bandeau">
+          <li><span class="valeur"><code>1/2</code></span><span class="legende">couverture du panel</span></li>
+          <li><span class="valeur"><code>0/1</code></span><span class="legende">acceptabilité officielle</span></li>
+          <li><span class="valeur"><code>CANDIDATE_NOT_ACCEPTABLE</code></span><span class="legende">Grok 4.6, porte <code>G-001</code></span></li>
+          <li><span class="valeur"><code>HARNESS_ERROR</code></span><span class="legende">Kimi K3, aucune sortie candidate</span></li>
+        </ul>
+
+        <h2>Les deux configurations</h2>
+        <div class="table-roule">
+          <table>
+            <caption>Faits repris de la table M10.1 et du rapport M10.2. Ordre du panel, sans tri.</caption>
+            <thead>
+              <tr>
+                <th scope="col">Configuration</th>
+                <th scope="col">État officiel</th>
+                <th scope="col">Acceptation</th>
+                <th scope="col">Couverture</th>
+                <th scope="col">Latence observée</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Grok 4.6<br><code>grok46_xai_build_oauth</code></th>
+                <td><code>CANDIDATE_NOT_ACCEPTABLE</code></td>
+                <td><code>0/1</code></td>
+                <td><code>1/1</code></td>
+                <td>382217 ms, sortie non acceptée</td>
+              </tr>
+              <tr>
+                <th scope="row">Kimi K3<br><code>kimi_k3_cursor_cli</code></th>
+                <td><code>HARNESS_ERROR</code></td>
+                <td><code>NON_DEFINI</code></td>
+                <td><code>0/1</code></td>
+                <td><code>INCONNU</code> : la durée de panne n'est pas une latence de service</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="duo">
+          <article class="carte">
+            <h3>Grok 4.6</h3>
+            <p>Une sortie candidate a été produite. Le validateur a rendu <code>FAIL</code> : <code>G-005</code> passe, <code>G-001</code> échoue, origine <code>CANDIDATE_ERROR</code>. L'état officiel est donc <code>CANDIDATE_NOT_ACCEPTABLE</code>.</p>
+          </article>
+          <article class="carte">
+            <h3>Kimi K3</h3>
+            <p>Le harnais est tombé en panne avant toute sortie. <code>HARNESS_ERROR</code> réduit la couverture. Il n'est pas imputé au modèle. Coût et latence restent <code>INCONNU</code> ou <code>NON_DEFINI</code>.</p>
+          </article>
+        </div>
+
+        <h2>Ce que V0 autorise à retenir</h2>
+        <p>La chaîne de mesure a produit un verdict automatique sur un créneau. Aucune sortie n'est officiellement acceptable. Le créneau Kimi n'est pas couvert. La revue humaine aveugle n'a reçu aucun dossier.</p>
+        <p>Les identités réellement servies restent <code>INCONNU</code>. Le coût fournisseur reste <code>INCONNU</code>. Le coût par sortie acceptable est <code>NON_DEFINI</code>.</p>
+        <p class="sources">Sources : <code>tasks/dev/pre-cadrage-entretien-client/campagne-v0/metriques-decision-m10-1-v1/table-metriques.json</code>, <code>campagne-v0/rapport-decision-m10-2-v1/rapport-interne.md</code>, <code>campagne-v0/panel-identites-v1/panel-identites.json</code>, <code>campagne-v0/validation-automatique-m8-2-v1/registre-couverture-verdicts.json</code>.</p>
+      </main>
+      <footer>
+        <p>Les jetons <code>INCONNU</code>, <code>NON_DEFINI</code>, <code>HARNESS_ERROR</code>, <code>CANDIDATE_NOT_ACCEPTABLE</code> et <code>ABSTENTION</code> restent littéraux.</p>
+      </footer>
+    </div>
+  </body>
+</html>

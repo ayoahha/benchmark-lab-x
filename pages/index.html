@@ -4,16 +4,65 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow">
-    <title>Benchmark Lab-X</title>
+    <title>Benchmark Lab-X · restitution locale V0 et V1</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <main>
-      <section aria-labelledby="titre">
-        <p class="statut">Site public en préparation</p>
-        <h1 id="titre">Benchmark Lab-X</h1>
-        <p>Les résultats seront publiés ici après validation de la campagne et de la page de restitution.</p>
-      </section>
-    </main>
+    <a class="saut" href="#contenu">Aller au contenu</a>
+    <div class="enveloppe">
+      <header>
+        <div>
+          <p class="marque">Benchmark Lab-X · laboratoire éditorial</p>
+          <p class="lieu">Prototype local sous <code>pages/</code>, lisible hors ligne</p>
+        </div>
+        <nav aria-label="Vues du prototype">
+          <ul>
+            <li><a href="./index.html" aria-current="page">Accueil</a></li>
+            <li><a href="./v0.html">Campagne V0</a></li>
+            <li><a href="./v1.html">Campagne V1</a></li>
+            <li><a href="./methode.html">Méthode et limites</a></li>
+          </ul>
+        </nav>
+      </header>
+      <main id="contenu" tabindex="-1">
+        <p class="statut">Décision enregistrée</p>
+        <h1>ABSTENTION sur V0 et V1</h1>
+        <p class="lede">Six sorties V1 ont reçu le verdict mécanique enregistré <code>FAIL/G-001</code>. L'interprétation permise s'arrête là : le stimulus montre l'enveloppe dans un bloc <code>```yaml</code>, tandis que le validateur exige un frontmatter commençant par <code>---</code>. Cette incohérence de protocole empêche une comparaison fiable de la qualité des modèles.</p>
+        <p>Les fractions <code>1/2</code> (V0) et <code>6/7</code> (V1) appartiennent à deux profils et à deux panels différents. Elles ne sont pas comparables.</p>
+
+        <ol class="questions">
+          <li>
+            <h2>Quel workflow a été testé</h2>
+            <p>Un seul workflow, synthétique : préparer un pré-cadrage interne avant un entretien client, pour un cabinet fictif de conseil en IA et cybersécurité auprès de PME. La sortie est relue par le consultant. Elle n'est pas envoyée au client.</p>
+          </li>
+          <li>
+            <h2>Quelles configurations ont produit une sortie exploitable</h2>
+            <p>V0 : couverture <code>1/2</code>. Grok 4.6 a produit une sortie ; Kimi K3 n'en a pas produit (<code>HARNESS_ERROR</code>).</p>
+            <p>V1 : couverture <code>6/7</code>. Six configurations ont une sortie candidate. <code>cursor-kimi-k3</code> reste non couverte, cause <code>HARNESS_ERROR</code>.</p>
+          </li>
+          <li>
+            <h2>Pourquoi aucun choix de modèle n'est soutenu</h2>
+            <p>La décision officielle est <code>ABSTENTION</code> dans les deux campagnes. Acceptabilité officielle : V0 <code>0/1</code>, V1 <code>0/6</code>. Les six verdicts V1 <code>FAIL/G-001</code> mesurent l'enveloppe, pas la qualité du fond.</p>
+          </li>
+          <li>
+            <h2>Quelles preuves portent chaque affirmation</h2>
+            <p>Les chiffres viennent des artefacts versionnés. V0 : table M10.1 et rapport M10.2. V1 : <code>etat-v1.json</code>, <code>metriques-v1.json</code> et le registre de validation. Les chemins complets sont listés plus bas et détaillés sur <a href="./methode.html">Méthode et limites</a>.</p>
+          </li>
+        </ol>
+
+        <h2>Portée immédiate</h2>
+        <ul class="bandeau">
+          <li><span class="valeur">V0 <code>1/2</code></span><span class="legende">créneaux couverts, panel Grok 4.6 et Kimi K3</span></li>
+          <li><span class="valeur">V1 <code>6/7</code></span><span class="legende">créneaux couverts, sept configurations d'abonnement</span></li>
+          <li><span class="valeur"><code>0/1</code> et <code>0/6</code></span><span class="legende">sorties officiellement acceptables</span></li>
+          <li><span class="valeur"><code>ABSTENTION</code></span><span class="legende">décision enregistrée, inchangée</span></li>
+        </ul>
+
+        <p class="sources">Sources V0 : <code>tasks/dev/pre-cadrage-entretien-client/campagne-v0/metriques-decision-m10-1-v1/table-metriques.json</code>, <code>campagne-v0/rapport-decision-m10-2-v1/rapport-interne.md</code>, <code>campagne-v0/panel-identites-v1/panel-identites.json</code>, <code>campagne-v0/validation-automatique-m8-2-v1/registre-couverture-verdicts.json</code>. Sources V1 : <code>tasks/dev/pre-cadrage-entretien-client/campagne-v1/etat-v1.json</code>, <code>campagne-v1/metriques-v1.json</code>, <code>campagne-v1/validation-automatique-v1/registre-couverture-verdicts.json</code>. Protocole : <code>stimulus.md</code>, <code>tools/validateur_pre_cadrage_v0.py</code>.</p>
+      </main>
+      <footer>
+        <p>Prototype de restitution publique locale. Aucun déploiement distant n'est autorisé par cette tranche.</p>
+      </footer>
+    </div>
   </body>
 </html>

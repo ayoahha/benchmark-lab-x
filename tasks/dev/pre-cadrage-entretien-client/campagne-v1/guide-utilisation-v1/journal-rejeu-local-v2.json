@@ -1,0 +1,155 @@
+{
+  "amendement_proprietaire": "https://github.com/ayoahha/benchmark-lab-x/issues/150#issuecomment-5463707774",
+  "amendement_sha256": "c047ecff068049c835bc7d0641b67da0a3310cbf566a2ab77edf8f7f2eca2aec",
+  "base_git": "81c217e0a585e89c0151090d6cef9581b8a2c741",
+  "contextes": [
+    {
+      "commandes": [
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py panel",
+          "premiere_ligne_stdout": "registre ciblé : registre officiel tasks/dev/pre-cadrage-entretien-client/campagne-v1/registre-panel-v1"
+        },
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py autorisations",
+          "premiere_ligne_stdout": "autorisations : 7 configurations déclarées, non mesurées — aperçu avant toute action distante, sans authentification, sans lecture de compte, sans inspection de facturation"
+        },
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py etat",
+          "premiere_ligne_stdout": "état de la campagne V1 — lecture des seules preuves versionnées ; aucune acquisition, aucun appel candidat, aucune dépense"
+        },
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py metriques",
+          "premiere_ligne_stdout": "table de métriques écrite : tasks/dev/pre-cadrage-entretien-client/campagne-v1/metriques-v1.json"
+        },
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py cout",
+          "premiere_ligne_stdout": "coût d'abonnement écrit : tasks/dev/pre-cadrage-entretien-client/campagne-v1/cout-abonnement-v1.json"
+        },
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py restituer",
+          "premiere_ligne_stdout": "page écrite : tasks/dev/pre-cadrage-entretien-client/campagne-v1/restitution-humaine-v1/index.html (435183 octets)"
+        },
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py verifier-restitution",
+          "premiere_ligne_stdout": "verification-restitution : conforme"
+        }
+      ],
+      "contexte": "lecture-seule",
+      "empreinte_html": "f227418b91ada397f246274efb53cb29e473d288e01f79d84f55afae759e00c6",
+      "manifeste_preflights_apres": "1aeaf3102effb3bec57de722868f4067353e680db96c78687e8c4a2c0b4a6e8b",
+      "manifeste_preflights_avant": "1aeaf3102effb3bec57de722868f4067353e680db96c78687e8c4a2c0b4a6e8b",
+      "manifeste_recus_apres": "397b868cafe2a56facc95ac8df8b772cc802fc1b89b9d94b3b2d8910da1f90ac",
+      "manifeste_recus_avant": "397b868cafe2a56facc95ac8df8b772cc802fc1b89b9d94b3b2d8910da1f90ac"
+    },
+    {
+      "commandes": [
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py enregistrer --fichier <racine-temporaire>/tasks/dev/pre-cadrage-entretien-client/campagne-v1/configurations/demonstration-v1-xs-15.toml",
+          "premiere_ligne_stdout": "configuration 'demonstration-v1-xs-15' enregistrée, déclarée et non mesurée, dans le registre officiel tasks/dev/pre-cadrage-entretien-client/campagne-v1/registre-panel-v1"
+        },
+        {
+          "code_sortie": 1,
+          "invocation": "uv run tools/campagne_v1.py restituer",
+          "premiere_ligne_stdout": "ECHEC champ 'plan' : source incomplète, provenance de prix absente pour 'demonstration-v1-xs-15'"
+        }
+      ],
+      "contexte": "refus-provenance-de-prix",
+      "manifeste_preflights_apres": "1aeaf3102effb3bec57de722868f4067353e680db96c78687e8c4a2c0b4a6e8b",
+      "manifeste_preflights_avant": "1aeaf3102effb3bec57de722868f4067353e680db96c78687e8c4a2c0b4a6e8b",
+      "manifeste_recus_apres": "397b868cafe2a56facc95ac8df8b772cc802fc1b89b9d94b3b2d8910da1f90ac",
+      "manifeste_recus_avant": "397b868cafe2a56facc95ac8df8b772cc802fc1b89b9d94b3b2d8910da1f90ac"
+    },
+    {
+      "commandes": [
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py enregistrer --fichier <racine-temporaire>/tasks/dev/pre-cadrage-entretien-client/campagne-v1/configurations/demonstration-v1-xs-15.toml",
+          "premiere_ligne_stdout": "configuration 'demonstration-v1-xs-15' enregistrée, déclarée et non mesurée, dans le registre officiel tasks/dev/pre-cadrage-entretien-client/campagne-v1/registre-panel-v1"
+        },
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py restituer",
+          "premiere_ligne_stdout": "page écrite : tasks/dev/pre-cadrage-entretien-client/campagne-v1/restitution-humaine-v1/index.html (436764 octets)"
+        },
+        {
+          "code_sortie": 1,
+          "invocation": "uv run tools/campagne_v1.py verifier-restitution",
+          "premiere_ligne_stdout": "ECHEC couverture stockée divergente de la redérivation indépendante : 6/8 attendu, 6/7 stocké dans tasks/dev/pre-cadrage-entretien-client/campagne-v1/etat-v1.json — aucune réparation"
+        },
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py panel",
+          "premiere_ligne_stdout": "registre ciblé : registre officiel tasks/dev/pre-cadrage-entretien-client/campagne-v1/registre-panel-v1"
+        },
+        {
+          "code_sortie": 0,
+          "invocation": "uv run tools/campagne_v1.py autorisations --configuration demonstration-v1-xs-15",
+          "premiere_ligne_stdout": "autorisations : 1 configurations déclarées, non mesurées — aperçu avant toute action distante, sans authentification, sans lecture de compte, sans inspection de facturation"
+        }
+      ],
+      "configuration_c_sha256": "06d320092db3cb82c157bf35fe41d4a8567c611805932ff2dd782a3bf669c3d0",
+      "contexte": "ajout-puis-regeneration",
+      "empreinte_html_apres": "25621af9ecd836f7442cc35806ed16b1f85c5dad05e9ec65b236d75ac24c082a",
+      "empreinte_html_avant": "f227418b91ada397f246274efb53cb29e473d288e01f79d84f55afae759e00c6",
+      "manifeste_preflights_apres": "1aeaf3102effb3bec57de722868f4067353e680db96c78687e8c4a2c0b4a6e8b",
+      "manifeste_preflights_avant": "1aeaf3102effb3bec57de722868f4067353e680db96c78687e8c4a2c0b4a6e8b",
+      "manifeste_recus_apres": "397b868cafe2a56facc95ac8df8b772cc802fc1b89b9d94b3b2d8910da1f90ac",
+      "manifeste_recus_avant": "397b868cafe2a56facc95ac8df8b772cc802fc1b89b9d94b3b2d8910da1f90ac",
+      "preuve_semantique_html": {
+        "cardinalite_entrees_panel_apres": 8,
+        "cardinalite_entrees_panel_avant": 7,
+        "lecture_du_refus_verifier_restitution": "code 1 attendu et conservé : refus fail-closed sur '6/8 attendu, 6/7 stocké'. La page régénérée décrit huit configurations, la couverture stockée dans etat-v1.json en décrit encore sept ; la vérification redérive, refuse et n'écrit rien. Ce n'est pas un succès.",
+        "marqueur_operateur": "<strong>demonstration-v1-xs-15</strong> — entrée déclarée et non mesurée.",
+        "occurrences_marqueur_apres": 1,
+        "occurrences_marqueur_avant": 0,
+        "selecteur_cardinalite": "occurrences de la chaîne 'entrée déclarée et non mesurée' dans restitution-humaine-v1/index.html"
+      }
+    }
+  ],
+  "contrat_sha256": "e7f2614dcde6f71edc116a1a7cb3dab6adbcc70c1b1211028b7c0d8ce8b58f91",
+  "couture_publique": "tools.campagne_v1.principal(arguments, racine=<racine temporaire jetable>)",
+  "empreintes_immuables": {
+    "tasks/dev/pre-cadrage-entretien-client/campagne-v1/preflights-v1": "1aeaf3102effb3bec57de722868f4067353e680db96c78687e8c4a2c0b4a6e8b",
+    "tasks/dev/pre-cadrage-entretien-client/campagne-v1/recus-v1": "397b868cafe2a56facc95ac8df8b772cc802fc1b89b9d94b3b2d8910da1f90ac"
+  },
+  "isolement": "chaque contexte copie l'arbre de preuves versionnées dans une racine temporaire jetable distincte ; le registre officiel du worktree n'est ni lu en écriture ni modifié",
+  "issue": "https://github.com/ayoahha/benchmark-lab-x/issues/150",
+  "predecesseur": {
+    "base_git_declaree": "368455ea08abb861709baf16ead0f438ec1acb29",
+    "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/guide-utilisation-v1/journal-rejeu-local.json",
+    "issue": "https://github.com/ayoahha/benchmark-lab-x/issues/116",
+    "sha256": "d9b9a606304867662d69d954e7f97b1c8ac6d5a295af5a30fba0c73f9084ae69",
+    "ticket": "V1-XS-15"
+  },
+  "recette_manifeste_repertoire": "pour chaque fichier trié par nom, la ligne '<sha256 du fichier>  <chemin relatif à la racine du dépôt>\\n' ; le manifeste est le SHA-256 de la concaténation de ces lignes",
+  "schema_version": "campagne-v1-journal-rejeu-local/v2",
+  "sous_commandes_jamais_rejouees": [
+    "acquerir --configuration",
+    "acquerir --local --configuration",
+    "dossiers",
+    "geler",
+    "preflight",
+    "qualifier",
+    "valider",
+    "verrouiller"
+  ],
+  "sous_commandes_rejouables": [
+    "autorisations",
+    "cout",
+    "enregistrer",
+    "etat",
+    "metriques",
+    "panel",
+    "restituer",
+    "verifier-restitution"
+  ],
+  "ticket": "PUBLIC-BENCHMARK-V0-V1"
+}
