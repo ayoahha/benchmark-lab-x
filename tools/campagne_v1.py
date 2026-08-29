@@ -11213,6 +11213,139 @@ def preparer_recuperation_headless(racine: Path) -> int:
     return 0
 
 
+# V1-R6-P (#148) : préparation hors ligne du seul créneau Cursor/Kimi -003
+# sans autorité d'exécution, appel candidat, observation ni écriture privée
+SCHEMA_PREPARATION_RECUPERATION_CURSOR = (
+    "campagne-v1-preparation-recuperation-cursor/v1"
+)
+CHEMIN_PREPARATION_RECUPERATION_CURSOR = (
+    _RACINE_CAMPAGNE_V1
+    / "completion-panel-v1"
+    / "preparation-recuperation-cursor-v1.json"
+)
+AUTORITE_PREPARATION_RECUPERATION_CURSOR = (
+    "V1_R6 = PREPARE_WITHOUT_CANDIDATE_CALL"
+)
+CONFIGURATION_RECUPERATION_CURSOR = "cursor-kimi-k3"
+CRENEAU_RECUPERATION_CURSOR = "ACQ-V1-CURSOR-KIMI-K3-003"
+DESCRIPTEUR_RECUPERATION_CURSOR = (
+    "agent --trust --print --output-format stream-json --mode ask "
+    "--sandbox enabled --workspace __ISOLATED_WORKSPACE__ "
+    "--model kimi-k3-high"
+)
+
+
+def _structure_preparation_recuperation_cursor() -> dict:
+    return {
+        "schema": SCHEMA_PREPARATION_RECUPERATION_CURSOR,
+        "authority": AUTORITE_PREPARATION_RECUPERATION_CURSOR,
+        "tranche": "V1-R6-P",
+        "configuration_id": CONFIGURATION_RECUPERATION_CURSOR,
+        "reserved_slot": CRENEAU_RECUPERATION_CURSOR,
+        "state": "WAITING_CURSOR_QUOTA_RESET_CONFIRMATION",
+        "execution_authority": "NOT_GRANTED",
+        "future_candidate_calls_max": 1,
+        "retry": 0,
+        "fallback": "NONE",
+        "overage": "INTERDIT",
+        "incremental_spend_eur": 0,
+        "input_mode": "stdin",
+        "descriptor": DESCRIPTEUR_RECUPERATION_CURSOR,
+    }
+
+
+def _champ_divergent_preparation_recuperation_cursor(
+    existant: object, attendu: dict
+) -> str:
+    if not isinstance(existant, dict):
+        return "schema"
+    for cle in attendu:
+        if existant.get(cle) != attendu[cle]:
+            return cle
+    for cle in existant:
+        if cle not in attendu:
+            return cle
+    return "schema"
+
+
+def _verifier_preparation_recuperation_cursor(
+    chemin: Path, octets_attendus: bytes
+) -> None:
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurCompletion(
+            "préparation Cursor : fichier régulier non symbolique attendu"
+        )
+    octets = chemin.read_bytes()
+    if octets == octets_attendus:
+        return
+    try:
+        existant = json.loads(octets.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        existant = None
+    champ = _champ_divergent_preparation_recuperation_cursor(
+        existant, json.loads(octets_attendus.decode("utf-8"))
+    )
+    raise ErreurCompletion(
+        "préparation Cursor divergente : champ fautif "
+        f"'{champ}' (LOCKED_ARTIFACT_CHANGED) : aucune réécriture"
+    )
+
+
+def preparer_recuperation_cursor(racine: Path) -> int:
+    chemin = racine / CHEMIN_PREPARATION_RECUPERATION_CURSOR
+    octets = octets_canoniques(_structure_preparation_recuperation_cursor())
+    try:
+        if os.path.lexists(chemin):
+            _verifier_preparation_recuperation_cursor(chemin, octets)
+        else:
+            chemin.parent.mkdir(parents=True, exist_ok=True)
+            descripteur = os.open(
+                chemin, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
+            )
+            with os.fdopen(descripteur, "wb") as flux:
+                flux.write(octets)
+    except (ErreurCompletion, OSError) as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    print(
+        "préparation Cursor/Kimi vérifiée : "
+        f"{CHEMIN_PREPARATION_RECUPERATION_CURSOR.as_posix()}"
+    )
+    print(
+        f"{CRENEAU_RECUPERATION_CURSOR} · préparation hors ligne · "
+        "aucune acquisition · aucune observation · autorité d'exécution "
+        "absente"
+    )
+    return 0
+
+
+def acquerir_recuperation_cursor(racine: Path, configuration_id: str) -> int:
+    if configuration_id != CONFIGURATION_RECUPERATION_CURSOR:
+        print(
+            "ECHEC champ 'configuration_id' : "
+            f"'{configuration_id}' hors de la portée V1-R6-P"
+        )
+        return 2
+    chemin = racine / CHEMIN_PREPARATION_RECUPERATION_CURSOR
+    attendu = _structure_preparation_recuperation_cursor()
+    try:
+        if os.path.lexists(chemin):
+            _verifier_preparation_recuperation_cursor(
+                chemin, octets_canoniques(attendu)
+            )
+    except (ErreurCompletion, OSError) as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    print(
+        "ECHEC AUTORITE_EXECUTION_ABSENTE : V1-R6-P prépare seulement "
+        f"{attendu['reserved_slot']} pour {configuration_id} ; aucun "
+        "exécutable résolu, aucun processus agent, aucune écriture privée, "
+        "aucun journal, aucun reçu, aucun appel candidat"
+    )
+    return 2
+
+
 def _verifier_autorisation_completion(
     chemin: Path, octets_attendus: bytes
 ) -> None:
@@ -19739,11 +19872,13 @@ _USAGE = (
     "| acquerir --recuperation --configuration <id> "
     "| acquerir --completion --configuration <id> "
     "| acquerir --recuperation-headless --configuration <id> "
+    "| acquerir --recuperation-cursor --configuration <id> "
     "| preflight --configuration <id> "
     "| qualifier | verrouiller | valider | dossiers | geler | etat "
     "| metriques | cout | restituer | verifier-restitution "
     "| preparer-recuperation | preparer-completion "
-    "| preparer-execution-completion | preparer-recuperation-headless"
+    "| preparer-execution-completion | preparer-recuperation-headless "
+    "| preparer-recuperation-cursor"
 )
 
 
@@ -19814,6 +19949,8 @@ def principal(
         return preparer_execution_completion(racine, racine_privee)
     if arguments == ["preparer-recuperation-headless"]:
         return preparer_recuperation_headless(racine)
+    if arguments == ["preparer-recuperation-cursor"]:
+        return preparer_recuperation_cursor(racine)
     if arguments[:1] == ["enregistrer"]:
         options = _analyser_options(arguments[1:], ("--registre", "--fichier"))
         if options is None or "--fichier" not in options:
@@ -19854,6 +19991,8 @@ def principal(
                 racine_privee,
                 recuperation_headless=True,
             )
+        if arguments[1] == "--recuperation-cursor":
+            return acquerir_recuperation_cursor(racine, arguments[3])
         print(_USAGE)
         return 2
     if arguments[:1] == ["preflight"]:
