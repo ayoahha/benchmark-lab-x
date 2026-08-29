@@ -7,11 +7,10 @@ Chaque test passe par `principal(["metriques"])` avec une racine de dépôt
 temporaire : les preuves versionnées réelles y sont copiées, ou des doubles
 locaux valides y sont construits pour les branches absentes du lot réel
 (divergence de comparabilité). La couverture publiée par V1-XS-12A est
-reprise à l'identique, jamais recalculée : 2/7, deux décisions
-CANDIDATE_NOT_ACCEPTABLE, cinq causes MISSING_OBSERVATION, aucune sortie
-OFFICIALLY_ACCEPTABLE. Seules les configurations portant une preuve
-d'acquisition sont comptées comparables ; les cinq configurations sans
-observation restent visibles avec leur cause exacte, hors du front. La
+reprise à l'identique, jamais recalculée : 6/7, six décisions
+CANDIDATE_NOT_ACCEPTABLE, un incident HARNESS_ERROR non couvert, aucune
+sortie OFFICIALLY_ACCEPTABLE. Les sept configurations portant une preuve
+d'acquisition sont comptées comparables. La
 politique de latence est éprouvée en chemin pur injecté : la branche
 reconnaît uniquement LATENCY_MEDIAN_SUCCESS_E2E et valide le contrat
 exact de la source locale versionnée ; le verrou courant ne porte aucun
@@ -36,6 +35,8 @@ sys.path.insert(0, str(RACINE / "tools"))
 
 import campagne_v1 as M  # noqa: E402
 
+from tests._helpers_v1 import realigner_chaine_recus  # noqa: E402
+
 _CAMPAGNE = Path("tasks/dev/pre-cadrage-entretien-client/campagne-v1")
 _SOURCES_PAQUET = RACINE / "tasks/dev/pre-cadrage-entretien-client"
 _FICHIERS_PAQUET = (
@@ -56,8 +57,17 @@ _PANEL = (
     "grok-build-grok-4-6",
     "zai-glm-5-3",
 )
-_ACQUISES = ("antigravity-gemini-3-7-flash", "zai-glm-5-3")
-_NON_ACQUISES = tuple(ident for ident in _PANEL if ident not in _ACQUISES)
+_DECIDABLES = tuple(ident for ident in _PANEL if ident != "cursor-kimi-k3")
+_NON_DECIDABLES = ("cursor-kimi-k3",)
+_LATENCES_ATTENDUES = {
+    "antigravity-gemini-3-7-flash": [22925],
+    "claude-code-fable-5": [37605],
+    "claude-code-opus-5": [126870],
+    "codex-gpt-5-6-sol": [78017],
+    "cursor-kimi-k3": [],
+    "grok-build-grok-4-6": [179590],
+    "zai-glm-5-3": [199430],
+}
 # Sept composantes d'effort humain du contrat U-025, sans conversion
 _COMPOSANTES_EFFORT = (
     "configuration",
@@ -120,40 +130,14 @@ class _ArbrePreuvesReelles:
             "dff58875d0412f275dfc1d781617214e2557ae1eeaf9177885f50b05a8591c2f"
             ".json"
         )
-        repertoire = self.racine / _CAMPAGNE / "recus-v1"
-        cible = repertoire / ancien_nom
-        enveloppe = json.loads(cible.read_text(encoding="utf-8"))
-        mutation(enveloppe["payload"])
-        adresse = M.adresse_canonique(enveloppe["payload"])
-        enveloppe["content_address"]["sha256"] = adresse
-        octets = M.octets_canoniques(enveloppe)
-        cible.unlink()
-        (repertoire / f"{adresse}.json").write_bytes(octets)
-        sha_recu = hashlib.sha256(octets).hexdigest()
-        registre_chemin = self.racine / M.CHEMIN_REGISTRE_VALIDATION
-        registre = json.loads(registre_chemin.read_text(encoding="utf-8"))
-        for entree in registre["entrees"]:
-            if entree["recu"].endswith(ancien_nom):
-                entree["recu"] = (
-                    f"{_CAMPAGNE.as_posix()}/recus-v1/{adresse}.json"
-                )
-                entree["recu_sha256"] = sha_recu
-        octets_registre = M.octets_canoniques(registre)
-        registre_chemin.write_bytes(octets_registre)
-        sha_registre = hashlib.sha256(octets_registre).hexdigest()
-        chemin_etat = self.racine / M.CHEMIN_ETAT
-        etat = json.loads(chemin_etat.read_text(encoding="utf-8"))
-        registre_relatif = M.CHEMIN_REGISTRE_VALIDATION.as_posix()
-        for creneau in etat["couverture"]["creneaux"]:
-            for preuve in creneau["preuves"]:
-                if preuve["chemin"].endswith(ancien_nom):
-                    preuve["chemin"] = (
-                        f"{_CAMPAGNE.as_posix()}/recus-v1/{adresse}.json"
-                    )
-                    preuve["sha256"] = sha_recu
-                elif preuve["chemin"] == registre_relatif:
-                    preuve["sha256"] = sha_registre
-        chemin_etat.write_bytes(M.octets_canoniques(etat))
+        realigner_chaine_recus(
+            M,
+            self.racine,
+            _CAMPAGNE,
+            M.CHEMIN_REGISTRE_VALIDATION,
+            M.CHEMIN_ETAT,
+            mutations={ancien_nom: mutation},
+        )
 
     def _table(self) -> dict:
         return json.loads(self.chemin_table.read_text(encoding="utf-8"))
@@ -280,25 +264,25 @@ class MetriquesPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.assertEqual(
             list(_PANEL), [l["configuration_id"] for l in table["configurations"]]
         )
-        # Lot réel : deux décisions CANDIDATE_NOT_ACCEPTABLE décidables,
-        # cinq créneaux sans observation décidable, aucune sortie
+        # Lot réel : six décisions CANDIDATE_NOT_ACCEPTABLE décidables,
+        # un créneau non décidable, aucune sortie
         # officiellement acceptable
-        for ident in _ACQUISES:
+        for ident in _DECIDABLES:
             self.assertEqual(0, lignes[ident]["numerateur"], ident)
             self.assertEqual(1, lignes[ident]["denominateur_decidable"], ident)
             self.assertEqual("0/1", lignes[ident]["taux"], ident)
-        for ident in _NON_ACQUISES:
+        for ident in _NON_DECIDABLES:
             self.assertEqual(0, lignes[ident]["numerateur"], ident)
             self.assertEqual(0, lignes[ident]["denominateur_decidable"], ident)
             self.assertEqual("NON_DEFINI", lignes[ident]["taux"], ident)
         agregat = table["agregat"]
         self.assertEqual(0, agregat["numerateur"])
-        self.assertEqual(2, agregat["denominateur_decidable"])
-        self.assertEqual("0/2", agregat["taux"])
+        self.assertEqual(6, agregat["denominateur_decidable"])
+        self.assertEqual("0/6", agregat["taux"])
         # La couverture publiée par V1-XS-12A est reprise à l'identique
         reprise = table["couverture_reprise"]
-        self.assertEqual("2/7", reprise["fraction"])
-        self.assertEqual(2, reprise["numerateur"])
+        self.assertEqual("6/7", reprise["fraction"])
+        self.assertEqual(6, reprise["numerateur"])
         self.assertEqual(7, reprise["denominateur"])
         self.assertEqual(M.CHEMIN_ETAT.as_posix(), reprise["source"]["chemin"])
 
@@ -332,20 +316,11 @@ class MetriquesPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         code, sortie = self._metriques()
         self.assertEqual(0, code, sortie)
         lignes = self._lignes()
-        # Latences de configuration lues des reçus officiels du lot réel :
-        # 22925 ms pour antigravity, 199430 ms pour zai ; les incidents
-        # HARNESS_ERROR ne portent aucune latence
-        latence = lignes["antigravity-gemini-3-7-flash"]["latence_configuration"]
-        self.assertEqual("DISTRIBUTION_COMPLETE", latence["regle"])
-        self.assertEqual([22925], latence["distribution_ms"])
-        self.assertEqual(
-            [199430],
-            lignes["zai-glm-5-3"]["latence_configuration"]["distribution_ms"],
-        )
-        for ident in _NON_ACQUISES:
+        # Latences lues littéralement des reçus officiels du lot réel
+        for ident, distribution in _LATENCES_ATTENDUES.items():
             latence = lignes[ident]["latence_configuration"]
             self.assertEqual("DISTRIBUTION_COMPLETE", latence["regle"], ident)
-            self.assertEqual([], latence["distribution_ms"], ident)
+            self.assertEqual(distribution, latence["distribution_ms"], ident)
         # PRD 8.4 : le délai complet avant décision officielle est distinct
         # de la latence de configuration et n'est pas établi par les
         # preuves courantes
@@ -376,22 +351,16 @@ class MetriquesPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.assertEqual(0, code, sortie)
         table = self._table()
         lignes = self._lignes()
-        # Seules les deux configurations portant une preuve d'acquisition
-        # sont comptées comparables
-        for ident in _ACQUISES:
+        # Les sept configurations portant une preuve d'acquisition sont
+        # comptées comparables, y compris l'incident non décidable Cursor
+        for ident in _PANEL:
             self.assertEqual(
                 "COMPARABLE", lignes[ident]["comparabilite"]["statut"], ident
             )
-        # Les cinq configurations sans observation restent visibles avec
-        # leur cause exacte, sans prétendre que leurs axes ont été évalués
-        for ident in _NON_ACQUISES:
-            comparabilite = lignes[ident]["comparabilite"]
-            self.assertEqual("SANS_OBSERVATION", comparabilite["statut"], ident)
-            self.assertEqual("MISSING_OBSERVATION", comparabilite["cause"], ident)
         agregat = table["agregat"]
-        self.assertEqual(2, agregat["configurations_comparables"])
+        self.assertEqual(7, agregat["configurations_comparables"])
         self.assertEqual(0, agregat["configurations_retirees"])
-        self.assertEqual(5, agregat["configurations_sans_observation"])
+        self.assertEqual(0, agregat["configurations_sans_observation"])
 
     def test_verifier_restitution_refuse_configuration_surnumeraire(self):
         # Double : la table stockée porte une huitième configuration
@@ -437,11 +406,24 @@ class MetriquesPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
     def _muter_cause_creneau(self, identifiant: str, cause: str) -> None:
         """Double : le créneau non couvert d'une configuration sans reçu
         porte une cause réelle divergente de MISSING_OBSERVATION."""
+        realigner_chaine_recus(
+            M,
+            self.racine,
+            _CAMPAGNE,
+            M.CHEMIN_REGISTRE_VALIDATION,
+            M.CHEMIN_ETAT,
+            configurations_retirees={identifiant},
+        )
         chemin_etat = self.racine / M.CHEMIN_ETAT
         etat = json.loads(chemin_etat.read_text(encoding="utf-8"))
         for creneau in etat["couverture"]["creneaux"]:
             if creneau["configuration_id"] == identifiant:
+                creneau["couvert"] = False
+                creneau["decision"] = None
                 creneau["cause"] = cause
+        etat["couverture"]["numerateur"] = 5
+        etat["couverture"]["fraction"] = "5/7"
+        etat.pop("execution_completion", None)
         chemin_etat.write_text(
             json.dumps(etat, ensure_ascii=False, indent=2, sort_keys=True)
             + "\n",
@@ -459,8 +441,8 @@ class MetriquesPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.assertEqual("SANS_OBSERVATION", comparabilite["statut"])
         self.assertEqual("IDENTITY_MISMATCH", comparabilite["cause"])
         agregat = self._table()["agregat"]
-        self.assertEqual(2, agregat["configurations_comparables"])
-        self.assertEqual(5, agregat["configurations_sans_observation"])
+        self.assertEqual(6, agregat["configurations_comparables"])
+        self.assertEqual(1, agregat["configurations_sans_observation"])
 
     def test_comparabilite_sans_recu_preuve_manquante(self):
         # Double : créneau non couvert à la cause PREUVE_MANQUANTE, sans
@@ -473,8 +455,8 @@ class MetriquesPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.assertEqual("SANS_OBSERVATION", comparabilite["statut"])
         self.assertEqual("PREUVE_MANQUANTE", comparabilite["cause"])
         agregat = self._table()["agregat"]
-        self.assertEqual(2, agregat["configurations_comparables"])
-        self.assertEqual(5, agregat["configurations_sans_observation"])
+        self.assertEqual(6, agregat["configurations_comparables"])
+        self.assertEqual(1, agregat["configurations_sans_observation"])
 
     def test_divergence_fraicheur_retire_la_configuration_sans_la_masquer(self):
         # Double : le reçu de préflight de zai-glm-5-3 diffère de
@@ -500,26 +482,27 @@ class MetriquesPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.assertIn("LOCKED_ARTIFACT_CHANGED", zai["comparabilite"]["motif"])
         self.assertEqual(0, zai["numerateur"])
         self.assertEqual(1, zai["denominateur_decidable"])
-        # L'autre configuration prouvée reste comparable ; les cinq sans
-        # observation conservent leur cause exacte
+        # Les six autres configurations prouvées restent comparables
         self.assertEqual(
             "COMPARABLE",
             lignes["antigravity-gemini-3-7-flash"]["comparabilite"]["statut"],
         )
-        for ident in _NON_ACQUISES:
+        for ident in _PANEL:
+            if ident == "zai-glm-5-3":
+                continue
             self.assertEqual(
-                "SANS_OBSERVATION",
+                "COMPARABLE",
                 lignes[ident]["comparabilite"]["statut"],
                 ident,
             )
         # L'agrégat ne compte que les configurations comparables
         agregat = table["agregat"]
-        self.assertEqual(1, agregat["configurations_comparables"])
+        self.assertEqual(6, agregat["configurations_comparables"])
         self.assertEqual(1, agregat["configurations_retirees"])
-        self.assertEqual(5, agregat["configurations_sans_observation"])
+        self.assertEqual(0, agregat["configurations_sans_observation"])
         self.assertEqual(0, agregat["numerateur"])
-        self.assertEqual(1, agregat["denominateur_decidable"])
-        self.assertEqual("0/1", agregat["taux"])
+        self.assertEqual(5, agregat["denominateur_decidable"])
+        self.assertEqual("0/5", agregat["taux"])
 
     def test_divergence_carte_retiree_la_configuration(self):
         # Double : le reçu zai -002 (pointe de chaîne) porte une empreinte
@@ -534,10 +517,10 @@ class MetriquesPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.assertEqual("RETIREE", zai["comparabilite"]["statut"])
         self.assertIn("carte", zai["comparabilite"]["motif"])
         agregat = self._table()["agregat"]
-        self.assertEqual(1, agregat["configurations_comparables"])
+        self.assertEqual(6, agregat["configurations_comparables"])
         self.assertEqual(1, agregat["configurations_retirees"])
-        self.assertEqual(5, agregat["configurations_sans_observation"])
-        self.assertEqual("0/1", agregat["taux"])
+        self.assertEqual(0, agregat["configurations_sans_observation"])
+        self.assertEqual("0/5", agregat["taux"])
 
     def test_metriques_idempotente_et_deterministe(self):
         code, sortie = self._metriques()
@@ -591,22 +574,22 @@ class MetriquesPreuvesReellesTests(_ArbrePreuvesReelles, unittest.TestCase):
         self.assertIn('<section id="metriques-v1">', page)
         section = self._section_metriques()
         # Numérateur, dénominateur et taux par configuration et agrégat
-        self.assertIn("0/2", section)
+        self.assertIn("0/6", section)
         self.assertIn("0/1", section)
         self.assertIn("NON_DEFINI", section)
         # Couverture reprise à l'identique, avec sa source et son empreinte
-        self.assertIn("2/7", section)
+        self.assertIn("6/7", section)
         self.assertIn(M.CHEMIN_ETAT.as_posix(), section)
         sha_etat = hashlib.sha256(
             (self.racine / M.CHEMIN_ETAT).read_bytes()
         ).hexdigest()
         self.assertIn(sha_etat, section)
         # Une ligne par configuration, statut de comparabilité visible :
-        # deux comparables, cinq sans observation à la cause exacte
+        # sept comparables, aucune configuration sans observation
         self.assertEqual(7, section.count(' data-metriques-configuration="'))
-        self.assertEqual(2, section.count("<code>COMPARABLE</code>"))
-        self.assertEqual(5, section.count("<code>SANS_OBSERVATION</code>"))
-        self.assertEqual(5, section.count("<code>MISSING_OBSERVATION</code>"))
+        self.assertEqual(7, section.count("<code>COMPARABLE</code>"))
+        self.assertEqual(0, section.count("<code>SANS_OBSERVATION</code>"))
+        self.assertEqual(0, section.count("<code>MISSING_OBSERVATION</code>"))
         # Sept composantes d'effort humain, séparées, sans conversion, avec
         # la provenance locale du vocabulaire figé
         for composante in _COMPOSANTES_EFFORT:

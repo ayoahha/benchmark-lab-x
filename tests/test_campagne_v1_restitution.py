@@ -9,8 +9,8 @@ temporaire où les preuves versionnées réelles sont copiées. Les valeurs
 attendues sont des littéraux indépendants issus de la lecture humaine
 des preuves versionnées (etat-v1.json, metriques-v1.json,
 cout-abonnement-v1.json, verrou.json), jamais un recalcul de
-l'implémentation : couverture 2/7, deux configurations comparables aux
-taux 0/1 et aux distributions de latence [22925] et [199430] ms, coût
+l'implémentation : couverture 6/7, sept configurations comparables, six
+taux 0/1, un taux NON_DEFINI et six distributions de latence observées, coût
 d'abonnement littéralement NON_DEFINI, attestation du panel verrouillé
 datée 2026-08-22, fenêtre de fraîcheur EXACT_LOCK_EVENT_BASED_NO_TTL.
 La restitution complète évalue chaque déclencheur d'abstention U-018 et
@@ -23,6 +23,7 @@ général, aucun vainqueur, aucun score agrégé.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import re
@@ -40,7 +41,10 @@ sys.path.insert(0, str(RACINE))
 
 import campagne_v1 as M  # noqa: E402
 
-from tests._helpers_v1 import retirer_couverture_publiee  # noqa: E402
+from tests._helpers_v1 import (  # noqa: E402
+    realigner_chaine_recus,
+    retirer_couverture_publiee,
+)
 
 _CAMPAGNE = Path("tasks/dev/pre-cadrage-entretien-client/campagne-v1")
 _SOURCES_PAQUET = RACINE / "tasks/dev/pre-cadrage-entretien-client"
@@ -66,8 +70,21 @@ _AXES = (
     "cout-par-sortie-acceptable",
     "latence-preenregistree",
 )
-_COMPARABLES = ("antigravity-gemini-3-7-flash", "zai-glm-5-3")
-_ABSENTS = (
+_COMPARABLES = (
+    "antigravity-gemini-3-7-flash",
+    "claude-code-fable-5",
+    "claude-code-opus-5",
+    "codex-gpt-5-6-sol",
+    "cursor-kimi-k3",
+    "grok-build-grok-4-6",
+    "zai-glm-5-3",
+)
+_ABSENTS = ()
+_PREFLIGHTS_READY = (
+    "antigravity-gemini-3-7-flash",
+    "zai-glm-5-3",
+)
+_PREFLIGHTS_COMPLETION = (
     "claude-code-fable-5",
     "claude-code-opus-5",
     "codex-gpt-5-6-sol",
@@ -79,6 +96,7 @@ _FENETRE = "EXACT_LOCK_EVENT_BASED_NO_TTL"
 _EFFET_FENETRE = "HOLD_STOP_NO_CROSS_EVENT_COMPARISON"
 _LATENCE_ANTIGRAVITY_MS = "22925"
 _LATENCE_ZAI_MS = "199430"
+_AUTRES_LATENCES_MS = ("37605", "126870", "78017", "179590")
 
 _MOTIF_ARTICLE_AXE = {
     axe: re.compile(
@@ -193,7 +211,7 @@ class RestitutionCompleteComparaisonTests(_ArbrePreuvesReelles):
                 f' data-comparaison-absence="{identifiant}"', page
             )
         # Panel situé : le canon exact de couverture reste visible
-        self.assertIn("2 décisions", page)
+        self.assertIn("6 décisions", page)
         self.assertEqual(
             page.count(' data-comparaison-situee="abstention"'), 0
         )
@@ -210,18 +228,33 @@ class RestitutionCompleteComparaisonTests(_ArbrePreuvesReelles):
         for identifiant in _COMPARABLES:
             self.assertIn(identifiant, axe_taux.group(0))
         self.assertIn("0/1", axe_taux.group(0))
-        # Taux égaux à zéro : aucun maximum strict, aucun candidat promu
-        self.assertIn("aucun maximum strict", axe_taux.group(0).lower())
+        # Le taux NON_DEFINI de Cursor impose l'abstention de cet axe
+        self.assertIn("NON_DEFINI", axe_taux.group(0))
+        self.assertIn("ABSTENTION", axe_taux.group(0))
         axe_latence = _MOTIF_ARTICLE_AXE["latence-preenregistree"].search(
             page
         )
         self.assertIsNotNone(axe_latence)
         self.assertIn(_LATENCE_ANTIGRAVITY_MS, axe_latence.group(0))
         self.assertIn(_LATENCE_ZAI_MS, axe_latence.group(0))
-        # 22925 < 199430 : la valeur minimale préenregistrée appartient à
-        # antigravity-gemini-3-7-flash, sur cet axe seulement
-        self.assertIn("valeur minimale", axe_latence.group(0))
-        self.assertIn("antigravity-gemini-3-7-flash", axe_latence.group(0))
+        for latence in _AUTRES_LATENCES_MS:
+            self.assertIn(latence, axe_latence.group(0))
+        # DISTRIBUTION_COMPLETE ne préenregistre aucune statistique : cet
+        # axe s'abstient sans calculer de minimum à partir des distributions
+        self.assertIn("ABSTENTION", axe_latence.group(0))
+        self.assertIn("statistique", axe_latence.group(0))
+        self.assertIn(
+            "au moins une distribution n'a pas exactement une valeur",
+            axe_latence.group(0),
+        )
+        self.assertIn(
+            "cursor-kimi-k3</code> <code>[]</code> ms",
+            axe_latence.group(0),
+        )
+        self.assertNotIn(
+            "porte plusieurs valeurs", axe_latence.group(0)
+        )
+        self.assertNotIn("valeur minimale", axe_latence.group(0))
 
     def test_axe_monetaire_abstention_non_defini_litteral(self):
         page = self._restituer()
@@ -312,7 +345,36 @@ class RefusInjectionsTests(_ArbrePreuvesReelles):
         self.assertIn("date de comparaison omise", sortie)
 
     def test_refuse_absences_omises(self):
+        # Scénario isolé : toutes les preuves Fable courantes et leurs
+        # projections dérivées sont retirées ensemble avant restitution
+        realigner_chaine_recus(
+            M,
+            self.racine,
+            _CAMPAGNE,
+            M.CHEMIN_REGISTRE_VALIDATION,
+            M.CHEMIN_ETAT,
+            configurations_retirees={"claude-code-fable-5"},
+        )
+        chemin_manifeste = self.racine / M.CHEMIN_MANIFESTE_DOSSIERS
+        manifeste = json.loads(chemin_manifeste.read_text(encoding="utf-8"))
+        manifeste["lot_vide"]["comptage_statuts"] = {
+            "ABSENTE": 3,
+            "FAIL": 5,
+        }
+        chemin_manifeste.write_bytes(M.octets_canoniques(manifeste))
+        chemin_etat = self.racine / M.CHEMIN_ETAT
+        etat = json.loads(chemin_etat.read_text(encoding="utf-8"))
+        etat.pop("couverture", None)
+        etat.pop("execution_completion", None)
+        chemin_etat.write_bytes(M.octets_canoniques(etat))
+        code, sortie = self._commande("etat")
+        self.assertEqual(code, 0, sortie)
+        code, sortie = self._commande("metriques")
+        self.assertEqual(code, 0, sortie)
         page = self._restituer()
+        self.assertIn(
+            ' data-comparaison-absence="claude-code-fable-5"', page
+        )
         sortie = self._verifier_apres_injection(
             page,
             page.replace(
@@ -388,8 +450,9 @@ class FraicheurDeclencheeTests(_ArbrePreuvesReelles):
     matériel LOCKED_ARTIFACT_CHANGED : la comparaison s'abstient."""
 
     def test_artefact_verrouille_modifie_impose_abstention(self):
-        # claude-code-fable-5.toml est verrouillé sans reçu officiel : un
-        # commentaire ajouté change son empreinte sans changer ses données
+        # La configuration Fable verrouillée change d'empreinte ; les reçus
+        # de la fixture sont réalignés sur ce fichier courant, de sorte que
+        # seule la fenêtre du verrou historique reste divergente
         chemin = (
             self.racine
             / _CAMPAGNE
@@ -401,6 +464,28 @@ class FraicheurDeclencheeTests(_ArbrePreuvesReelles):
             + "# empreinte modifiée après verrou\n",
             encoding="utf-8",
         )
+        sha_configuration = hashlib.sha256(chemin.read_bytes()).hexdigest()
+        repertoire = self.racine / _CAMPAGNE / "recus-v1"
+        mutations = {}
+        for recu in repertoire.iterdir():
+            enveloppe = json.loads(recu.read_text(encoding="utf-8"))
+            if (
+                enveloppe["payload"]["configuration"]["identifiant"]
+                == "claude-code-fable-5"
+            ):
+                mutations[recu.name] = lambda charge: charge[
+                    "configuration"
+                ].update(sha256=sha_configuration)
+        realigner_chaine_recus(
+            M,
+            self.racine,
+            _CAMPAGNE,
+            M.CHEMIN_REGISTRE_VALIDATION,
+            M.CHEMIN_ETAT,
+            mutations=mutations,
+        )
+        code, sortie = self._commande("metriques")
+        self.assertEqual(code, 0, sortie)
         code, sortie = self._commande("restituer")
         self.assertEqual(code, 0, sortie)
         page = self.page.read_text(encoding="utf-8")
@@ -535,7 +620,7 @@ class RetoursProprietairesTests(_ArbrePreuvesReelles):
 
     def test_explication_ready_identite_servie_inconnue(self):
         page = self._restituer()
-        for identifiant in _COMPARABLES:
+        for identifiant in _PREFLIGHTS_READY:
             motif = re.compile(
                 '<article class="affirmation"[^>]*'
                 f' data-explication-preflight="{identifiant}"[^>]*>'
@@ -545,7 +630,7 @@ class RetoursProprietairesTests(_ArbrePreuvesReelles):
             article = motif.search(page)
             self.assertIsNotNone(article, identifiant)
             texte = article.group(0)
-            self.assertIn("non génératif", texte)
+            self.assertIn("générative", texte)
             self.assertIn("identite_reellement_servie", texte)
             self.assertIn("INCONNU", texte)
             self.assertIn("Blocage exact", texte)
@@ -555,7 +640,7 @@ class RetoursProprietairesTests(_ArbrePreuvesReelles):
 
     def test_explication_missing_observation_cinq_configurations(self):
         page = self._restituer()
-        for identifiant in _ABSENTS:
+        for identifiant in _PREFLIGHTS_COMPLETION:
             motif = re.compile(
                 '<article class="affirmation"[^>]*'
                 f' data-explication-preflight="{identifiant}"[^>]*>'
@@ -696,10 +781,9 @@ class RetoursProprietairesTests(_ArbrePreuvesReelles):
         self.assertIn("INCONNU", article.group(0))
         self.assertIn("matérialisé", article.group(0))
 
-    def test_verrou_completion_rendu_suit_la_source(self):
-        # Le rendu reprend les champs aptitude_statique du JSON : une
-        # divergence du fichier source se retrouve dans la page, jamais
-        # un littéral dupliqué dans le code
+    def test_verrou_completion_altere_refuse_avant_rendu(self):
+        # L'autorisation additive R5 épingle le verrou : une divergence de
+        # la source est refusée avant tout rendu, jamais réparée
         chemin = self.racine / M.CHEMIN_VERROU_COMPLETION
         verrou = json.loads(chemin.read_text(encoding="utf-8"))
         verrou["aptitude_statique"]["signifie"] = "SENS_DIVERGENT_TEST"
@@ -710,11 +794,9 @@ class RetoursProprietairesTests(_ArbrePreuvesReelles):
             json.dumps(verrou, ensure_ascii=False, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        page = self._restituer()
-        self.assertIn("SENS_DIVERGENT_TEST", page)
-        self.assertIn("PREUVE_DIVERGENTE_TEST", page)
-        code, sortie = self._verifier()
-        self.assertEqual(code, 0, sortie)
+        code, sortie = self._commande("restituer")
+        self.assertEqual(code, 1)
+        self.assertIn("LOCKED_ARTIFACT_CHANGED", sortie)
 
     def test_parcours_v1_statuts_derives_des_preuves(self):
         page = self._restituer()
@@ -748,9 +830,9 @@ class RetoursProprietairesTests(_ArbrePreuvesReelles):
         self.assertIn(
             'data-parcours-statut="realise"', article_recus.group(0)
         )
-        self.assertIn("4 acquisition(s)", article_recus.group(0))
-        self.assertIn("4 reçu(s)", article_recus.group(0))
-        self.assertIn("2 configuration(s)", article_recus.group(0))
+        self.assertIn("9 acquisition(s)", article_recus.group(0))
+        self.assertIn("9 reçu(s)", article_recus.group(0))
+        self.assertIn("7 configuration(s)", article_recus.group(0))
         self.assertIn("ne complète pas le panel", article_recus.group(0))
         # Acceptabilité : bloquée par zéro PASS sur le lot courant
         self.assertIn("zéro verdict automatique", section)

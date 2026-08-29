@@ -477,6 +477,10 @@ _CLES_RECUPERATION_RECU = {
     "acquisition_id",
     "identite_servie",
 }
+# Table additive des seuls reçus d'exécution de complétion V1-R5 : présente
+# uniquement sur les cinq créneaux -001 du verrou de complétion
+_CLES_COMPLETION_RECU = _CLES_RECUPERATION_RECU
+_CLES_RECUPERATION_HEADLESS_RECU = _CLES_RECUPERATION_RECU
 _CLES_IDENTITE_SERVIE_RECU = {
     "statut",
     "disposition",
@@ -484,6 +488,44 @@ _CLES_IDENTITE_SERVIE_RECU = {
     "champs_divergents",
     "cause",
 }
+
+
+def _valider_identite_servie_recu(prefixe: str, valeur: object) -> dict:
+    """Contrat fermé de la table identite_servie des tables additives ;
+    toute divergence est refusée avec le champ fautif préfixé."""
+    identite = _exiger_cles(prefixe, valeur, _CLES_IDENTITE_SERVIE_RECU)
+    if identite["statut"] not in ("OBSERVED", INCONNU):
+        raise ErreurRecu(
+            f"champ '{prefixe}.statut' : OBSERVED ou "
+            "INCONNU attendu"
+        )
+    disposition_attendue = (
+        "OBSERVED" if identite["statut"] == "OBSERVED" else "HOLD"
+    )
+    if identite["disposition"] != disposition_attendue:
+        raise ErreurRecu(
+            f"champ '{prefixe}.disposition' : "
+            f"'{disposition_attendue}' attendu pour le statut "
+            f"'{identite['statut']}'"
+        )
+    if identite["incident"] is not None and identite["incident"] not in INCIDENTS_V1:
+        raise ErreurRecu(
+            f"champ '{prefixe}.incident' : None ou "
+            f"vocabulaire fermé ({' | '.join(INCIDENTS_V1)}) attendu"
+        )
+    if not isinstance(identite["champs_divergents"], list) or any(
+        not isinstance(champ, str) for champ in identite["champs_divergents"]
+    ):
+        raise ErreurRecu(
+            f"champ '{prefixe}.champs_divergents' : liste "
+            "de chaînes attendue"
+        )
+    if identite["cause"] is not None and not isinstance(identite["cause"], str):
+        raise ErreurRecu(
+            f"champ '{prefixe}.cause' : None ou chaîne "
+            "attendue"
+        )
+    return identite
 
 
 def _valider_recuperation_recu(valeur: object, configuration_id: str) -> dict:
@@ -508,42 +550,62 @@ def _valider_recuperation_recu(valeur: object, configuration_id: str) -> dict:
             "champ 'recuperation.acquisition_id' : créneau -002 exact de la "
             f"configuration '{configuration_id}' attendu"
         )
-    identite = _exiger_cles(
-        "recuperation.identite_servie",
-        table["identite_servie"],
-        _CLES_IDENTITE_SERVIE_RECU,
+    _valider_identite_servie_recu(
+        "recuperation.identite_servie", table["identite_servie"]
     )
-    if identite["statut"] not in ("OBSERVED", INCONNU):
+    return table
+
+
+def _valider_completion_recu(valeur: object, configuration_id: str) -> dict:
+    """Valide la table additive d'exécution de complétion d'un reçu -001
+    V1-R5 et rend la table ; toute divergence du contrat fermé est refusée."""
+    table = _exiger_cles("completion", valeur, _CLES_COMPLETION_RECU)
+    if table["tranche"] != TRANCHE_COMPLETION_EXECUTION:
         raise ErreurRecu(
-            "champ 'recuperation.identite_servie.statut' : OBSERVED ou "
-            "INCONNU attendu"
+            "champ 'completion.tranche' : "
+            f"'{TRANCHE_COMPLETION_EXECUTION}' attendu"
         )
-    disposition_attendue = (
-        "OBSERVED" if identite["statut"] == "OBSERVED" else "HOLD"
+    if table["autorite"] != AUTORITE_COMPLETION:
+        raise ErreurRecu(
+            f"champ 'completion.autorite' : '{AUTORITE_COMPLETION}' attendu"
+        )
+    attendu = dict(CRENEAUX_COMPLETION).get(configuration_id)
+    if attendu is None or table["acquisition_id"] != attendu:
+        raise ErreurRecu(
+            "champ 'completion.acquisition_id' : créneau -001 exact de la "
+            f"configuration '{configuration_id}' attendu"
+        )
+    _valider_identite_servie_recu(
+        "completion.identite_servie", table["identite_servie"]
     )
-    if identite["disposition"] != disposition_attendue:
+    return table
+
+
+def _valider_recuperation_headless_recu(
+    valeur: object, configuration_id: str
+) -> dict:
+    table = _exiger_cles(
+        "recuperation_headless", valeur, _CLES_RECUPERATION_HEADLESS_RECU
+    )
+    if table["tranche"] != TRANCHE_RECUPERATION_HEADLESS:
         raise ErreurRecu(
-            "champ 'recuperation.identite_servie.disposition' : "
-            f"'{disposition_attendue}' attendu pour le statut "
-            f"'{identite['statut']}'"
+            "champ 'recuperation_headless.tranche' : "
+            f"'{TRANCHE_RECUPERATION_HEADLESS}' attendu"
         )
-    if identite["incident"] is not None and identite["incident"] not in INCIDENTS_V1:
+    if table["autorite"] != AUTORITE_RECUPERATION_HEADLESS:
         raise ErreurRecu(
-            "champ 'recuperation.identite_servie.incident' : None ou "
-            f"vocabulaire fermé ({' | '.join(INCIDENTS_V1)}) attendu"
+            "champ 'recuperation_headless.autorite' : "
+            f"'{AUTORITE_RECUPERATION_HEADLESS}' attendu"
         )
-    if not isinstance(identite["champs_divergents"], list) or any(
-        not isinstance(champ, str) for champ in identite["champs_divergents"]
-    ):
+    attendu = dict(CRENEAUX_RECUPERATION_HEADLESS).get(configuration_id)
+    if attendu is None or table["acquisition_id"] != attendu:
         raise ErreurRecu(
-            "champ 'recuperation.identite_servie.champs_divergents' : liste "
-            "de chaînes attendue"
+            "champ 'recuperation_headless.acquisition_id' : créneau -002 "
+            f"exact de la configuration '{configuration_id}' attendu"
         )
-    if identite["cause"] is not None and not isinstance(identite["cause"], str):
-        raise ErreurRecu(
-            "champ 'recuperation.identite_servie.cause' : None ou chaîne "
-            "attendue"
-        )
+    _valider_identite_servie_recu(
+        "recuperation_headless.identite_servie", table["identite_servie"]
+    )
     return table
 
 
@@ -562,11 +624,14 @@ def _valider_recu(enveloppe: object) -> dict:
     if not isinstance(charge, dict) or set(charge) not in (
         _CLES_CHARGE_RECU,
         _CLES_CHARGE_RECU | {"recuperation"},
+        _CLES_CHARGE_RECU | {"completion"},
+        _CLES_CHARGE_RECU | {"recuperation_headless"},
     ):
         raise ErreurRecu(
             f"champ 'payload' : clés exactes {sorted(_CLES_CHARGE_RECU)} "
-            "attendues, plus la seule table additive 'recuperation' des "
-            "créneaux -002"
+            "attendues, plus une seule table additive : 'recuperation' des "
+            "créneaux -002, 'completion' des créneaux -001 V1-R5 ou "
+            "'recuperation_headless' des quatre créneaux -002 H3"
         )
     if adresse["sha256"] != adresse_canonique(charge):
         raise ErreurRecu(
@@ -592,6 +657,8 @@ def _valider_recu(enveloppe: object) -> dict:
         raise ErreurRecu("champ 'configuration.identifiant' : slug stable attendu")
     _exiger_sha256_recu("configuration.sha256", configuration["sha256"])
     recuperation = charge.get("recuperation")
+    completion = charge.get("completion")
+    recuperation_headless = charge.get("recuperation_headless")
     if recuperation is not None:
         table_recuperation = _valider_recuperation_recu(
             recuperation, configuration["identifiant"]
@@ -602,6 +669,30 @@ def _valider_recu(enveloppe: object) -> dict:
         )
         derivation = (
             "'<configuration_id>:<sha256 du stimulus>:<acquisition_id -002>'"
+        )
+    elif completion is not None:
+        table_completion = _valider_completion_recu(
+            completion, configuration["identifiant"]
+        )
+        creneau_attendu = (
+            f"{configuration['identifiant']}:{stimulus['sha256']}:"
+            f"{table_completion['acquisition_id']}"
+        )
+        derivation = (
+            "'<configuration_id>:<sha256 du stimulus>:"
+            "<acquisition_id -001 V1-R5>'"
+        )
+    elif recuperation_headless is not None:
+        table_headless = _valider_recuperation_headless_recu(
+            recuperation_headless, configuration["identifiant"]
+        )
+        creneau_attendu = (
+            f"{configuration['identifiant']}:{stimulus['sha256']}:"
+            f"{table_headless['acquisition_id']}"
+        )
+        derivation = (
+            "'<configuration_id>:<sha256 du stimulus>:"
+            "<acquisition_id -002 H3>'"
         )
     else:
         creneau_attendu = f"{configuration['identifiant']}:{stimulus['sha256']}"
@@ -633,12 +724,18 @@ def _valider_recu(enveloppe: object) -> dict:
         )
     _valider_execution_recu(charge["execution"])
     _valider_observable_sans_preuve("provenance_servie", charge["provenance_servie"])
-    if recuperation is not None:
-        statut = recuperation["identite_servie"]["statut"]
+    for nom_table, table in (
+        ("recuperation", recuperation),
+        ("completion", completion),
+        ("recuperation_headless", recuperation_headless),
+    ):
+        if table is None:
+            continue
+        statut = table["identite_servie"]["statut"]
         provenance_observee = isinstance(charge["provenance_servie"], dict)
         if (statut == "OBSERVED") != provenance_observee:
             raise ErreurRecu(
-                "champ 'recuperation.identite_servie.statut' : incohérent "
+                f"champ '{nom_table}.identite_servie.statut' : incohérent "
                 "avec 'provenance_servie' ; une identité OBSERVED exige une "
                 "provenance prouvée et réciproquement"
             )
@@ -1288,12 +1385,15 @@ def valider(racine: Path) -> int:
             continue
         with tempfile.TemporaryDirectory() as dossier:
             sortie = Path(dossier) / "sortie-candidate.md"
-            sortie.write_text(execution["sortie"]["stdout"], encoding="utf-8")
+            sortie_candidate = _extraire_sortie_candidate(
+                execution["sortie"]["stdout"]
+            )
+            sortie.write_text(sortie_candidate, encoding="utf-8")
             # Empreinte des octets UTF-8 exacts du reçu, calculée avant
             # l'appel : elle reste disponible si le validateur signale une
             # erreur de lecture du harnais avant de renseigner la sienne
             empreinte_recue = hashlib.sha256(
-                execution["sortie"]["stdout"].encode("utf-8")
+                sortie_candidate.encode("utf-8")
             ).hexdigest()
             resultat = module_validateur.valider_pre_cadrage_v0(paquet, sortie)
         porte_en_cause = next(
@@ -5122,6 +5222,22 @@ def _partitionner_recus(
             officiels.append(element)
         else:
             locaux.append(element)
+    # H3 sélectionne le reçu -002 courant par son acquisition_id exact. Le
+    # -001 reste dans la chaîne append-only mais sort des consommateurs
+    # courants ; Opus, sans créneau H3, reste sur son -001.
+    configurations_recuperees = {
+        enveloppe["payload"]["configuration"]["identifiant"]
+        for _, enveloppe, _ in officiels
+        if enveloppe["payload"].get("recuperation_headless") is not None
+    }
+    if configurations_recuperees:
+        officiels = [
+            element
+            for element in officiels
+            if element[1]["payload"]["configuration"]["identifiant"]
+            not in configurations_recuperees
+            or element[1]["payload"].get("recuperation_headless") is not None
+        ]
     return locaux, officiels
 
 
@@ -6993,9 +7109,13 @@ def _construire_verrou(
     }
 
 
-def _octets_manifeste_ordre(sel: bytes, creneaux: list[dict]) -> bytes:
+def _octets_manifeste_ordre(
+    sel: bytes, creneaux: list[dict], depart: int = 1
+) -> bytes:
     """Manifeste privé : les identifiants de créneau, les positions contiguës
-    et les identifiants opaques, ordonnés par la méthode V0."""
+    et les identifiants opaques, ordonnés par la méthode V0. `depart` permet
+    l'extension additive V1-R5 : les positions continuent la numérotation
+    ITEM-NNN du même domaine sans réécrire le manifeste historique."""
 
     def cle(entree: dict) -> tuple[bytes, bytes]:
         acquisition_id = entree["acquisition_id"]
@@ -7012,7 +7132,7 @@ def _octets_manifeste_ordre(sel: bytes, creneaux: list[dict]) -> bytes:
                 "item": f"ITEM-{position:03d}",
                 "position": position,
             }
-            for position, entree in enumerate(ordre, start=1)
+            for position, entree in enumerate(ordre, start=depart)
         ]
     )
 
@@ -7380,9 +7500,9 @@ FLAGS_INTERDITS_ACQUISITION = (
     "login",
 )
 
-# Métadonnée explicite d'identité servie : seule une ligne de la forme
-# 'model: <valeur>' émise par l'appel est attribuable ; un écho de la
-# configuration demandée ne promeut jamais REQUESTED en OBSERVED
+# Marqueur Markdown historique d'identité servie. Les enveloppes structurées
+# passent par leurs seules métadonnées top-level attribuables ; le contenu
+# candidat n'est jamais parcouru à la recherche de ce marqueur
 _MOTIF_IDENTITE_SERVIE = re.compile(
     r"^\s*(?:--\s*)?model\s*:\s*(\S+)\s*$", re.MULTILINE
 )
@@ -8997,22 +9117,294 @@ def _executer_acquisition(
     )
 
 
+def _est_resultat_grok_json(evenement: dict) -> bool:
+    """Objet terminal Grok Build JSON documenté, hors forme d'erreur."""
+    return isinstance(evenement.get("text"), str) and all(
+        cle in evenement for cle in ("stopReason", "sessionId", "requestId")
+    )
+
+
+def _evenements_harnais_structures(texte: str) -> list[dict] | None:
+    """Événements top-level d'une enveloppe JSON, tableau JSON ou JSONL.
+
+    Un JSON candidat ordinaire n'est jamais promu en enveloppe : au moins un
+    événement de harnais documenté doit être présent. Aucun parcours récursif
+    n'est effectué, afin qu'un champ ``model`` du contenu candidat ne puisse
+    jamais devenir une preuve d'identité.
+    """
+    contenu = texte.strip()
+    if not contenu:
+        return None
+    try:
+        document = json.loads(contenu)
+        documents = document if isinstance(document, list) else [document]
+    except json.JSONDecodeError:
+        documents = []
+        for ligne in texte.splitlines():
+            if not ligne.strip():
+                continue
+            try:
+                documents.append(json.loads(ligne))
+            except json.JSONDecodeError:
+                return None
+    if not documents or any(
+        not isinstance(document, dict) for document in documents
+    ):
+        return None
+    evenements = list(documents)
+    if not any(
+        evenement.get("type")
+        in {
+            "system",
+            "assistant",
+            "user",
+            "result",
+            "error",
+            "thread.started",
+            "turn.started",
+            "item.started",
+            "item.updated",
+            "item.completed",
+            "turn.completed",
+            "turn.failed",
+        }
+        or _est_resultat_grok_json(evenement)
+        for evenement in evenements
+    ):
+        return None
+    return evenements
+
+
+def _extraire_sortie_candidate(stdout: str) -> str:
+    """Texte candidat terminal, identique pour ``valider`` et ``dossiers``.
+
+    Le Markdown ou texte brut reste byte-identique. Pour une enveloppe Claude
+    ou Cursor, le dernier ``result`` textuel est le livrable ; pour Grok,
+    ``text`` ; pour Codex, le dernier ``item.completed`` de type
+    ``agent_message``. Une enveloppe sans résultat terminal ne contient aucune
+    sortie candidate exploitable.
+    """
+    evenements = _evenements_harnais_structures(stdout)
+    if evenements is None:
+        return stdout
+    resultats = [
+        evenement["result"]
+        for evenement in evenements
+        if evenement.get("type") == "result"
+        and isinstance(evenement.get("result"), str)
+    ]
+    if resultats:
+        return resultats[-1]
+    messages_agent = [
+        evenement["item"]["text"]
+        for evenement in evenements
+        if evenement.get("type") == "item.completed"
+        and isinstance(evenement.get("item"), dict)
+        and evenement["item"].get("type") == "agent_message"
+        and isinstance(evenement["item"].get("text"), str)
+    ]
+    if messages_agent:
+        return messages_agent[-1]
+    if (
+        len(evenements) == 1
+        and _est_resultat_grok_json(evenements[0])
+    ):
+        return evenements[0]["text"]
+    return ""
+
+
+def _erreur_harnais_structuree(stdout: str) -> str | None:
+    """Erreur fatale top-level Grok ou Codex, sinon None.
+
+    Les événements imbriqués, notamment ``item.type=error``, ne sont jamais
+    visités et ne rendent donc pas le flux fatal.
+    """
+    evenements = _evenements_harnais_structures(stdout)
+    if evenements is None:
+        return None
+    for evenement in evenements:
+        message: object = None
+        if evenement.get("type") == "error":
+            message = evenement.get("message")
+        elif (
+            evenement.get("type") == "turn.failed"
+            and isinstance(evenement.get("error"), dict)
+        ):
+            message = evenement["error"].get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    return None
+
+
+def _preuves_identite_structurees(evenements: list[dict]) -> list[dict]:
+    """Métadonnées d'identité top-level attribuables d'un harnais.
+
+    Les seules coutures admises sont ``system/init.model``, les entrées
+    terminales Claude ``modelUsage.*`` explicitement marquées
+    ``provider=firstParty`` et l'unique clé ``modelUsage`` du résultat Grok
+    avec ``modelCalls`` positif. Le contenu du candidat n'est jamais visité.
+    """
+    preuves: list[dict] = []
+    for evenement in evenements:
+        if (
+            evenement.get("type") == "system"
+            and evenement.get("subtype") == "init"
+            and isinstance(evenement.get("model"), str)
+            and evenement["model"].strip()
+        ):
+            modele = evenement["model"].strip()
+            preuves.append(
+                {
+                    "modele": modele,
+                    "source": "system/init.model",
+                    "preuve": f"system/init.model: {modele}",
+                }
+            )
+        if evenement.get("type") != "result":
+            usages = evenement.get("modelUsage")
+            if (
+                _est_resultat_grok_json(evenement)
+                and isinstance(usages, dict)
+                and len(usages) == 1
+            ):
+                modele, usage = next(iter(usages.items()))
+                appels = (
+                    usage.get("modelCalls")
+                    if isinstance(usage, dict)
+                    else None
+                )
+                if (
+                    isinstance(modele, str)
+                    and modele.strip()
+                    and isinstance(appels, (int, float))
+                    and not isinstance(appels, bool)
+                    and appels > 0
+                ):
+                    modele = modele.strip()
+                    preuves.append(
+                        {
+                            "modele": modele,
+                            "source": f"modelUsage.{modele}",
+                            "preuve": (
+                                f"modelUsage.{modele}.modelCalls: {appels}"
+                            ),
+                        }
+                    )
+            continue
+        usages = evenement.get("modelUsage")
+        if not isinstance(usages, dict):
+            continue
+        for cle, usage in usages.items():
+            if (
+                isinstance(usage, dict)
+                and usage.get("provider") == "firstParty"
+                and isinstance(usage.get("canonicalModel"), str)
+                and usage["canonicalModel"].strip()
+            ):
+                modele = usage["canonicalModel"].strip()
+                preuves.append(
+                    {
+                        "modele": modele,
+                        "source": f"result.modelUsage.{cle}.canonicalModel",
+                        "preuve": (
+                            f"result.modelUsage.{cle}.canonicalModel: "
+                            f"{modele} (provider=firstParty)"
+                        ),
+                    }
+                )
+    return preuves
+
+
+def _projeter_sortie_harnais(
+    stdout: str, stderr: str, attendus: tuple[str, ...]
+) -> dict:
+    """Projette séparément identité servie et résultat candidat.
+
+    La projection accepte Markdown, objet JSON, tableau JSON et JSONL. Une
+    preuve concordante rend OBSERVED ; une divergence ou un conflit interne
+    rend IDENTITY_MISMATCH ; l'absence explicite reste INCONNU.
+    """
+    preuves: list[dict] = []
+    for texte in (stdout, stderr):
+        evenements = _evenements_harnais_structures(texte)
+        if evenements is not None:
+            preuves.extend(_preuves_identite_structurees(evenements))
+            continue
+        for correspondance in _MOTIF_IDENTITE_SERVIE.finditer(texte):
+            valeur = correspondance.group(1)
+            preuves.append(
+                {
+                    "modele": valeur,
+                    "source": "markdown.model",
+                    "preuve": correspondance.group(0).strip(),
+                }
+            )
+    modeles = sorted({preuve["modele"] for preuve in preuves})
+    preuve = " ; ".join(entree["preuve"] for entree in preuves) or None
+    if not modeles:
+        identite = {
+            "statut": INCONNU,
+            "disposition": "HOLD",
+            "incident": None,
+            "champs_divergents": [],
+            "cause": (
+                "aucune métadonnée explicite d'identité servie attribuable "
+                "dans la capture"
+            ),
+        }
+        modele = None
+    elif len(modeles) > 1:
+        identite = {
+            "statut": INCONNU,
+            "disposition": "HOLD",
+            "incident": "IDENTITY_MISMATCH",
+            "champs_divergents": ["modele"],
+            "cause": "conflit interne d'identité servie : " + ", ".join(modeles),
+        }
+        modele = None
+    elif modeles[0] not in attendus:
+        modele = modeles[0]
+        identite = {
+            "statut": INCONNU,
+            "disposition": "HOLD",
+            "incident": "IDENTITY_MISMATCH",
+            "champs_divergents": ["modele"],
+            "cause": f"identité servie divergente : {modele}",
+        }
+    else:
+        modele = modeles[0]
+        identite = {
+            "statut": "OBSERVED",
+            "disposition": "OBSERVED",
+            "incident": None,
+            "champs_divergents": [],
+            "cause": None,
+        }
+    return {
+        "identite_servie": identite,
+        "modele": modele,
+        "preuve": preuve,
+        "provenances": preuves,
+        "sortie_candidate": _extraire_sortie_candidate(stdout),
+    }
+
+
 def _projeter_identite_servie(
     stdout: str, stderr: str, attendus: tuple[str, ...]
 ) -> dict | None:
-    """Divergence explicite d'identité servie : la première métadonnée
-    'model:' dont la valeur ne correspond à aucune forme attendue, avec sa
-    ligne exacte comme preuve attribuable. None sans métadonnée divergente ;
-    une valeur concordante reste un écho, jamais une preuve d'identité."""
-    for texte in (stdout, stderr):
-        for correspondance in _MOTIF_IDENTITE_SERVIE.finditer(texte):
-            valeur = correspondance.group(1)
-            if valeur not in attendus:
-                return {
-                    "valeur": valeur,
-                    "ligne": correspondance.group(0).strip(),
-                }
-    return None
+    """Compatibilité des appels historiques : rend la seule divergence.
+
+    La détection sous-jacente accepte désormais Markdown et sorties JSON
+    structurées sans parcourir le contenu candidat.
+    """
+    projection = _projeter_sortie_harnais(stdout, stderr, attendus)
+    identite = projection["identite_servie"]
+    if identite["incident"] != "IDENTITY_MISMATCH":
+        return None
+    return {
+        "valeur": projection["modele"] or "CONFLIT_INTERNE",
+        "ligne": projection["preuve"] or identite["cause"],
+    }
 
 
 def _refus_acquisition(fait: str) -> int:
@@ -9904,39 +10296,1167 @@ def preparer_completion(racine: Path) -> int:
     return 0
 
 
-def acquerir_completion(identifiant: str) -> int:
-    """Interface publique de la future exécution de complétion.
+def _erreur_quota_structuree(stdout: str, stderr: str) -> str | None:
+    """Erreur fournisseur structurée et attribuable d'épuisement de quota :
+    un objet JSON dont le champ 'error.code' ou 'error.type' vaut exactement
+    'quota_exhausted'. Rend la ligne de preuve exacte, ou None. Aucune
+    recherche textuelle large : une mention libre de quota ne suffit
+    jamais."""
+    for texte in (stdout, stderr):
+        for ligne in texte.splitlines():
+            try:
+                document = json.loads(ligne)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(document, dict):
+                continue
+            erreur = document.get("error")
+            if isinstance(erreur, dict) and "quota_exhausted" in (
+                erreur.get("code"),
+                erreur.get("type"),
+            ):
+                return ligne.strip()
+    return None
 
-    Dans la tranche V1-R4, aucune autorité d'acquisition de complétion
-    n'existe : la garde rend toujours 2 avec AUTORITE_ABSENTE, avant toute
-    résolution d'exécutable, création de processus, espace de travail,
-    journal ou reçu. Fonction pure : aucune lecture ni écriture."""
+
+def acquerir_completion(
+    racine: Path,
+    identifiant: str,
+    racine_privee: Path | None = None,
+    recuperation_headless: bool = False,
+) -> int:
+    """Exécute une seule fois le créneau -001 autorisé par V1-R5.
+
+    Fail-closed : toute divergence d'autorisation, de verrou R4, de scellé,
+    de formulaire privé, de journal, de créneau ou d'engagement d'ordre rend
+    2 avant tout processus fournisseur et sans reçu. Aucun retry, aucun
+    fallback, aucune reprise. La télémétrie d'abonnement (formulaire privé
+    facultatif) n'entre jamais dans la route : seule sa forme invalide est
+    bloquante."""
+    if racine_privee is None:
+        racine_privee = RACINE_PRIVEE_PRODUCTION
+    if recuperation_headless:
+        creneaux = CRENEAUX_RECUPERATION_HEADLESS
+        descripteurs = DESCRIPTEURS_RECUPERATION_HEADLESS
+        transports = TRANSPORTS_RECUPERATION_HEADLESS
+        relatif_execution = RELATIF_EXECUTION_RECUPERATION_HEADLESS
+        charger_autorisation = _charger_autorisation_recuperation_headless
+        nom_table = "recuperation_headless"
+        tranche = TRANCHE_RECUPERATION_HEADLESS
+        autorite = AUTORITE_RECUPERATION_HEADLESS
+        option_publique = "--recuperation-headless"
+    else:
+        creneaux = CRENEAUX_COMPLETION
+        descripteurs = DESCRIPTEURS_COMPLETION_R5
+        transports = TRANSPORTS_COMPLETION_R5
+        relatif_execution = RELATIF_EXECUTION_R5
+        charger_autorisation = _charger_autorisation_completion
+        nom_table = "completion"
+        tranche = TRANCHE_COMPLETION_EXECUTION
+        autorite = AUTORITE_COMPLETION
+        option_publique = "--completion"
     if not _MOTIF_SLUG.match(identifiant):
         return _refus_completion(
             f"champ 'configuration_id' : '{identifiant}' n'est pas un slug "
             "stable ; identifiant refusé avant toute résolution de chemin"
         )
-    acquisition_id = next(
-        (
-            creneau
-            for configuration_id, creneau in CRENEAUX_COMPLETION
-            if configuration_id == identifiant
-        ),
-        None,
-    )
+    acquisition_id = dict(creneaux).get(identifiant)
     if acquisition_id is None:
         return _refus_completion(
             f"configuration '{identifiant}' hors de la portée de la "
-            "complétion V1-R4 : seuls les cinq créneaux -001 du verrou de "
-            "complétion sont réservés"
+            "complétion : seuls les créneaux explicitement autorisés sont "
+            "réservés"
         )
-    return _refus_completion(
-        "AUTORITE_ABSENTE : aucune autorité d'acquisition de complétion "
-        f"n'est accordée dans la tranche V1-R4 pour le créneau "
-        f"'{acquisition_id}' ; arrêt avant toute résolution d'exécutable : "
-        "aucun exécutable résolu, aucun processus fournisseur créé, aucun "
-        "espace de travail, aucun journal, aucun reçu, aucun appel candidat"
+    arret_avant_tout = (
+        f"pour le créneau '{acquisition_id}' ; arrêt avant toute "
+        "résolution d'exécutable : aucun exécutable résolu, aucun processus "
+        "fournisseur créé, aucun espace de travail, aucun journal, aucun "
+        "reçu, aucun appel candidat"
     )
+    try:
+        autorisation = charger_autorisation(racine)
+    except ErreurCompletion as erreur:
+        return _refus_completion(f"{erreur} {arret_avant_tout}")
+    try:
+        observations = _charger_observations_abonnements(racine_privee)
+    except ErreurCompletion as erreur:
+        return _refus_completion(
+            f"formulaire privé d'observations invalide, fail-closed : "
+            f"{erreur} {arret_avant_tout}"
+        )
+    verrou_r4 = json.loads(
+        (racine / CHEMIN_VERROU_COMPLETION).read_text(encoding="utf-8")
+    )
+    sources: dict[str, dict] = {}
+    for nom, relatif in (
+        ("carte", CHEMIN_CARTE),
+        ("paquet", CHEMIN_PAQUET),
+        ("stimulus", CHEMIN_STIMULUS),
+    ):
+        chemin_source = racine / relatif
+        if not chemin_source.is_file():
+            return _refus_completion(
+                f"source du reçu absente : {relatif} {arret_avant_tout}"
+            )
+        sources[nom] = {
+            "chemin": relatif,
+            "sha256": _sha256_fichier(chemin_source),
+        }
+    if sources["stimulus"]["sha256"] != autorisation["stimulus"]["sha256"]:
+        return _refus_completion(
+            "stimulus divergent de l'autorisation V1-R5 "
+            f"(LOCKED_ARTIFACT_CHANGED) {arret_avant_tout}"
+        )
+    chemin_configuration = racine / REGISTRE_OFFICIEL / f"{identifiant}.toml"
+    if not chemin_configuration.is_file():
+        return _refus_completion(
+            f"configuration verrouillée absente : '{identifiant}' "
+            f"{arret_avant_tout}"
+        )
+    relatif_configuration = (
+        REGISTRE_OFFICIEL / f"{identifiant}.toml"
+    ).as_posix()
+    scelle_r4 = next(
+        (
+            entree["sha256"]
+            for entree in verrou_r4.get("sources_historiques", [])
+            if isinstance(entree, dict)
+            and entree.get("chemin") == relatif_configuration
+        ),
+        None,
+    )
+    if scelle_r4 is None or (
+        _sha256_fichier(chemin_configuration) != scelle_r4
+    ):
+        return _refus_completion(
+            f"configuration '{identifiant}' divergente du scellé du verrou "
+            f"R4 (CONFIGURATION_CHANGED) {arret_avant_tout}"
+        )
+    try:
+        configuration = _charger_configuration(chemin_configuration)
+    except ErreurConfiguration as erreur:
+        return _refus_completion(f"{erreur} {arret_avant_tout}")
+    if configuration["configuration_id"] != identifiant:
+        return _refus_completion(
+            "champ 'configuration_id' divergent du fichier verrouillé "
+            f"{arret_avant_tout}"
+        )
+    try:
+        etat = _charger_etat(racine)
+    except ErreurRestitution as erreur:
+        return _refus_completion(f"{erreur} {arret_avant_tout}")
+    creneau = (
+        f"{identifiant}:{sources['stimulus']['sha256']}:{acquisition_id}"
+    )
+    repertoire = _repertoire_recus(racine, etat)
+    try:
+        recus = _charger_recus(repertoire)
+    except ErreurRecu as erreur:
+        return _refus_completion(f"{erreur} {arret_avant_tout}")
+    for _, existant in recus:
+        creneau_existant = existant["payload"]["creneau"]
+        if creneau_existant == creneau or (
+            not recuperation_headless
+            and creneau_existant.startswith(f"{identifiant}:")
+        ):
+            return _refus_completion(
+                f"collision append-only : le créneau '{creneau}' est déjà "
+                "consommé par un reçu officiel, aucun retry et aucune "
+                f"réécriture ; arrêt {arret_avant_tout}"
+            )
+    chemin_journal = (
+        racine_privee / relatif_execution / NOM_JOURNAL_EXECUTION
+    )
+    try:
+        journal = _charger_journal_execution(chemin_journal)
+    except ErreurJournal as erreur:
+        return _refus_completion(
+            f"journal d'exécution : {erreur} ; HOLD {arret_avant_tout}"
+        )
+    if journal is None:
+        journal = {"schema_version": SCHEMA_JOURNAL_EXECUTION, "entrees": []}
+    for entree in journal["entrees"]:
+        if entree["acquisition_id"] == acquisition_id:
+            return _refus_completion(
+                f"créneau '{acquisition_id}' déjà consommé selon le "
+                "journal : aucun second enregistrement du même créneau, "
+                f"aucun retry {arret_avant_tout}"
+            )
+        if entree["etat_terminal"] == "IDENTITY_MISMATCH":
+            return _refus_completion(
+                "HOLD : une identité servie divergente est journalisée, "
+                f"aucun appel suivant avant arbitrage {arret_avant_tout}"
+            )
+        if entree["descendants"]:
+            return _refus_completion(
+                "HOLD : un descendant survivant est journalisé, aucun appel "
+                f"suivant avant arbitrage {arret_avant_tout}"
+            )
+        if entree["recu"] is None:
+            return _refus_completion(
+                "HOLD : une tentative sans reçu est journalisée, aucun "
+                f"appel suivant avant arbitrage {arret_avant_tout}"
+            )
+    espace_tentative = (
+        racine_privee / relatif_execution / NOM_RUNTIME_XS08 / acquisition_id
+    )
+    if os.path.lexists(espace_tentative):
+        return _refus_completion(
+            f"espace réel de tentative déjà présent pour '{acquisition_id}' "
+            f": le créneau est consommé, aucun retry {arret_avant_tout}"
+        )
+    # Engagement d'ordre aveugle : le matériel privé XS-07 (sel et manifeste
+    # historiques, engagés dans le verrou de campagne immuable) doit être
+    # présent et cohérent avant l'appel ; l'extension V1-R5 de l'ordre se
+    # dérive déterministiquement de ce même sel, aucun nouveau scellement.
+    repertoire_materiel = racine_privee / RELATIF_MATERIEL_VERROU
+    try:
+        _verifier_materiel_prive(
+            repertoire_materiel,
+            repertoire_materiel / NOM_SEL_VERROU,
+            repertoire_materiel / NOM_MANIFESTE_ORDRE,
+        )
+    except (ErreurVerrou, OSError) as erreur:
+        return _refus_completion(
+            "engagement d'ordre aveugle non extensible avant appel : "
+            f"matériel privé du verrou indisponible ({erreur}) "
+            f"{arret_avant_tout}"
+        )
+    stimulus_octets = (racine / CHEMIN_STIMULUS).read_bytes()
+    espace = espace_tentative / "espace"
+    try:
+        tentative = construire_tentative_completion_r5(
+            identifiant,
+            stimulus_octets,
+            str(espace),
+            descripteurs,
+            transports,
+        )
+    except ErreurCompletion as erreur:
+        return _refus_completion(f"{erreur} {arret_avant_tout}")
+    argv_resolu = list(descripteurs[identifiant])
+    if any(element in FLAGS_INTERDITS_ACQUISITION for element in argv_resolu):
+        return _refus_completion(
+            f"flag interdit présent dans le descripteur résolu "
+            f"{arret_avant_tout}"
+        )
+    produit = PRODUITS_COMPLETION[identifiant]
+    telemetrie = (
+        TELEMETRIE_OBSERVED
+        if produit in observations
+        else TELEMETRIE_OBSERVABLE_NON_COLLECTEE
+    )
+    print(
+        f"{acquisition_id} · route_execution "
+        f"{ROUTE_PRETE_POUR_TENTATIVE_AUTORISEE} · telemetrie_abonnement "
+        f"{produit} {telemetrie} (jamais un critère de route) · "
+        "resultat_mesure ABSENT avant reçu"
+    )
+    # Objets privés R5 : répertoires 0700 quel que soit le umask du
+    # processus, un répertoire 0600 serait inutilisable ; les fichiers
+    # passent par la couture privée 0600
+    espace.mkdir(mode=0o700, parents=True, exist_ok=False)
+    for repertoire_prive_r5 in (
+        racine_privee / relatif_execution,
+        racine_privee / relatif_execution / NOM_RUNTIME_XS08,
+        espace_tentative,
+        espace,
+    ):
+        os.chmod(repertoire_prive_r5, 0o700)
+    if tentative["fichier_prompt"] is not None:
+        _ecrire_prive(
+            Path(tentative["fichier_prompt"]["chemin"]),
+            tentative["fichier_prompt"]["stimulus_utf8"],
+        )
+    entree_stdin = tentative["stdin"] if tentative["stdin"] is not None else b""
+    depart_tentative = time.monotonic()
+    execution, descendants = _executer_acquisition(
+        tentative["argv"], entree_stdin, espace, DELAI_ACQUISITION_OFFICIELLE
+    )
+    latence_tentative_ms = int((time.monotonic() - depart_tentative) * 1000)
+    identite_servie = {
+        "statut": INCONNU,
+        "disposition": "HOLD",
+        "incident": None,
+        "champs_divergents": [],
+        "cause": (
+            "aucune métadonnée explicite d'identité servie attribuable "
+            "dans la capture ; HOLD, jamais promue par écho de la demande"
+        ),
+    }
+    provenance_servie: object = INCONNU
+    if execution["etat"] == "OBSERVED":
+        # La sortie texte candidate est conservée dans l'espace réel privé,
+        # en mode 0600 via la couture privée quel que soit le umask
+        _ecrire_prive(
+            espace_tentative / "sortie-stdout.txt",
+            execution["sortie"]["stdout"].encode("utf-8"),
+        )
+        _ecrire_prive(
+            espace_tentative / "sortie-stderr.txt",
+            execution["sortie"]["stderr"].encode("utf-8"),
+        )
+        modele_argv = argv_resolu[argv_resolu.index("--model") + 1]
+        modeles_attendus = (
+            modele_argv,
+            configuration["modele"]["demande"],
+            *(
+                ("grok-4.6-build",)
+                if identifiant == "grok-build-grok-4-6"
+                else ()
+            ),
+        )
+        projection_harnais = _projeter_sortie_harnais(
+            execution["sortie"]["stdout"],
+            execution["sortie"]["stderr"],
+            modeles_attendus,
+        )
+        identite_servie = projection_harnais["identite_servie"]
+        divergence = (
+            {
+                "valeur": projection_harnais["modele"] or "CONFLIT_INTERNE",
+                "ligne": (
+                    projection_harnais["preuve"]
+                    or identite_servie["cause"]
+                ),
+            }
+            if identite_servie["incident"] == "IDENTITY_MISMATCH"
+            else None
+        )
+        if identite_servie["statut"] == "OBSERVED":
+            provenance_servie = {
+                "etat": "OBSERVED",
+                "valeur": {"modele": projection_harnais["modele"]},
+                "preuve": projection_harnais["preuve"],
+            }
+        preuve_quota = _erreur_quota_structuree(
+            execution["sortie"]["stdout"], execution["sortie"]["stderr"]
+        )
+        erreur_harnais = _erreur_harnais_structuree(
+            execution["sortie"]["stdout"]
+        )
+        if divergence is not None:
+            execution = {
+                "etat": "INCIDENT",
+                "incident": "IDENTITY_MISMATCH",
+                "fait": (
+                    "métadonnée explicite d'identité servie divergente du "
+                    "modèle demandé : le créneau est consommé, HOLD avant "
+                    "tout appel suivant"
+                ),
+                "preuve_attribuable": divergence["ligne"],
+            }
+            identite_servie["cause"] = divergence["ligne"]
+            provenance_servie = INCONNU
+        elif erreur_harnais is not None:
+            execution = {
+                "etat": "INCIDENT",
+                "incident": "HARNESS_ERROR",
+                "fait": (
+                    "objet terminal du harnais type=error, jamais une sortie "
+                    f"candidate : {erreur_harnais} ; capture brute conservée "
+                    "dans l'espace réel privé, créneau consommé sans retry"
+                ),
+            }
+        elif preuve_quota is not None:
+            # Seule une erreur fournisseur structurée, explicite et
+            # attribuable classe QUOTA_EXHAUSTED ; jamais un code de sortie,
+            # jamais un texte libre mentionnant le quota
+            execution = {
+                "etat": "INCIDENT",
+                "incident": "QUOTA_EXHAUSTED",
+                "fait": (
+                    "erreur fournisseur structurée d'épuisement de quota : "
+                    "le créneau est consommé, aucun retry, aucun overage, "
+                    "aucune dépense incrémentale"
+                ),
+                "preuve_attribuable": preuve_quota,
+            }
+        elif execution["code_sortie"] != 0 and execution["sortie"]["stdout"] == "":
+            execution = {
+                "etat": "INCIDENT",
+                "incident": "HARNESS_ERROR",
+                "fait": (
+                    f"code client {execution['code_sortie']} sans sortie "
+                    "candidate ni erreur fournisseur structurée : erreur du "
+                    "harnais local, jamais un fait de quota ; stderr "
+                    "conservée dans l'espace réel privé, créneau consommé "
+                    "sans retry"
+                ),
+            }
+    latence_journal = (
+        execution["latence_ms"]
+        if execution["etat"] == "OBSERVED"
+        else latence_tentative_ms
+    )
+    charge = {
+        "measurement_profile": PROFIL_MESURE_RECU,
+        "creneau": creneau,
+        "predecesseur_adresse_contenu": (
+            recus[-1][1]["content_address"]["sha256"] if recus else None
+        ),
+        "carte": sources["carte"],
+        "paquet": sources["paquet"],
+        "stimulus": sources["stimulus"],
+        "configuration": {
+            "identifiant": identifiant,
+            "chemin": (REGISTRE_OFFICIEL / f"{identifiant}.toml").as_posix(),
+            "sha256": _sha256_fichier(chemin_configuration),
+        },
+        "plan_declare": {"etat": "DECLARE", "champs": configuration["plan"]},
+        "interface_declaree": {
+            "etat": "DECLARE",
+            "champs": configuration["interface"],
+        },
+        "quota_observe": INCONNU,
+        "requete": {
+            "etat": "REQUESTED",
+            "argv_resolu": argv_resolu,
+            "mode_stdin": transports[identifiant],
+            "espace_de_travail": JETON_ESPACE_ISOLE,
+        },
+        "execution": execution,
+        "provenance_servie": provenance_servie,
+        nom_table: {
+            "tranche": tranche,
+            "autorite": autorite,
+            "acquisition_id": acquisition_id,
+            "identite_servie": identite_servie,
+        },
+    }
+    enveloppe = {
+        "schema_version": SCHEMA_RECU,
+        "content_address": {
+            "algorithm": "SHA256",
+            "sha256": adresse_canonique(charge),
+        },
+        "payload": charge,
+    }
+    adresse: str | None = enveloppe["content_address"]["sha256"]
+    etat_terminal = (
+        "OBSERVED" if execution["etat"] == "OBSERVED" else execution["incident"]
+    )
+    try:
+        _valider_recu(enveloppe)
+        destination = repertoire / f"{adresse}.json"
+        with open(destination, "xb") as fichier:
+            fichier.write(octets_canoniques(enveloppe))
+    except (ErreurRecu, OSError) as erreur:
+        # Tentative sans reçu : journalisée telle quelle, HOLD obligatoire
+        print(f"ECHEC reçu non écrit après tentative : {erreur} ; HOLD")
+        adresse = None
+        destination = None
+    code_commande = 0 if adresse is not None and descendants == 0 else 1
+    journal["entrees"].append(
+        {
+            "acquisition_id": acquisition_id,
+            "configuration_id": identifiant,
+            "invocation_publique": (
+                f"uv run tools/campagne_v1.py acquerir {option_publique} "
+                f"--configuration {identifiant}"
+            ),
+            "code": code_commande,
+            "recu": adresse,
+            "etat_terminal": etat_terminal,
+            "latence_ms": latence_journal,
+            "retry": 0,
+            "descendants": descendants,
+        }
+    )
+    _ecrire_journal_execution(chemin_journal, journal)
+    if destination is not None:
+        print(
+            "reçu V1 abonnement écrit : "
+            f"{destination.relative_to(racine).as_posix()}"
+        )
+        print(f"créneau : {creneau}")
+        print(f"adresse de contenu : {adresse}")
+    print(f"état terminal : {etat_terminal}")
+    if execution["etat"] == "INCIDENT":
+        print(
+            f"incident : {execution['incident']} — {execution['fait']}"
+        )
+    print(f"descendants survivants : {descendants}")
+    if descendants:
+        print(
+            "ECHEC descendant survivant détecté après la tentative : groupe "
+            "tué, HOLD avant tout appel suivant"
+        )
+    return code_commande
+
+
+# V1-R5 (#145) : exécution autorisée de la complétion du panel. Autorité
+# propriétaire additive versionnée sous completion-panel-v1, cinq
+# descripteurs candidats fermés (modèle et effort observables dans l'argv),
+# et modèle de domaine figé : route_execution (la tentative peut-elle
+# démarrer), telemetrie_abonnement (faits de compte) et resultat_mesure
+# (reçus attribuables) sont trois preuves distinctes ; un quota inconnu ou
+# non collecté ne dégrade jamais une route autrement prête.
+
+SCHEMA_AUTORISATION_COMPLETION = "campagne-v1-autorisation-completion/v1"
+CHEMIN_AUTORISATION_COMPLETION = (
+    _RACINE_CAMPAGNE_V1
+    / "completion-panel-v1"
+    / "autorisation-completion-v1.json"
+)
+SECTION_AUTORISATION_COMPLETION = (
+    "autorisation d'exécution de complétion V1-R5 versionnée"
+)
+SECTION_EXECUTION_COMPLETION = (
+    "modèle de domaine d'exécution de complétion V1-R5 dans l'état"
+)
+ISSUE_COMPLETION_EXECUTION = (
+    "https://github.com/ayoahha/benchmark-lab-x/issues/145"
+)
+TRANCHE_COMPLETION_EXECUTION = "V1-R5"
+AUTORITE_COMPLETION = "V1-R5"
+JETON_AUTORITE_COMPLETION = (
+    "AUTHORIZE_SEMANTIC_FIX_AND_FIVE_SINGLE_SHOT_COMPLETION_ACQUISITIONS"
+)
+# Verrou R4 immuable : empreinte figée par le contrat #145, jamais recalculée
+# depuis une reconstruction.
+EMPREINTE_VERROU_COMPLETION_R4 = (
+    "26b994f8fd63c44c225e9d4b08aeb70e6faa4c98f7bf72b3fd7c133bc3a49539"
+)
+EFFORT_CANDIDAT_COMPLETION = "high"
+VARIANTES_INTERDITES_COMPLETION = (
+    "fallback",
+    "retry",
+    "fast",
+    "priority",
+    "max",
+    "xhigh",
+    "ultra",
+)
+RELATIF_EXECUTION_R5 = Path("v1-execution") / "r5"
+
+# Descripteurs candidats fermés du contrat #145, sans wrapper fournisseur.
+# Claude et Codex reçoivent le stimulus sur FD0 puis EOF ; Cursor le reçoit
+# comme unique argument UTF-8 sans shell ; Grok le lit du fichier privé
+# isolé via --prompt-file --verbatim.
+DESCRIPTEURS_COMPLETION_R5 = {
+    "claude-code-fable-5": (
+        "claude", "--model", "claude-fable-5", "--effort", "high",
+        "--print", "--input-format", "text", "--output-format", "json",
+        "--permission-mode", "plan", "--disable-slash-commands",
+        "--strict-mcp-config", "--no-session-persistence", "--no-chrome",
+    ),
+    "claude-code-opus-5": (
+        "claude", "--model", "claude-opus-5", "--effort", "high",
+        "--print", "--input-format", "text", "--output-format", "json",
+        "--permission-mode", "plan", "--disable-slash-commands",
+        "--strict-mcp-config", "--no-session-persistence", "--no-chrome",
+    ),
+    "codex-gpt-5-6-sol": (
+        "codex", "exec", "--ephemeral", "--sandbox", "read-only",
+        "--model", "gpt-5.6-sol", "--cd", JETON_ESPACE_ISOLE,
+        "--config", 'model_reasoning_effort="high"', "-",
+    ),
+    "cursor-kimi-k3": (
+        "agent", "--print", "--output-format", "json", "--mode", "ask",
+        "--sandbox", "enabled", "--workspace", JETON_ESPACE_ISOLE,
+        "--model", "kimi-k3-high", JETON_STIMULUS_UTF8,
+    ),
+    "grok-build-grok-4-6": (
+        "grok", "--model", "grok-4.6", "--reasoning-effort", "high",
+        "--permission-mode", "plan", "--no-subagents",
+        "--disable-web-search", "--cwd", JETON_ESPACE_ISOLE,
+        "--prompt-file", JETON_FICHIER_PROMPT, "--verbatim",
+        "--output-format", "json",
+    ),
+}
+TRANSPORTS_COMPLETION_R5 = {
+    "claude-code-fable-5": MODE_STIMULUS_STDIN,
+    "claude-code-opus-5": MODE_STIMULUS_STDIN,
+    "codex-gpt-5-6-sol": MODE_STIMULUS_STDIN,
+    "cursor-kimi-k3": MODE_STIMULUS_ARGUMENT,
+    "grok-build-grok-4-6": MODE_STIMULUS_FICHIER_PROMPT,
+}
+# Produit de compte de chaque configuration : clé du formulaire manuel privé
+PRODUITS_COMPLETION = {
+    "claude-code-fable-5": "ANTHROPIC",
+    "claude-code-opus-5": "ANTHROPIC",
+    "codex-gpt-5-6-sol": "OPENAI",
+    "cursor-kimi-k3": "CURSOR",
+    "grok-build-grok-4-6": "GROK",
+}
+
+# V1-R5-H3 : amendement append-only de récupération des quatre routes
+# headless. Les créneaux -001 et leur journal restent historiques.
+SCHEMA_AUTORISATION_RECUPERATION_HEADLESS = (
+    "campagne-v1-autorisation-recuperation-headless/v1"
+)
+CHEMIN_AUTORISATION_RECUPERATION_HEADLESS = (
+    _RACINE_CAMPAGNE_V1
+    / "completion-panel-v1"
+    / "autorisation-recuperation-headless-v1.json"
+)
+TRANCHE_RECUPERATION_HEADLESS = "V1-R5-H3"
+AUTORITE_RECUPERATION_HEADLESS = "V1_R5_HEADLESS_RECOVERY"
+JETON_RECUPERATION_HEADLESS = (
+    "V1_R5_HEADLESS_RECOVERY = AUTHORIZE_APPEND_ONLY_4_SLOTS:"
+    "FABLE,CODEX,CURSOR,GROK; CORRECTED_DESCRIPTORS; "
+    "KIMI_QUOTA_RESULT_ACCEPTED; ZERO_RETRY; ZERO_FALLBACK; ZERO_OVERAGE"
+)
+CRENEAUX_RECUPERATION_HEADLESS = (
+    ("claude-code-fable-5", "ACQ-V1-CLAUDE-CODE-FABLE-5-002"),
+    ("codex-gpt-5-6-sol", "ACQ-V1-CODEX-GPT-5-6-SOL-002"),
+    ("cursor-kimi-k3", "ACQ-V1-CURSOR-KIMI-K3-002"),
+    ("grok-build-grok-4-6", "ACQ-V1-GROK-BUILD-GROK-4-6-002"),
+)
+RELATIF_EXECUTION_RECUPERATION_HEADLESS = (
+    Path("v1-execution") / "r5-headless-recovery"
+)
+DESCRIPTEURS_RECUPERATION_HEADLESS = {
+    "claude-code-fable-5": (
+        "claude", "--restricted", "--model", "claude-fable-5", "--effort",
+        "high", "--print", "--input-format", "text", "--output-format",
+        "json", "--permission-mode", "dontAsk", "--tools", "",
+        "--disable-slash-commands", "--strict-mcp-config",
+        "--no-session-persistence", "--no-chrome",
+    ),
+    "codex-gpt-5-6-sol": (
+        "codex", "--strict-config", "--ask-for-approval", "never", "exec",
+        "--cd", JETON_ESPACE_ISOLE, "--ignore-user-config", "--model",
+        "gpt-5.6-sol", "--config", 'model_provider="openai"', "--config",
+        'model_reasoning_effort="high"', "--config", "agents.enabled=false",
+        "--config", 'web_search="disabled"', "--config",
+        "memories.use_memories=false", "--config",
+        "memories.generate_memories=false", "--config",
+        "apps._default.enabled=false", "--sandbox", "read-only",
+        "--skip-git-repo-check", "--ephemeral", "--json", "--color",
+        "never", "-",
+    ),
+    "cursor-kimi-k3": (
+        "agent", "--print", "--output-format", "stream-json", "--mode",
+        "ask", "--sandbox", "enabled", "--workspace", JETON_ESPACE_ISOLE,
+        "--model", "kimi-k3-high",
+    ),
+    "grok-build-grok-4-6": (
+        "grok", "--no-auto-update", "--sandbox", "read-only", "--model",
+        "grok-4.6", "--reasoning-effort", "high", "--permission-mode",
+        "dontAsk", "--no-subagents", "--disable-web-search", "--cwd",
+        JETON_ESPACE_ISOLE, "--prompt-file", JETON_FICHIER_PROMPT,
+        "--verbatim", "--output-format", "json",
+    ),
+}
+TRANSPORTS_RECUPERATION_HEADLESS = {
+    "claude-code-fable-5": MODE_STIMULUS_STDIN,
+    "codex-gpt-5-6-sol": MODE_STIMULUS_STDIN,
+    "cursor-kimi-k3": MODE_STIMULUS_STDIN,
+    "grok-build-grok-4-6": MODE_STIMULUS_FICHIER_PROMPT,
+}
+
+# Modèle de domaine figé du contrat #145
+ROUTE_PRETE_POUR_TENTATIVE_AUTORISEE = "PRETE_POUR_TENTATIVE_AUTORISEE"
+ROUTE_UNAVAILABLE = "UNAVAILABLE"
+ROUTE_HOLD = "HOLD"
+TELEMETRIE_OBSERVED = "OBSERVED"
+TELEMETRIE_OBSERVABLE_NON_COLLECTEE = "OBSERVABLE_COMPTE_NON_COLLECTE"
+TELEMETRIES_ABONNEMENT = (
+    TELEMETRIE_OBSERVED,
+    TELEMETRIE_OBSERVABLE_NON_COLLECTEE,
+    "NON_PUBLIE_PAR_FOURNISSEUR",
+    "CHAMP_NON_AFFICHE",
+    INCONNU,
+    "NON_DEFINI",
+)
+RESULTAT_MESURE_ABSENT = "ABSENT"
+
+# Formulaire manuel fermé : observations de compte recopiées telles
+# qu'affichées par les surfaces officielles, jamais calculées. Chemin privé
+# obligatoire, jamais suivi par Git.
+RELATIF_OBSERVATIONS_ABONNEMENTS = (
+    Path("campagne-v1") / "v1-r5" / "observations-abonnements.toml"
+)
+_PRODUITS_OBSERVATIONS = (
+    "ANTHROPIC", "OPENAI", "CURSOR", "GROK", "ZAI", "ANTIGRAVITY",
+)
+_CLES_OBSERVATION_ABONNEMENT = {
+    "produit",
+    "observe_le",
+    "surface",
+    "plan",
+    "quota_5h_restant",
+    "quota_hebdomadaire_restant",
+    "reset_5h",
+    "reset_hebdomadaire",
+    "depassement_payant",
+}
+# Horodatage non ambigu : date seule, ou date et heure avec fuseau explicite
+_MOTIF_OBSERVE_LE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?(Z|[+-]\d{2}:\d{2}))?$"
+)
+
+
+def _charger_observations_abonnements(racine_privee: Path) -> dict[str, dict]:
+    """Formulaire manuel privé facultatif, validé fail-closed sur sa forme.
+
+    Absence du fichier : {} (jamais bloquant). Toute clé inconnue, tout
+    doublon de produit, toute valeur non textuelle ou tout horodatage
+    ambigu est refusé ; les valeurs sont recopiées telles quelles, jamais
+    calculées ni converties."""
+    chemin = racine_privee / RELATIF_OBSERVATIONS_ABONNEMENTS
+    if not os.path.lexists(chemin):
+        return {}
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurCompletion(
+            "formulaire d'observations : fichier régulier non symbolique "
+            "attendu"
+        )
+    try:
+        donnees = tomllib.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as erreur:
+        raise ErreurCompletion(
+            f"formulaire d'observations illisible : {erreur}"
+        ) from erreur
+    if set(donnees) != {"observation"} or not isinstance(
+        donnees["observation"], list
+    ):
+        raise ErreurCompletion(
+            "formulaire d'observations : seule la liste de tables "
+            "[[observation]] est admise"
+        )
+    observations: dict[str, dict] = {}
+    for rang, entree in enumerate(donnees["observation"]):
+        nom_table = f"observation[{rang}]"
+        if not isinstance(entree, dict) or set(entree) != (
+            _CLES_OBSERVATION_ABONNEMENT
+        ):
+            raise ErreurCompletion(
+                f"'{nom_table}' : clés exactes "
+                f"{sorted(_CLES_OBSERVATION_ABONNEMENT)} attendues, clé "
+                "inconnue ou manquante refusée"
+            )
+        for cle, valeur in entree.items():
+            if not isinstance(valeur, str) or not valeur.strip():
+                raise ErreurCompletion(
+                    f"champ '{nom_table}.{cle}' : valeur textuelle recopiée "
+                    "telle qu'affichée attendue, jamais une valeur calculée"
+                )
+        produit = entree["produit"]
+        if produit not in _PRODUITS_OBSERVATIONS:
+            raise ErreurCompletion(
+                f"champ '{nom_table}.produit' : '{produit}' hors vocabulaire "
+                f"({' | '.join(_PRODUITS_OBSERVATIONS)})"
+            )
+        if produit in observations:
+            raise ErreurCompletion(
+                f"champ '{nom_table}.produit' : doublon '{produit}' refusé"
+            )
+        observe_le = entree["observe_le"]
+        if observe_le != INCONNU and not _MOTIF_OBSERVE_LE.match(observe_le):
+            raise ErreurCompletion(
+                f"champ '{nom_table}.observe_le' : 'INCONNU' ou horodatage "
+                "non ambigu attendu (AAAA-MM-JJ, ou date et heure avec "
+                "fuseau explicite)"
+            )
+        observations[produit] = entree
+    return observations
+
+
+def _structure_autorisation_completion() -> dict:
+    """Contenu canonique fermé de l'autorisation additive V1-R5 : jeton
+    propriétaire exact, verrou R4 immuable, stimulus, cinq créneaux, cinq
+    descripteurs et limites fermées."""
+    return {
+        "schema_version": SCHEMA_AUTORISATION_COMPLETION,
+        "autorite": AUTORITE_COMPLETION,
+        "jeton": JETON_AUTORITE_COMPLETION,
+        "verrou_completion": {
+            "chemin": CHEMIN_VERROU_COMPLETION.as_posix(),
+            "sha256": EMPREINTE_VERROU_COMPLETION_R4,
+        },
+        "stimulus": {
+            "chemin": CHEMIN_STIMULUS,
+            "sha256": EMPREINTE_STIMULUS_COMPLETION,
+        },
+        "portee": {
+            "issue": ISSUE_COMPLETION_EXECUTION,
+            "tranche": TRANCHE_COMPLETION_EXECUTION,
+            "acquisitions": [
+                {
+                    "acquisition_id": acquisition_id,
+                    "configuration_id": configuration_id,
+                }
+                for configuration_id, acquisition_id in CRENEAUX_COMPLETION
+            ],
+            "appels_fournisseur_max": 5,
+            "appels_par_creneau": 1,
+            "consommation_quota": "ABONNEMENTS_EXISTANTS",
+            "depense_incrementale": 0,
+            "reprises_automatiques": 0,
+            "reprises_manuelles": 0,
+            "fallback": "NONE",
+            "effort_candidat": EFFORT_CANDIDAT_COMPLETION,
+            "variantes_interdites": list(VARIANTES_INTERDITES_COMPLETION),
+        },
+        "descripteurs": {
+            configuration_id: {
+                "argv": list(DESCRIPTEURS_COMPLETION_R5[configuration_id]),
+                "stimulus_utf8": TRANSPORTS_COMPLETION_R5[configuration_id],
+            }
+            for configuration_id, _ in CRENEAUX_COMPLETION
+        },
+    }
+
+
+def _structure_autorisation_recuperation_headless() -> dict:
+    return {
+        "schema_version": SCHEMA_AUTORISATION_RECUPERATION_HEADLESS,
+        "autorite": AUTORITE_RECUPERATION_HEADLESS,
+        "jeton": JETON_RECUPERATION_HEADLESS,
+        "verrou_completion": {
+            "chemin": CHEMIN_VERROU_COMPLETION.as_posix(),
+            "sha256": EMPREINTE_VERROU_COMPLETION_R4,
+        },
+        "stimulus": {
+            "chemin": CHEMIN_STIMULUS,
+            "sha256": EMPREINTE_STIMULUS_COMPLETION,
+        },
+        "portee": {
+            "issue": ISSUE_COMPLETION_EXECUTION,
+            "tranche": TRANCHE_RECUPERATION_HEADLESS,
+            "acquisitions": [
+                {
+                    "configuration_id": configuration_id,
+                    "acquisition_id": acquisition_id,
+                }
+                for configuration_id, acquisition_id
+                in CRENEAUX_RECUPERATION_HEADLESS
+            ],
+            "appels_fournisseur_max": 4,
+            "appels_par_creneau": 1,
+            "consommation_quota": "ABONNEMENTS_EXISTANTS",
+            "depense_incrementale": 0,
+            "reprises": 0,
+            "fallback": "NONE",
+            "overage": "INTERDIT",
+            "effort_candidat": "high",
+        },
+        "descripteurs": {
+            configuration_id: {
+                "argv": list(DESCRIPTEURS_RECUPERATION_HEADLESS[configuration_id]),
+                "stimulus_utf8": TRANSPORTS_RECUPERATION_HEADLESS[configuration_id],
+            }
+            for configuration_id, _ in CRENEAUX_RECUPERATION_HEADLESS
+        },
+        "journal_prive": (
+            RELATIF_EXECUTION_RECUPERATION_HEADLESS / NOM_JOURNAL_EXECUTION
+        ).as_posix(),
+        "opus": {
+            "acquisition_id": "ACQ-V1-CLAUDE-CODE-OPUS-5-001",
+            "mode": "REVALIDATION_HORS_LIGNE_SEULEMENT",
+        },
+    }
+
+
+def _charger_autorisation_recuperation_headless(racine: Path) -> dict:
+    chemin = racine / CHEMIN_AUTORISATION_RECUPERATION_HEADLESS
+    attendu = _structure_autorisation_recuperation_headless()
+    if not os.path.lexists(chemin):
+        raise ErreurCompletion(
+            "AUTORITE_ABSENTE : autorisation de récupération headless non "
+            "matérialisée"
+        )
+    _verifier_autorisation_completion(chemin, octets_canoniques(attendu))
+    verrou = racine / CHEMIN_VERROU_COMPLETION
+    if not verrou.is_file() or _sha256_fichier(verrou) != (
+        EMPREINTE_VERROU_COMPLETION_R4
+    ):
+        raise ErreurCompletion(
+            "verrou R4 absent ou divergent de l'empreinte autorisée "
+            "(LOCKED_ARTIFACT_CHANGED)"
+        )
+    return attendu
+
+
+def preparer_recuperation_headless(racine: Path) -> int:
+    chemin = racine / CHEMIN_AUTORISATION_RECUPERATION_HEADLESS
+    attendu = _structure_autorisation_recuperation_headless()
+    octets = octets_canoniques(attendu)
+    try:
+        verrou = racine / CHEMIN_VERROU_COMPLETION
+        if not verrou.is_file() or _sha256_fichier(verrou) != (
+            EMPREINTE_VERROU_COMPLETION_R4
+        ):
+            raise ErreurCompletion(
+                "verrou R4 absent ou divergent (LOCKED_ARTIFACT_CHANGED)"
+            )
+        if os.path.lexists(chemin):
+            _verifier_autorisation_completion(chemin, octets)
+        else:
+            chemin.parent.mkdir(parents=True, exist_ok=True)
+            descripteur = os.open(
+                chemin, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
+            )
+            with os.fdopen(descripteur, "wb") as flux:
+                flux.write(octets)
+    except (ErreurCompletion, OSError) as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    print(
+        "autorisation de récupération headless vérifiée : "
+        f"{CHEMIN_AUTORISATION_RECUPERATION_HEADLESS.as_posix()}"
+    )
+    print(
+        "4 créneaux -002 · un appel chacun · retry 0 · fallback NONE · "
+        "overage interdit · Opus -001 revalidé hors ligne"
+    )
+    return 0
+
+
+def _verifier_autorisation_completion(
+    chemin: Path, octets_attendus: bytes
+) -> None:
+    """Vérifie l'octet existant de l'autorisation V1-R5 sans réécriture ;
+    toute divergence nomme le champ fautif (même couture que D-V1-05)."""
+    infos = os.lstat(chemin)
+    if stat.S_ISLNK(infos.st_mode) or not stat.S_ISREG(infos.st_mode):
+        raise ErreurCompletion(
+            "autorisation de complétion : fichier régulier non symbolique "
+            "attendu"
+        )
+    octets = chemin.read_bytes()
+    if octets == octets_attendus:
+        return
+    try:
+        existant = json.loads(octets.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        existant = None
+    champ = _nommer_divergence_autorisation(
+        existant, json.loads(octets_attendus.decode("utf-8"))
+    )
+    raise ErreurCompletion(
+        "autorisation de complétion divergente : champ fautif "
+        f"'{champ}' (LOCKED_ARTIFACT_CHANGED) : aucune réécriture"
+    )
+
+
+def _charger_autorisation_completion(racine: Path) -> dict:
+    """Autorisation V1-R5 validée fail-closed : octets canoniques exacts et
+    verrou R4 byte-identique à l'empreinte figée 26b994."""
+    chemin = racine / CHEMIN_AUTORISATION_COMPLETION
+    if not os.path.lexists(chemin):
+        raise ErreurCompletion(
+            "AUTORITE_ABSENTE : autorisation V1-R5 non matérialisée "
+            f"({CHEMIN_AUTORISATION_COMPLETION.as_posix()})"
+        )
+    attendu = _structure_autorisation_completion()
+    _verifier_autorisation_completion(chemin, octets_canoniques(attendu))
+    verrou = racine / CHEMIN_VERROU_COMPLETION
+    if not verrou.is_file() or _sha256_fichier(verrou) != (
+        EMPREINTE_VERROU_COMPLETION_R4
+    ):
+        raise ErreurCompletion(
+            "verrou R4 absent ou divergent de l'empreinte autorisée "
+            f"{EMPREINTE_VERROU_COMPLETION_R4} (LOCKED_ARTIFACT_CHANGED)"
+        )
+    return attendu
+
+
+def construire_tentative_completion_r5(
+    identifiant: str,
+    stimulus_utf8: bytes,
+    espace_isole: str,
+    descripteurs: dict[str, tuple[str, ...]] | None = None,
+    transports: dict[str, str] | None = None,
+) -> dict:
+    """Adaptateur pur des cinq tentatives V1-R5 : argv fermé résolu sans
+    exécutable, sans processus et sans écriture.
+
+    Claude et Codex : stimulus intégral sur l'entrée standard (FD0 puis
+    EOF), prompt positionnel omis. Cursor : octets UTF-8 dans un unique
+    argument, sans shell ni interpolation. Grok : --prompt-file --verbatim
+    vers le fichier privé isolé."""
+    if descripteurs is None:
+        descripteurs = DESCRIPTEURS_COMPLETION_R5
+    if transports is None:
+        transports = TRANSPORTS_COMPLETION_R5
+    descripteur = descripteurs.get(identifiant)
+    if descripteur is None:
+        raise ErreurCompletion(
+            "champ 'configuration_id' : "
+            f"'{identifiant}' hors des cinq créneaux de complétion "
+            f"{', '.join(creneau for _, creneau in CRENEAUX_COMPLETION)}"
+        )
+    transport = transports[identifiant]
+    try:
+        stimulus_texte = stimulus_utf8.decode("utf-8")
+    except UnicodeDecodeError as erreur:
+        raise ErreurCompletion(
+            "champ 'stimulus_utf8' : octets UTF-8 exacts attendus : "
+            f"{erreur}"
+        ) from erreur
+    fichier_prompt = str(Path(espace_isole) / "stimulus.md")
+    argv = []
+    for element in descripteur:
+        if element == JETON_ESPACE_ISOLE:
+            argv.append(espace_isole)
+        elif element == JETON_STIMULUS_UTF8:
+            argv.append(stimulus_texte)
+        elif element == JETON_FICHIER_PROMPT:
+            argv.append(fichier_prompt)
+        else:
+            argv.append(element)
+    return {
+        "argv": argv,
+        "stdin": stimulus_utf8 if transport == MODE_STIMULUS_STDIN else None,
+        "cwd": espace_isole,
+        "fichier_prompt": (
+            {"chemin": fichier_prompt, "stimulus_utf8": stimulus_utf8}
+            if transport == MODE_STIMULUS_FICHIER_PROMPT
+            else None
+        ),
+    }
+
+
+def _dimensions_domaine_completion(
+    racine: Path, racine_privee: Path
+) -> list[dict]:
+    """Les trois dimensions du modèle de domaine par créneau, dérivées des
+    seules preuves présentes : route_execution (les scellés et le créneau),
+    telemetrie_abonnement (formulaire privé facultatif, sinon la surface
+    officielle documentée non collectée) et resultat_mesure (reçus
+    attribuables uniquement). La télémétrie n'entre jamais dans la route."""
+    observations = _charger_observations_abonnements(racine_privee)
+    try:
+        etat = _charger_etat(racine)
+        _, officiels = _partitionner_recus(racine, etat)
+    except ErreurRestitution as erreur:
+        raise ErreurCompletion(
+            f"reçus officiels non vérifiables : {erreur}"
+        ) from erreur
+    par_creneau = {
+        enveloppe["payload"]["creneau"]: adresse_relative
+        for adresse_relative, enveloppe, _ in officiels
+    }
+    occupes = {creneau.split(":")[0] for creneau in par_creneau}
+    sha_stimulus = _sha256_fichier(racine / CHEMIN_STIMULUS)
+    dimensions = []
+    for configuration_id, acquisition_id in CRENEAUX_COMPLETION:
+        creneau = f"{configuration_id}:{sha_stimulus}:{acquisition_id}"
+        recu = par_creneau.get(creneau)
+        if recu is not None:
+            route = ROUTE_HOLD
+            cause_route = "créneau -001 consommé : aucun second appel"
+        elif configuration_id in occupes:
+            route = ROUTE_HOLD
+            cause_route = (
+                "un reçu officiel occupe déjà un créneau de la configuration"
+            )
+        else:
+            route = ROUTE_PRETE_POUR_TENTATIVE_AUTORISEE
+            cause_route = None
+        produit = PRODUITS_COMPLETION[configuration_id]
+        telemetrie = (
+            TELEMETRIE_OBSERVED
+            if produit in observations
+            else TELEMETRIE_OBSERVABLE_NON_COLLECTEE
+        )
+        dimensions.append(
+            {
+                "configuration_id": configuration_id,
+                "acquisition_id": acquisition_id,
+                "route_execution": route,
+                "cause_route": cause_route,
+                "telemetrie_abonnement": telemetrie,
+                "resultat_mesure": (
+                    recu if recu is not None else RESULTAT_MESURE_ABSENT
+                ),
+            }
+        )
+    return dimensions
+
+
+def preparer_execution_completion(
+    racine: Path, racine_privee: Path | None = None
+) -> int:
+    """Matérialise une seule fois l'autorisation additive V1-R5, ou vérifie
+    les octets existants sans les réécrire, puis publie les trois
+    dimensions du modèle de domaine par créneau. N'exécute aucune commande
+    externe de fournisseur, de modèle ou de harnais."""
+    if racine_privee is None:
+        racine_privee = RACINE_PRIVEE_PRODUCTION
+    chemin_verrou = racine / CHEMIN_VERROU_COMPLETION
+    try:
+        if not chemin_verrou.is_file() or _sha256_fichier(chemin_verrou) != (
+            EMPREINTE_VERROU_COMPLETION_R4
+        ):
+            raise ErreurCompletion(
+                "verrou R4 absent ou divergent de l'empreinte autorisée "
+                f"{EMPREINTE_VERROU_COMPLETION_R4} : preparer-completion "
+                "doit le matérialiser d'abord (LOCKED_ARTIFACT_CHANGED)"
+            )
+        octets_attendus = octets_canoniques(
+            _structure_autorisation_completion()
+        )
+        chemin = racine / CHEMIN_AUTORISATION_COMPLETION
+        if os.path.lexists(chemin):
+            _verifier_autorisation_completion(chemin, octets_attendus)
+        else:
+            chemin.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                descripteur = os.open(
+                    chemin, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644
+                )
+            except FileExistsError as erreur:
+                raise ErreurCompletion(
+                    "création concurrente détectée : l'autorisation de "
+                    "complétion existe déjà (LOCKED_ARTIFACT_CHANGED) : "
+                    "aucune réécriture, une nouvelle invocation vérifiera "
+                    "l'octet existant"
+                ) from erreur
+            with os.fdopen(descripteur, "wb") as flux:
+                flux.write(octets_attendus)
+        dimensions = _dimensions_domaine_completion(racine, racine_privee)
+    except ErreurCompletion as erreur:
+        print(f"ECHEC {erreur}")
+        return 2
+    except OSError as erreur:
+        nom = Path(erreur.filename).name if erreur.filename else "inconnu"
+        print(
+            "ECHEC artefact de complétion inaccessible : "
+            f"'{nom}' ({erreur.strerror})"
+        )
+        return 2
+    print(
+        "autorisation additive vérifiée : "
+        f"{CHEMIN_AUTORISATION_COMPLETION.as_posix()}"
+    )
+    print(
+        f"AUTORITE_EXECUTION : {AUTORITE_COMPLETION} (additive, verrou R4 "
+        "NOT_GRANTED byte-identique) · jeton propriétaire "
+        f"{JETON_AUTORITE_COMPLETION} · 5 appels maximum · 1 par créneau · "
+        f"effort candidat commun {EFFORT_CANDIDAT_COMPLETION} · reprises 0 "
+        "· fallback NONE · dépense incrémentale 0 EUR"
+    )
+    for dimension in dimensions:
+        complement = (
+            f" — {dimension['cause_route']}"
+            if dimension["cause_route"]
+            else ""
+        )
+        print(
+            f"{dimension['acquisition_id']} · "
+            f"{dimension['configuration_id']} · route_execution "
+            f"{dimension['route_execution']}{complement} · "
+            f"telemetrie_abonnement {dimension['telemetrie_abonnement']} · "
+            f"resultat_mesure {dimension['resultat_mesure']}"
+        )
+    print(
+        "modèle de domaine : la télémétrie d'abonnement n'entre jamais "
+        "dans la route ; un quota INCONNU, NON_PUBLIE_PAR_FOURNISSEUR, "
+        "CHAMP_NON_AFFICHE ou OBSERVABLE_COMPTE_NON_COLLECTE ne bloque pas "
+        "une route autrement prête ; QUOTA_EXHAUSTED exige une erreur "
+        "fournisseur explicite et attribuable"
+    )
+    print(
+        "empreinte SHA-256 de l'autorisation : "
+        f"{hashlib.sha256(octets_attendus).hexdigest()}"
+    )
+    return 0
 
 
 # V1-XS-10 : dossiers de revue aveugle. Sélection des seules sorties au
@@ -10079,6 +11599,12 @@ def _jetons_fuites_interdits(
         ajouter("source_url", plan["source_url"])
     for creneau in verrou["creneaux"]:
         ajouter("acquisition_id", creneau["acquisition_id"])
+    # Créneaux additifs V1-R5 : identifiants tout aussi interdits dans les
+    # dossiers opaques quand l'extension est active
+    if _extension_completion_active(racine):
+        for configuration_id, acquisition_id in CRENEAUX_COMPLETION:
+            ajouter("configuration_id", configuration_id)
+            ajouter("acquisition_id", acquisition_id)
     for entree in registre["entrees"]:
         ajouter("adresse_recu", Path(entree["recu"]).stem)
         if entree["verdict"] is not None:
@@ -10112,6 +11638,40 @@ def _correspondance_ordre_privee(
             "manifeste d'ordre privé non aligné sur les créneaux verrouillés"
         )
     return correspondance
+
+
+def _extension_completion_active(racine: Path) -> bool:
+    """Extension additive V1-R5 du lot de revue aveugle : active dès que
+    l'autorisation additive est matérialisée, validée fail-closed sur ses
+    octets exacts et sur le verrou R4 ; jamais déduite d'un artefact partiel."""
+    if not os.path.lexists(racine / CHEMIN_AUTORISATION_COMPLETION):
+        return False
+    _charger_autorisation_completion(racine)
+    return True
+
+
+def _correspondance_completion_privee(
+    chemin_sel: Path, depart: int
+) -> dict[str, dict]:
+    """Correspondance additive V1-R5 acquisition_id -> {item, position} :
+    dérivée du même sel scellé au verrou et des cinq créneaux fermés du
+    contrat, positions contiguës après le lot historique ; aucun nouvel
+    objet privé, aucun nouveau scellement, jamais publiée."""
+    sel = chemin_sel.read_bytes()
+    creneaux = [
+        {"acquisition_id": acquisition_id}
+        for _, acquisition_id in CRENEAUX_COMPLETION
+    ]
+    manifeste = json.loads(
+        _octets_manifeste_ordre(sel, creneaux, depart=depart)
+    )
+    return {
+        entree["acquisition_id"]: {
+            "item": entree["item"],
+            "position": entree["position"],
+        }
+        for entree in manifeste
+    }
 
 
 def _charger_paquet_approuve(racine: Path) -> tuple[dict, str]:
@@ -10252,7 +11812,16 @@ def dossiers(racine: Path, racine_privee: Path | None = None) -> int:
         correspondance = _correspondance_ordre_privee(
             chemin_manifeste_ordre, verrou["creneaux"]
         )
-    except ErreurVerrou as erreur:
+        # Extension additive V1-R5 : les cinq créneaux de complétion entrent
+        # dans le même domaine ITEM-NNN après le lot historique, dérivés du
+        # sel déjà scellé, sans réécrire le manifeste ni le verrou
+        if _extension_completion_active(racine):
+            correspondance.update(
+                _correspondance_completion_privee(
+                    chemin_sel, len(verrou["creneaux"]) + 1
+                )
+            )
+    except (ErreurVerrou, ErreurCompletion) as erreur:
         print(f"ECHEC {erreur}")
         return 2
     except OSError as erreur:
@@ -10313,7 +11882,9 @@ def dossiers(racine: Path, racine_privee: Path | None = None) -> int:
             return _refus_dossiers(
                 f"sortie PASS sans créneau verrouillé : {acquisition_id}"
             )
-        sortie_candidate = execution["sortie"]["stdout"]
+        sortie_candidate = _extraire_sortie_candidate(
+            execution["sortie"]["stdout"]
+        )
         if (
             hashlib.sha256(sortie_candidate.encode("utf-8")).hexdigest()
             != verdict["empreinte_candidate"]
@@ -11223,9 +12794,15 @@ def _etats_officiels_etat(
                 else "ABSENTE"
             )
             comptage[statut] = comptage.get(statut, 0) + 1
-        if gel["lot_vide"].get("comptage_statuts") != comptage:
+        lot_courant = artefacts_verdicts.get("lot_courant")
+        comptage_reference = (
+            lot_courant[1]["lot_vide"].get("comptage_statuts")
+            if lot_courant is not None
+            else gel["lot_vide"].get("comptage_statuts")
+        )
+        if comptage_reference != comptage:
             raise ErreurRestitution(
-                "comptage de lot vide du gel divergent du registre de "
+                "comptage de lot vide courant divergent du registre de "
                 "verdicts"
             )
         return {}
@@ -11749,14 +13326,21 @@ def _rapport_etat(
     return "\n".join(lignes)
 
 
-def etat(racine: Path) -> int:
+def etat(racine: Path, racine_privee: Path | None = None) -> int:
     """État de la campagne V1 : acquisitions, incidents, observations ou
     preuves manquantes et couverture en fraction exacte, lus des preuves
     versionnées présentes.
 
     Le registre de couverture est écrit dans l'état V1 versionné, prolongé
     sans seconde source de vérité ; l'écriture est déterministe et
-    idempotente. Aucune acquisition, aucun appel candidat, aucune dépense."""
+    idempotente. Sous l'autorisation additive V1-R5 valide, la section
+    execution_completion publie le modèle de domaine par créneau
+    (route_execution / telemetrie_abonnement / resultat_mesure) : des
+    statuts et des références de preuve seulement, jamais une valeur du
+    formulaire privé. Sans autorisation additive, l'état historique reste
+    inchangé. Aucune acquisition, aucun appel candidat, aucune dépense."""
+    if racine_privee is None:
+        racine_privee = RACINE_PRIVEE_PRODUCTION
     etat_v1 = _charger_etat(racine)
     repertoire = _repertoire_recus(racine, etat_v1)
     _compter_recus(repertoire)
@@ -11788,6 +13372,32 @@ def etat(racine: Path) -> int:
     )
     _valider_couverture_etat(couverture)
     etat_v1["couverture"] = couverture
+    # Modèle de domaine V1-R5 : publié uniquement sous l'autorisation
+    # additive valide ; sans elle, la vue historique reste inchangée
+    autorisation_completion = _charger_autorisation_completion_restitution(
+        racine
+    )
+    if autorisation_completion is not None:
+        try:
+            creneaux_execution = _dimensions_domaine_completion(
+                racine, racine_privee
+            )
+        except ErreurCompletion as erreur:
+            raise ErreurRestitution(
+                f"modèle de domaine V1-R5 non dérivable : {erreur}"
+            ) from erreur
+        etat_v1["execution_completion"] = {
+            "autorisation": {
+                "chemin": autorisation_completion[0],
+                "sha256": autorisation_completion[2],
+            },
+            "creneaux": creneaux_execution,
+        }
+        _valider_section_execution_completion(
+            etat_v1["execution_completion"]
+        )
+    else:
+        etat_v1.pop("execution_completion", None)
     chemin_etat = racine / CHEMIN_ETAT
     chemin_etat.write_bytes(
         (json.dumps(etat_v1, ensure_ascii=False, indent=2) + "\n").encode(
@@ -11804,6 +13414,13 @@ def etat(racine: Path) -> int:
         )
     )
     print(f"registre de couverture écrit : {CHEMIN_ETAT.as_posix()}")
+    if autorisation_completion is not None:
+        print(
+            "modèle de domaine V1-R5 écrit dans l'état : "
+            f"{len(etat_v1['execution_completion']['creneaux'])} créneaux "
+            "(route_execution / telemetrie_abonnement / resultat_mesure) "
+            f"sous l'autorisation additive {autorisation_completion[0]}"
+        )
     return 0
 
 
@@ -13257,9 +14874,17 @@ def _verifier_coherence_dossiers(
         )
     creneaux = verrou_charge[1]["creneaux"]
     ordre = engagement["ordre_revue"]
-    if engagement["cardinalite_revue"] != len(creneaux) or len(ordre) != len(
-        creneaux
-    ):
+    # Cardinalité attendue : lot historique, étendu des cinq créneaux de
+    # complétion quand l'autorisation additive V1-R5 est matérialisée
+    try:
+        attendus = len(creneaux) + (
+            len(CRENEAUX_COMPLETION)
+            if _extension_completion_active(racine)
+            else 0
+        )
+    except ErreurCompletion as erreur:
+        raise ErreurRestitution(str(erreur)) from erreur
+    if engagement["cardinalite_revue"] != attendus or len(ordre) != attendus:
         raise ErreurRestitution(
             "engagement d'ordre non aligné sur les créneaux verrouillés"
         )
@@ -13552,17 +15177,36 @@ def _verifier_coherence_verdicts(
     (_, manifeste, sha_manifeste) = artefacts_dossiers[0]
     (relatif_engagement, engagement, sha_engagement) = artefacts_dossiers[2]
     relatif_gel, gel, sha_gel = artefacts_verdicts["gel"]
-    if gel["engagement_ordre"] != {
-        "chemin": relatif_engagement,
-        "sha256": sha_engagement,
-    } or gel["manifeste_dossiers"] != {
-        "chemin": artefacts_dossiers[0][0],
-        "sha256": sha_manifeste,
-    }:
+    liens_courants = (
+        gel["engagement_ordre"] == {
+            "chemin": relatif_engagement,
+            "sha256": sha_engagement,
+        }
+        and gel["manifeste_dossiers"] == {
+            "chemin": artefacts_dossiers[0][0],
+            "sha256": sha_manifeste,
+        }
+    )
+    lot_vide_historique_sans_verdict = (
+        "lot_vide" in gel
+        and gel.get("verdicts_requis") == 0
+        and gel.get("recus") == []
+        and artefacts_verdicts["recus"] == []
+        and artefacts_verdicts["revelation"] is None
+        and gel.get("intervention_relecteur") == INTERVENTION_AUCUNE
+        and gel.get("revelation") == REVELATION_LOT_VIDE
+        and manifeste["dossiers"] == []
+    )
+    if not liens_courants and not lot_vide_historique_sans_verdict:
         raise ErreurRestitution(
             "gel de verdicts non chaîné aux artefacts de revue courants : "
             "aucune réparation"
         )
+    if not liens_courants:
+        # Le gel demeure une preuve historique immuable de zéro revue. Le
+        # lot courant, lui aussi vide, est porté exclusivement par le
+        # manifeste courant et ne reprend jamais l'ancien comptage.
+        artefacts_verdicts["lot_courant"] = artefacts_dossiers[0]
     decision_attendue = {
         "id": DECISION_RELECTEUR_ID,
         "relecteur": RELECTEUR_AUTORISE,
@@ -13590,7 +15234,7 @@ def _verifier_coherence_verdicts(
             "déclaration de lot vide du gel divergente du manifeste"
         )
     if "lot_vide" in gel:
-        if gel["lot_vide"] != manifeste["lot_vide"]:
+        if liens_courants and gel["lot_vide"] != manifeste["lot_vide"]:
             raise ErreurRestitution(
                 "fait de lot vide du gel divergent du manifeste de dossiers"
             )
@@ -13755,18 +15399,36 @@ def _section_verdicts_humains(
     ]
     if "lot_vide" in gel:
         lot_vide = gel["lot_vide"]
+        lot_courant = artefacts_verdicts.get("lot_courant")
+        historique = lot_courant is not None
+        comptage_affiche = (
+            lot_courant[1]["lot_vide"]["comptage_statuts"]
+            if historique
+            else lot_vide["comptage_statuts"]
+        )
         articles.append(
             _article(
                 "fait",
-                "<p>Gel du lot éligible vide : 0 verdict requis, 0 reçu "
+                "<p>Gel "
+                + ("historique " if historique else "")
+                + "du lot éligible vide : 0 verdict requis, 0 reçu "
                 "écrit — aucune intervention du relecteur humain n'a eu "
                 "lieu, aucune configuration n'est dégradée et aucune "
-                "correspondance n'est révélée. Cause exacte : <code>"
-                f"{_echapper(lot_vide['cause'])}</code> (comptage des "
-                "statuts automatiques : "
-                f"{_echapper(json.dumps(lot_vide['comptage_statuts'], sort_keys=True))}"
+                "correspondance n'est révélée. Cause du lot courant : <code>"
+                f"{_echapper((lot_courant[1]['lot_vide'] if historique else lot_vide)['cause'])}"
+                "</code> (comptage courant des statuts automatiques : "
+                f"{_echapper(json.dumps(comptage_affiche, sort_keys=True))}"
                 "). Aucun état officiel n'existe.</p>"
-                + _span_source(relatif_gel, sha_gel, SECTION_GEL_VERDICTS),
+                + _span_source(relatif_gel, sha_gel, SECTION_GEL_VERDICTS)
+                + (
+                    _span_source(
+                        lot_courant[0],
+                        lot_courant[2],
+                        SECTION_DOSSIERS_REVUE,
+                    )
+                    if historique
+                    else ""
+                ),
             )
         )
         if lot_vide["cause"] == "aucune_sortie_pass":
@@ -14995,7 +16657,7 @@ def _section_restitution_complete(
                 "préenregistrée, minimisée — <code>ABSTENTION</code> de "
                 "cet axe : la règle <code>DISTRIBUTION_COMPLETE</code> ne "
                 "préenregistre aucune statistique et au moins une "
-                "distribution porte plusieurs valeurs. Distributions "
+                "distribution n'a pas exactement une valeur. Distributions "
                 f"complètes publiées : {latences_textes}."
                 + _texte_abstention_axe(
                     "statistique de latence préenregistrée",
@@ -15101,6 +16763,191 @@ def _completion_citee(
         and recu["cause"] == "MISSING_OBSERVATION"
         and recu["configuration_id"] in identifiants
         for _, recu, _ in preflights
+    )
+
+
+def _charger_autorisation_completion_restitution(
+    racine: Path,
+) -> tuple[str, dict, str] | None:
+    """Autorisation additive V1-R5 pour l'état et le rendu : (chemin
+    relatif, données, SHA-256 du fichier), ou None lorsque l'artefact
+    n'existe pas. Un artefact présent est validé fail-closed contre les
+    octets canoniques et le verrou R4 scellé, jamais réparé."""
+    chemin = racine / CHEMIN_AUTORISATION_COMPLETION
+    if not os.path.lexists(chemin):
+        return None
+    try:
+        donnees = _charger_autorisation_completion(racine)
+    except ErreurCompletion as erreur:
+        raise ErreurRestitution(str(erreur)) from erreur
+    return (
+        CHEMIN_AUTORISATION_COMPLETION.as_posix(),
+        donnees,
+        _sha256_fichier(chemin),
+    )
+
+
+_CLES_CRENEAU_EXECUTION_COMPLETION = {
+    "configuration_id",
+    "acquisition_id",
+    "route_execution",
+    "cause_route",
+    "telemetrie_abonnement",
+    "resultat_mesure",
+}
+
+
+def _valider_section_execution_completion(section: dict) -> None:
+    """Forme exacte de la section execution_completion publiée dans l'état
+    V1 : provenance de l'autorisation additive, cinq créneaux figés dans
+    l'ordre du contrat et vocabulaire fermé du modèle de domaine. Seuls des
+    statuts et des références de preuve sont admis, jamais une valeur du
+    formulaire privé."""
+    if not isinstance(section, dict) or set(section) != {
+        "autorisation",
+        "creneaux",
+    }:
+        raise ErreurRestitution(
+            "section execution_completion : clés exactes 'autorisation' et "
+            "'creneaux' attendues"
+        )
+    autorisation = section["autorisation"]
+    if (
+        not isinstance(autorisation, dict)
+        or set(autorisation) != {"chemin", "sha256"}
+        or autorisation["chemin"] != CHEMIN_AUTORISATION_COMPLETION.as_posix()
+        or not isinstance(autorisation["sha256"], str)
+    ):
+        raise ErreurRestitution(
+            "section execution_completion : provenance exacte de "
+            "l'autorisation additive attendue "
+            f"({CHEMIN_AUTORISATION_COMPLETION.as_posix()})"
+        )
+    creneaux = section["creneaux"]
+    if not isinstance(creneaux, list) or [
+        (entree.get("configuration_id"), entree.get("acquisition_id"))
+        for entree in creneaux
+        if isinstance(entree, dict)
+    ] != list(CRENEAUX_COMPLETION):
+        raise ErreurRestitution(
+            "section execution_completion : les cinq créneaux figés du "
+            "contrat sont attendus dans l'ordre"
+        )
+    for entree in creneaux:
+        if set(entree) != _CLES_CRENEAU_EXECUTION_COMPLETION:
+            raise ErreurRestitution(
+                "section execution_completion : clés de créneau hors du "
+                f"modèle de domaine figé ({entree['acquisition_id']})"
+            )
+        if entree["route_execution"] not in (
+            ROUTE_PRETE_POUR_TENTATIVE_AUTORISEE,
+            ROUTE_UNAVAILABLE,
+            ROUTE_HOLD,
+        ):
+            raise ErreurRestitution(
+                "section execution_completion : route_execution hors "
+                f"vocabulaire ({entree['acquisition_id']})"
+            )
+        if entree["telemetrie_abonnement"] not in TELEMETRIES_ABONNEMENT:
+            raise ErreurRestitution(
+                "section execution_completion : telemetrie_abonnement hors "
+                f"vocabulaire ({entree['acquisition_id']})"
+            )
+        if entree["cause_route"] is not None and not isinstance(
+            entree["cause_route"], str
+        ):
+            raise ErreurRestitution(
+                "section execution_completion : cause_route textuelle ou "
+                f"nulle attendue ({entree['acquisition_id']})"
+            )
+        if not isinstance(entree["resultat_mesure"], str):
+            raise ErreurRestitution(
+                "section execution_completion : resultat_mesure textuel "
+                f"attendu ({entree['acquisition_id']})"
+            )
+
+
+def _section_execution_completion(
+    etat_relatif: str, sha_etat: str, section: dict
+) -> str:
+    """Section de restitution du modèle de domaine V1-R5 : reprise
+    littérale de la section execution_completion versionnée dans l'état,
+    jamais recalculée au rendu ; la provenance de l'autorisation additive
+    est citée exactement."""
+    autorisation = section["autorisation"]
+    span_etat = _span_source(
+        etat_relatif, sha_etat, SECTION_EXECUTION_COMPLETION
+    )
+    span_autorisation = _span_source(
+        autorisation["chemin"],
+        autorisation["sha256"],
+        SECTION_AUTORISATION_COMPLETION,
+    )
+    lignes = []
+    for creneau in section["creneaux"]:
+        cause = (
+            f" — {_echapper(creneau['cause_route'])}"
+            if creneau["cause_route"]
+            else ""
+        )
+        resultat = creneau["resultat_mesure"]
+        fragment_resultat = (
+            f"<code>{_echapper(resultat)}</code>"
+            if resultat == RESULTAT_MESURE_ABSENT
+            else f"reçu <code>{_echapper(resultat)}</code>"
+        )
+        lignes.append(
+            '<li data-execution-completion-creneau="'
+            f'{_echapper(creneau["acquisition_id"])}">'
+            f"<code>{_echapper(creneau['acquisition_id'])}</code> · "
+            f"<code>{_echapper(creneau['configuration_id'])}</code> — "
+            "route_execution "
+            f"<code>{_echapper(creneau['route_execution'])}</code>{cause} · "
+            "telemetrie_abonnement "
+            f"<code>{_echapper(creneau['telemetrie_abonnement'])}</code> · "
+            f"resultat_mesure {fragment_resultat}</li>"
+        )
+    return (
+        '<section id="execution-completion-v1" '
+        'data-execution-completion="section">'
+        "<h2>Modèle de domaine d'exécution de complétion V1-R5</h2>"
+        "<p>Cette section reprend la section <code>execution_completion"
+        "</code> versionnée dans l'état V1, produite par <code>etat</code> "
+        "sous l'autorisation additive V1-R5 et consommée telle quelle. "
+        "Trois dimensions distinctes par créneau : "
+        "<code>route_execution</code> (la tentative autorisée peut-elle "
+        "démarrer), <code>telemetrie_abonnement</code> (statut du fait de "
+        "compte, jamais un critère de route) et <code>resultat_mesure"
+        "</code> (référence d'un reçu attribuable, sinon <code>ABSENT"
+        "</code>). Seuls des statuts et des références de preuve sont "
+        "publiés, jamais une valeur du formulaire privé.</p>"
+        + _article(
+            "fait",
+            "<p>Autorisation additive <code>"
+            f"{_echapper(AUTORITE_COMPLETION)}</code> — jeton propriétaire "
+            f"<code>{_echapper(JETON_AUTORITE_COMPLETION)}</code>, verrou "
+            "R4 byte-identique à l'empreinte scellée <code>"
+            f"{_echapper(EMPREINTE_VERROU_COMPLETION_R4)}</code> : cinq "
+            "créneaux, un appel au plus par créneau, effort candidat "
+            f"<code>{_echapper(EFFORT_CANDIDAT_COMPLETION)}</code>, zéro "
+            "reprise, zéro fallback, zéro dépense incrémentale.</p>"
+            + span_autorisation,
+            ' data-execution-completion="autorisation"',
+        )
+        + _article(
+            "fait",
+            "<ul>" + "".join(lignes) + "</ul>"
+            "<p>Un quota <code>INCONNU</code>, "
+            "<code>NON_PUBLIE_PAR_FOURNISSEUR</code>, "
+            "<code>CHAMP_NON_AFFICHE</code> ou "
+            "<code>OBSERVABLE_COMPTE_NON_COLLECTE</code> ne bloque pas une "
+            "route autrement prête ; <code>QUOTA_EXHAUSTED</code> exige "
+            "une erreur fournisseur explicite et attribuable.</p>"
+            + span_etat
+            + span_autorisation,
+            ' data-execution-completion="creneaux"',
+        )
+        + "</section>"
     )
 
 
@@ -15818,6 +17665,29 @@ def _rendre_page(racine: Path) -> bytes:
     autorisation = _charger_autorisation_restitution(racine)
     registre_validation = _charger_registre_validation(racine)
     completion = _charger_verrou_completion_restitution(racine)
+    # Modèle de domaine V1-R5 : la section stockée dans l'état est l'unique
+    # source restituée ; elle n'est rendue que sous l'autorisation additive
+    # valide, dont la provenance exacte doit correspondre
+    autorisation_completion = _charger_autorisation_completion_restitution(
+        racine
+    )
+    section_execution_completion = etat.get("execution_completion")
+    if section_execution_completion is not None:
+        _valider_section_execution_completion(section_execution_completion)
+        if autorisation_completion is None:
+            raise ErreurRestitution(
+                "section execution_completion stockée dans l'état sans "
+                "autorisation additive V1-R5 matérialisée — aucune "
+                "réparation"
+            )
+        if section_execution_completion["autorisation"] != {
+            "chemin": autorisation_completion[0],
+            "sha256": autorisation_completion[2],
+        }:
+            raise ErreurRestitution(
+                "provenance de l'autorisation additive divergente entre "
+                "l'état V1 et l'artefact versionné — aucune réparation"
+            )
     sha_verite = _charger_registre_verite_restitution(
         racine, registre_validation
     )
@@ -15862,6 +17732,8 @@ def _rendre_page(racine: Path) -> bytes:
         empreintes[completion[0]] = completion[2]
     else:
         completion = None
+    if section_execution_completion is not None:
+        empreintes[autorisation_completion[0]] = autorisation_completion[2]
     if sha_verite is not None:
         empreintes[CHEMIN_REGISTRE_VERITE] = sha_verite
     if artefacts_dossiers is not None:
@@ -16382,6 +18254,17 @@ def _rendre_page(racine: Path) -> bytes:
             )
         )
 
+    if section_execution_completion is not None:
+        # La section execution_completion versionnée est restituée telle
+        # quelle, jamais recalculée au rendu
+        sections.append(
+            _section_execution_completion(
+                etat_relatif,
+                empreintes[etat_relatif],
+                section_execution_completion,
+            )
+        )
+
     if table_metriques is not None:
         # La table de métriques versionnée est restituée telle quelle,
         # jamais recalculée au rendu
@@ -16770,6 +18653,16 @@ def _rendre_page(racine: Path) -> bytes:
                 else ()
             ),
             *(
+                (
+                    (
+                        autorisation_completion[0],
+                        SECTION_AUTORISATION_COMPLETION,
+                    ),
+                )
+                if section_execution_completion is not None
+                else ()
+            ),
+            *(
                 ((CHEMIN_REGISTRE_VERITE, SECTION_REGISTRE_VERITE),)
                 if sha_verite is not None
                 else ()
@@ -16873,7 +18766,11 @@ _MOTIF_PREMISSES = re.compile(r' data-premisses="([^"]+)"')
 _MOTIF_ETAPE = re.compile(r' data-etape="([^"]+)"')
 
 
-def verifier_restitution(racine: Path) -> int:
+def verifier_restitution(
+    racine: Path, racine_privee: Path | None = None
+) -> int:
+    if racine_privee is None:
+        racine_privee = RACINE_PRIVEE_PRODUCTION
     echecs: list[str] = []
     chemin_page = racine / CHEMIN_PAGE
     try:
@@ -16945,6 +18842,63 @@ def verifier_restitution(racine: Path) -> int:
         empreintes[completion[0]] = completion[2]
     else:
         completion = None
+    # Modèle de domaine V1-R5 : la section stockée est validée sous les
+    # mêmes gardes que le rendu, puis comparée à une redérivation
+    # indépendante depuis les preuves ; toute divergence est un refus,
+    # jamais une réparation
+    autorisation_completion = _charger_autorisation_completion_restitution(
+        racine
+    )
+    section_execution_completion = etat.get("execution_completion")
+    if section_execution_completion is not None:
+        _valider_section_execution_completion(section_execution_completion)
+        if autorisation_completion is None:
+            raise ErreurRestitution(
+                "section execution_completion stockée dans l'état sans "
+                "autorisation additive V1-R5 matérialisée — aucune "
+                "réparation"
+            )
+        if section_execution_completion["autorisation"] != {
+            "chemin": autorisation_completion[0],
+            "sha256": autorisation_completion[2],
+        }:
+            raise ErreurRestitution(
+                "provenance de l'autorisation additive divergente entre "
+                "l'état V1 et l'artefact versionné — aucune réparation"
+            )
+        empreintes[autorisation_completion[0]] = autorisation_completion[2]
+        try:
+            creneaux_rederives = _dimensions_domaine_completion(
+                racine, racine_privee
+            )
+            observations_privees = _charger_observations_abonnements(
+                racine_privee
+            )
+        except ErreurCompletion as erreur:
+            raise ErreurRestitution(
+                f"modèle de domaine V1-R5 non redérivable : {erreur}"
+            ) from erreur
+        if section_execution_completion["creneaux"] != creneaux_rederives:
+            echecs.append(
+                "modèle de domaine V1-R5 stocké divergent de la "
+                "redérivation indépendante depuis les preuves — aucune "
+                "réparation"
+            )
+        # Absence de fuite : aucune valeur du formulaire privé, hors jeton
+        # normatif INCONNU et noms de produits publics, n'apparaît dans la
+        # page ni dans la section publiée
+        octets_section = json.dumps(
+            section_execution_completion, ensure_ascii=False
+        )
+        for observation in observations_privees.values():
+            for valeur in observation.values():
+                if valeur == INCONNU or valeur in _PRODUITS_OBSERVATIONS:
+                    continue
+                if valeur in page or valeur in octets_section:
+                    echecs.append(
+                        "valeur du formulaire privé publiée : seule sa "
+                        "présence est signalée, jamais sa valeur"
+                    )
     sha_verite = _charger_registre_verite_restitution(
         racine, registre_validation
     )
@@ -17247,6 +19201,45 @@ def verifier_restitution(racine: Path) -> int:
         echecs.append(
             f"{attendu_creneaux_couverture} créneaux de couverture attendus "
             f"dans la page, {nombre_creneaux_couverture} trouvés"
+        )
+
+    # Section V1-R5 rendue : fidélité byte-exacte à la section stockée,
+    # présence exacte quand l'autorisation additive existe, absence quand
+    # elle est absente
+    if section_execution_completion is not None:
+        attendu_section_execution = _section_execution_completion(
+            etat_relatif,
+            empreintes[etat_relatif],
+            section_execution_completion,
+        )
+        if attendu_section_execution not in page:
+            echecs.append(
+                "section du modèle de domaine V1-R5 infidèle ou absente"
+            )
+    nombre_sections_execution = page.count(
+        ' data-execution-completion="section"'
+    )
+    attendu_sections_execution = (
+        0 if section_execution_completion is None else 1
+    )
+    if nombre_sections_execution != attendu_sections_execution:
+        echecs.append(
+            f"{attendu_sections_execution} section du modèle de domaine "
+            f"V1-R5 attendue dans la page, {nombre_sections_execution} "
+            "trouvée"
+        )
+    nombre_creneaux_execution = page.count(
+        ' data-execution-completion-creneau="'
+    )
+    attendu_creneaux_execution = (
+        len(section_execution_completion["creneaux"])
+        if section_execution_completion is not None
+        else 0
+    )
+    if nombre_creneaux_execution != attendu_creneaux_execution:
+        echecs.append(
+            f"{attendu_creneaux_execution} créneaux d'exécution V1-R5 "
+            f"attendus dans la page, {nombre_creneaux_execution} trouvés"
         )
 
     # Table de métriques V1-XS-12B : la table stockée est comparée à une
@@ -17736,10 +19729,12 @@ _USAGE = (
     "| acquerir --officiel --configuration <id> "
     "| acquerir --recuperation --configuration <id> "
     "| acquerir --completion --configuration <id> "
+    "| acquerir --recuperation-headless --configuration <id> "
     "| preflight --configuration <id> "
     "| qualifier | verrouiller | valider | dossiers | geler | etat "
     "| metriques | cout | restituer | verifier-restitution "
-    "| preparer-recuperation | preparer-completion"
+    "| preparer-recuperation | preparer-completion "
+    "| preparer-execution-completion | preparer-recuperation-headless"
 )
 
 
@@ -17768,7 +19763,9 @@ def principal(
         return geler(racine, racine_privee)
     if arguments == ["etat"]:
         try:
-            return etat(racine)
+            # racine_privee n'existe que pour les tests Python : la CLI de
+            # production conserve la racine privée obligatoire exacte
+            return etat(racine, racine_privee)
         except ErreurRestitution as erreur:
             print(f"ECHEC {erreur}")
             return 1
@@ -17792,7 +19789,9 @@ def principal(
             return 1
     if arguments == ["verifier-restitution"]:
         try:
-            return verifier_restitution(racine)
+            # racine_privee n'existe que pour les tests Python : la CLI de
+            # production conserve la racine privée obligatoire exacte
+            return verifier_restitution(racine, racine_privee)
         except (ErreurRestitution, ErreurSourcesPlans) as erreur:
             print(f"ECHEC {erreur}")
             return 1
@@ -17800,6 +19799,12 @@ def principal(
         return preparer_recuperation(racine)
     if arguments == ["preparer-completion"]:
         return preparer_completion(racine)
+    if arguments == ["preparer-execution-completion"]:
+        # racine_privee n'existe que pour les tests Python : la CLI de
+        # production conserve la racine privée obligatoire exacte
+        return preparer_execution_completion(racine, racine_privee)
+    if arguments == ["preparer-recuperation-headless"]:
+        return preparer_recuperation_headless(racine)
     if arguments[:1] == ["enregistrer"]:
         options = _analyser_options(arguments[1:], ("--registre", "--fichier"))
         if options is None or "--fichier" not in options:
@@ -17830,8 +19835,16 @@ def principal(
             # production conserve la racine privée obligatoire exacte
             return acquerir_recuperation(racine, arguments[3], racine_privee)
         if arguments[1] == "--completion":
-            # Garde pure V1-R4 : AUTORITE_ABSENTE avant toute résolution
-            return acquerir_completion(arguments[3])
+            # racine_privee n'existe que pour les tests Python : la CLI de
+            # production conserve la racine privée obligatoire exacte
+            return acquerir_completion(racine, arguments[3], racine_privee)
+        if arguments[1] == "--recuperation-headless":
+            return acquerir_completion(
+                racine,
+                arguments[3],
+                racine_privee,
+                recuperation_headless=True,
+            )
         print(_USAGE)
         return 2
     if arguments[:1] == ["preflight"]:

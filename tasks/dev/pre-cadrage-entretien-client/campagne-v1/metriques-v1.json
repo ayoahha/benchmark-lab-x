@@ -5,12 +5,12 @@
   "couverture_reprise": {
     "source": {
       "chemin": "tasks/dev/pre-cadrage-entretien-client/campagne-v1/etat-v1.json",
-      "sha256": "81b8ccbcc60108bae1cd85c888c6df447951df4e299cba928e685584132a191d"
+      "sha256": "f1f34418a4eb5f564d83d07cffccfa55d3f2c1a9db48947d4665f3688ba9866b"
     },
     "regle": "PRD 8.5 : part du plan pour laquelle une décision officielle ou un échec fournisseur attribuable est disponible",
-    "numerateur": 2,
+    "numerateur": 6,
     "denominateur": 7,
-    "fraction": "2/7"
+    "fraction": "6/7"
   },
   "regle_latence_configuration": "DISTRIBUTION_COMPLETE",
   "fraicheur": {
@@ -73,50 +73,53 @@
     },
     {
       "configuration_id": "claude-code-fable-5",
-      "decision": null,
+      "decision": "CANDIDATE_NOT_ACCEPTABLE",
       "numerateur": 0,
-      "denominateur_decidable": 0,
-      "taux": "NON_DEFINI",
+      "denominateur_decidable": 1,
+      "taux": "0/1",
       "latence_configuration": {
         "regle": "DISTRIBUTION_COMPLETE",
-        "distribution_ms": []
+        "distribution_ms": [
+          37605
+        ]
       },
       "delai_avant_decision_officielle": "INCONNU",
       "comparabilite": {
-        "statut": "SANS_OBSERVATION",
-        "cause": "MISSING_OBSERVATION"
+        "statut": "COMPARABLE"
       }
     },
     {
       "configuration_id": "claude-code-opus-5",
-      "decision": null,
+      "decision": "CANDIDATE_NOT_ACCEPTABLE",
       "numerateur": 0,
-      "denominateur_decidable": 0,
-      "taux": "NON_DEFINI",
+      "denominateur_decidable": 1,
+      "taux": "0/1",
       "latence_configuration": {
         "regle": "DISTRIBUTION_COMPLETE",
-        "distribution_ms": []
+        "distribution_ms": [
+          126870
+        ]
       },
       "delai_avant_decision_officielle": "INCONNU",
       "comparabilite": {
-        "statut": "SANS_OBSERVATION",
-        "cause": "MISSING_OBSERVATION"
+        "statut": "COMPARABLE"
       }
     },
     {
       "configuration_id": "codex-gpt-5-6-sol",
-      "decision": null,
+      "decision": "CANDIDATE_NOT_ACCEPTABLE",
       "numerateur": 0,
-      "denominateur_decidable": 0,
-      "taux": "NON_DEFINI",
+      "denominateur_decidable": 1,
+      "taux": "0/1",
       "latence_configuration": {
         "regle": "DISTRIBUTION_COMPLETE",
-        "distribution_ms": []
+        "distribution_ms": [
+          78017
+        ]
       },
       "delai_avant_decision_officielle": "INCONNU",
       "comparabilite": {
-        "statut": "SANS_OBSERVATION",
-        "cause": "MISSING_OBSERVATION"
+        "statut": "COMPARABLE"
       }
     },
     {
@@ -131,24 +134,24 @@
       },
       "delai_avant_decision_officielle": "INCONNU",
       "comparabilite": {
-        "statut": "SANS_OBSERVATION",
-        "cause": "MISSING_OBSERVATION"
+        "statut": "COMPARABLE"
       }
     },
     {
       "configuration_id": "grok-build-grok-4-6",
-      "decision": null,
+      "decision": "CANDIDATE_NOT_ACCEPTABLE",
       "numerateur": 0,
-      "denominateur_decidable": 0,
-      "taux": "NON_DEFINI",
+      "denominateur_decidable": 1,
+      "taux": "0/1",
       "latence_configuration": {
         "regle": "DISTRIBUTION_COMPLETE",
-        "distribution_ms": []
+        "distribution_ms": [
+          179590
+        ]
       },
       "delai_avant_decision_officielle": "INCONNU",
       "comparabilite": {
-        "statut": "SANS_OBSERVATION",
-        "cause": "MISSING_OBSERVATION"
+        "statut": "COMPARABLE"
       }
     },
     {
@@ -171,10 +174,10 @@
   ],
   "agregat": {
     "numerateur": 0,
-    "denominateur_decidable": 2,
-    "taux": "0/2",
-    "configurations_comparables": 2,
+    "denominateur_decidable": 6,
+    "taux": "0/6",
+    "configurations_comparables": 7,
     "configurations_retirees": 0,
-    "configurations_sans_observation": 5
+    "configurations_sans_observation": 0
   }
 }
