@@ -46,6 +46,12 @@ VERSION_VUE = "restitution-humaine-v1/vue/1"
 _RACINE_CAMPAGNE_V1 = Path("tasks/dev/pre-cadrage-entretien-client/campagne-v1")
 CHEMIN_ETAT = _RACINE_CAMPAGNE_V1 / "etat-v1.json"
 CHEMIN_PAGE = _RACINE_CAMPAGNE_V1 / "restitution-humaine-v1" / "index.html"
+CHEMIN_GUIDE_UTILISATION = (
+    _RACINE_CAMPAGNE_V1 / "guide-utilisation-v1" / "README.md"
+)
+# Renvoi hors ligne de la page vers le guide, relatif au répertoire de
+# index.html : la page ouverte localement atteint le guide sans réseau
+LIEN_GUIDE_UTILISATION = "../guide-utilisation-v1/README.md"
 CHEMIN_TABLE_METRIQUES = _RACINE_CAMPAGNE_V1 / "metriques-v1.json"
 
 # Registre officiel de campagne V1 : le panel vit dans ces fichiers, jamais dans le code.
@@ -18722,6 +18728,9 @@ def _rendre_page(racine: Path) -> bytes:
         "façon déterministe depuis les seules sources listées en pied de page. Chaque "
         "affirmation porte sa classe : fait établi, déduction raisonnée ou élément "
         "planifié à venir.</p>\n"
+        "<p>Parcours en six étapes, commandes exactes, autorisations, dépenses "
+        f'et quotas : <a href="{LIEN_GUIDE_UTILISATION}">guide '
+        "d'utilisation V1</a>.</p>\n"
         f"{corps}\n"
         "<footer><p>Sources exactes de cette vue :</p>"
         f"<ul>{provenance}</ul></footer>\n"

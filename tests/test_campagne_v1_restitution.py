@@ -855,5 +855,35 @@ class RetoursProprietairesTests(_ArbrePreuvesReelles):
         self.assertEqual(self._restituer(), premiere)
 
 
+class RenvoiGuideUtilisationTests(_ArbrePreuvesReelles):
+    """V1-XS-15 : la restitution renvoie vers le guide d'utilisation, par un
+    lien relatif utilisable hors ligne depuis la page ouverte localement."""
+
+    # Littéral indépendant : chemin relatif de index.html vers le guide
+    _LIEN = "../guide-utilisation-v1/README.md"
+
+    def test_page_porte_le_lien_relatif_vers_le_guide(self):
+        page = self._restituer()
+        self.assertEqual(page.count(f'href="{self._LIEN}"'), 1)
+
+    def test_lien_designe_un_fichier_present_dans_le_depot(self):
+        cible = (RACINE / M.CHEMIN_PAGE).parent / self._LIEN
+        self.assertTrue(cible.resolve().is_file(), cible)
+
+    def test_lien_ne_sort_pas_du_depot_et_reste_hors_ligne(self):
+        page = self._restituer()
+        depart = page.index(f'href="{self._LIEN}"')
+        contexte = page[depart - 200 : depart + 200]
+        self.assertNotIn("http://", contexte)
+        self.assertNotIn("https://", contexte)
+
+    def test_lien_survit_a_la_regeneration_et_a_la_verification(self):
+        premiere = self._restituer()
+        code, sortie = self._verifier()
+        self.assertEqual(code, 0, sortie)
+        self.assertEqual(self._restituer(), premiere)
+        self.assertIn(f'href="{self._LIEN}"', premiere)
+
+
 if __name__ == "__main__":
     unittest.main()
