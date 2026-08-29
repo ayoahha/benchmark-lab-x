@@ -83,6 +83,7 @@ Aucun appel de modèle, canari, collecte ou résultat comparatif n’est réalis
 3. Lire les [règles canoniques V0](docs/RULES.md) pour les invariants universels.
 4. Utiliser le [gabarit de carte](tasks/TEMPLATE.md) pour une nouvelle carte compatible avec l’évaluation hybride.
 5. Examiner le [paquet pré-cadrage](tasks/dev/pre-cadrage-entretien-client/registre-verite.md) sans le modifier : son approbation reste en attente et sera liée au SHA-256 de son manifeste.
+6. Suivre le [guide d’utilisation de la campagne V1](tasks/dev/pre-cadrage-entretien-client/campagne-v1/guide-utilisation-v1/README.md) pour le parcours en six étapes, ses commandes et leurs codes de sortie.
 
 L’ancien pipeline `pentagone-rotatif`, ses commandes et ses rapports ne constituent pas le démarrage du produit V0. Les anciens documents remplacés sont conservés dans l’[archive du socle antérieur](docs/archive/legacy-benchmark-v0-2026-08-14/README.md). L’ancien glossaire racine `CONTEXT.md` y est archivé byte-identiquement comme [`root-CONTEXT.md`](docs/archive/legacy-benchmark-v0-2026-08-14/root-CONTEXT.md) : il est historique, non normatif, et cède à PRD, ARD et RULES.
 
