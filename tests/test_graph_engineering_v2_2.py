@@ -110,9 +110,12 @@ class Fixture:
         target.write_text("PENDING\n", encoding="utf-8")
         sample = self.canonical / "tests/test_sample.py"
         sample.write_text(
-            "import unittest\n\nclass Sample(unittest.TestCase):\n"
+            "import os\nfrom pathlib import Path\nimport unittest\n\nclass Sample(unittest.TestCase):\n"
             "    def test_one(self): self.assertTrue(True)\n"
-            "    def test_two(self): self.assertEqual(1 + 1, 2)\n",
+            "    def test_two(self): self.assertEqual(1 + 1, 2)\n"
+            "    def test_v1_output_is_external(self):\n"
+            "        output = Path(os.environ['GRAPH_ENGINEERING_PILOT_V1_OUTPUT']).resolve()\n"
+            "        self.assertNotIn(Path.cwd().resolve(), [output, *output.parents])\n",
             encoding="utf-8",
         )
         (self.canonical / ".gitignore").write_text("runs/\n__pycache__/\n*.pyc\n", encoding="utf-8")
@@ -217,7 +220,7 @@ class GraphEngineeringV22Test(unittest.TestCase):
         self.assertEqual(prepared["state"], "GRAPH_CLOSED_PENDING_INDEPENDENT_EVALUATION")
         result = evaluator.evaluate(fixture.contract_path, session_roots=[fixture.sessions])
         self.assertEqual(result["verdict"], ge.VERDICT_READY)
-        self.assertEqual(result["tests_discovered"], {"repository": 2})
+        self.assertEqual(result["tests_discovered"], {"repository": 3})
         repeated = evaluator.evaluate(fixture.contract_path, session_roots=[fixture.sessions])
         self.assertTrue(repeated["reused_terminal_report"])
 
@@ -248,7 +251,7 @@ class GraphEngineeringV22Test(unittest.TestCase):
         )
         terminal = evaluator.evaluate(fixture.contract_path, session_roots=[fixture.sessions])
         self.assertEqual(terminal["verdict"], ge.VERDICT_READY)
-        self.assertEqual(terminal["tests_discovered"], {"repository": 2})
+        self.assertEqual(terminal["tests_discovered"], {"repository": 3})
         report = ge.read_object(fixture.run_dir / "pilot-report.json")
         self.assertTrue(report["evaluation_start_matches_agent_end"])
         self.assertEqual(report["git_effects"]["agent_commits"], 0)

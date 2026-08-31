@@ -172,6 +172,9 @@ def run_acceptance(
             "PYTHONPYCACHEPREFIX": str(Path(cache_directory) / "pycache"),
             "UV_CACHE_DIR": str(Path(cache_directory) / "uv"),
             "XDG_CACHE_HOME": str(Path(cache_directory) / "xdg"),
+            "GRAPH_ENGINEERING_PILOT_V1_OUTPUT": str(
+                Path(cache_directory) / "graph-engineering-pilot-v1"
+            ),
         })
         for command in contract["acceptance"]:
             started = perf_counter()
