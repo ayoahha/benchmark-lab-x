@@ -136,6 +136,10 @@ class Fixture:
 
                 session_id = "{SESSION_ID}"
                 model = sys.argv[sys.argv.index("--model") + 1]
+                print(json.dumps({{"type": "thread.started", "thread_id": session_id}}), flush=True)
+                waiting = os.environ.get("GE22_FAKE_WAIT") == "1" and "resume" not in sys.argv
+                if waiting:
+                    time.sleep(0.1)
                 root = Path(os.environ["GE22_FAKE_SESSION_ROOT"])
                 root.mkdir(parents=True, exist_ok=True)
                 path = root / f"rollout-2026-08-31T00-00-00-{{session_id}}.jsonl"
@@ -155,8 +159,7 @@ class Fixture:
                         stream.write(json.dumps(event, separators=(",", ":")) + "\\n")
                     stream.flush()
                     os.fsync(stream.fileno())
-                print(json.dumps({{"type": "thread.started", "thread_id": session_id}}), flush=True)
-                if os.environ.get("GE22_FAKE_WAIT") == "1" and "resume" not in sys.argv:
+                if waiting:
                     time.sleep(60)
                 Path("target.txt").write_text("READY\\n", encoding="utf-8")
                 print(json.dumps({{"type": "turn.completed", "usage": {{"input_tokens": 1, "output_tokens": 1}}}}), flush=True)
@@ -220,6 +223,10 @@ class GraphEngineeringV22Test(unittest.TestCase):
         result = fixture.complete_agent(interrupted=True)
         self.assertEqual(result["session_id"], SESSION_ID)
         self.assertEqual(result["adapter_process_invocations"], 2)
+        interruption = ge.read_object(
+            fixture.run_dir / "adapter/invocations/1-interrupted.json"
+        )
+        self.assertEqual(interruption["session_rollout"]["session_id"], SESSION_ID)
         manifest = ge.load_adapter_manifest(
             *self._contract(fixture),
         )

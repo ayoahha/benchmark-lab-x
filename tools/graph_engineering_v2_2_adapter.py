@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -175,6 +176,15 @@ def persist_session(contract: dict[str, Any], contract_sha256: str, session_id: 
     v1.write_new(path, expected)
 
 
+def stop_process(process: subprocess.Popen[bytes]) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
 def stream_agent(
     contract: dict[str, Any],
     contract_sha256: str,
@@ -184,6 +194,7 @@ def stream_agent(
     *,
     expected_session_id: str | None,
     interrupt_after_session: bool,
+    session_roots: list[Path] | None,
 ) -> tuple[int, str | None, Path, Path, bool]:
     directory = adapter_dir(contract)
     stdout_path = directory / f"stdout-{invocation}.jsonl"
@@ -235,16 +246,22 @@ def stream_agent(
                 observed_session_id = session_id
                 persist_session(contract, contract_sha256, session_id)
                 if interrupt_after_session:
-                    process.terminate()
+                    deadline = time.monotonic() + 10
+                    while True:
+                        try:
+                            observe_session(session_id, contract, roots=session_roots)
+                            break
+                        except ge.GraphHold as error:
+                            if process.poll() is not None or time.monotonic() >= deadline:
+                                stop_process(process)
+                                raise ge.GraphHold(
+                                    "session Codex non durable avant interruption"
+                                ) from error
+                            time.sleep(0.05)
+                    stop_process(process)
                     interrupted = True
                     break
-            if interrupted:
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-            else:
+            if not interrupted:
                 process.stdout.read()
                 process.wait()
             process.stdout.close()
@@ -320,12 +337,14 @@ def run_adapter(
             prompt,
             expected_session_id=session_id,
             interrupt_after_session=interrupt_after_session,
+            session_roots=session_roots,
         )
         if observed_session_id is None:
             raise ge.GraphHold("session_id agent non observé")
         after = ge.assert_repository_identity(contract, clean=False)
         validate_scope(contract, initial_before, after)
         if interrupted:
+            session = observe_session(observed_session_id, contract, roots=session_roots)
             interruption = {
                 "schema_version": f"{ge.SCHEMA}/adapter-interruption/v1",
                 "contract_sha256": contract_sha256,
@@ -333,6 +352,7 @@ def run_adapter(
                 "invocation": invocation,
                 "session_id": observed_session_id,
                 "process_returncode": returncode,
+                "session_rollout": session,
                 "worktree_state": after,
                 "interrupted_utc": ge.utc_now(),
             }
@@ -432,7 +452,14 @@ def validate_manifest_session(
         raise ge.GraphHold("commande agent divergente")
     if manifest["adapter_process_invocations"] == 2:
         interruption = adapter_dir(contract) / "invocations" / "1-interrupted.json"
-        if not interruption.is_file() or ge.read_object(interruption).get("session_id") != manifest["session_id"]:
+        if not interruption.is_file():
+            raise ge.GraphHold("reprise sans interruption de la même session")
+        receipt = ge.read_object(interruption)
+        if (
+            receipt.get("session_id") != manifest["session_id"]
+            or receipt.get("session_rollout", {}).get("session_id") != manifest["session_id"]
+            or receipt.get("session_rollout", {}).get("path") != observed["path"]
+        ):
             raise ge.GraphHold("reprise sans interruption de la même session")
     return observed
 
