@@ -11,7 +11,6 @@ Benchmark Lab-X aide à choisir un modèle pour une tâche précise à partir de
 - V0 et V1 sont historiques. Elles n'établissent ni gagnant, ni classement qualitatif, ni coût par résultat acceptable.
 - L'harmonisation documentaire est terminée. Une seule version du PRD, de l'ARD et des règles fait autorité.
 - La prochaine phase porte le nom `V2-alpha`.
-- Le Graph Engineering est encore en cours. Aucun découpage, développement ou benchmark V2-alpha ne démarre avant sa validation.
 
 ## Question produit
 

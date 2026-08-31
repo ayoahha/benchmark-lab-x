@@ -8,7 +8,7 @@ style_gate: pass
 
 Benchmark Lab-X aide à choisir un modèle pour une tâche précise à partir de preuves lisibles. Le verdict porte sur la configuration observée sous des conditions communes, jamais sur le nom du modèle seul.
 
-La prochaine phase s'appelle `V2-alpha`. Le Graph Engineering est en cours et n'est pas validé. Ne pas anticiper son architecture, son découpage, son backlog, ses campagnes ou son implémentation.
+La prochaine phase s'appelle `V2-alpha`. Son architecture, son découpage, son backlog, ses campagnes et son implémentation suivent les décisions explicites d'Ayo et les documents canoniques.
 
 ## Sources faisant autorité
 
@@ -45,7 +45,7 @@ Demander une autorisation explicite avant toute opération Git destructive, fusi
 
 GitHub Issues porte les tâches, dépendances, décisions et preuves. Le champ `Status` du [Project #5](https://github.com/users/ayoahha/projects/5) porte l'état de travail. Aucun backlog local ne le duplique.
 
-Ne pas créer ou redécouper les Issues V2-alpha avant validation du Graph Engineering et décision d'Ayo. Une Issue se ferme avec sa preuve de résultat ou une décision explicite de remplacement.
+Créer ou redécouper les Issues V2-alpha seulement après une décision explicite d'Ayo sur le découpage de livraison. Une Issue se ferme avec sa preuve de résultat ou une décision explicite de remplacement.
 
 ## Validation
 
@@ -69,4 +69,4 @@ S'arrêter dès que le résultat autorisé est prouvé. Si une information ou un
 
 ## Règles de revue
 
-Signaler comme bloquant toute nouvelle autorité documentaire concurrente, requalification de V0 ou V1, architecture Graph Engineering non validée, secret versionné ou contournement d'une preuve requise. Laisser le formatage automatique aux outils du dépôt.
+Signaler comme bloquant toute nouvelle autorité documentaire concurrente, requalification de V0 ou V1, architecture V2-alpha sans autorité, secret versionné ou contournement d'une preuve requise. Laisser le formatage automatique aux outils du dépôt.

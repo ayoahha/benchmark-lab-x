@@ -139,7 +139,7 @@ Le coût ne compense jamais une non-admissibilité. Ces six opérations internes
 
 **Artefacts V1 non normatifs.** Le générateur et la restitution de la campagne V1 restent inchangés sous leur identité d'origine. Ils sont non normatifs et sémantiquement incompatibles avec la spécification courante ; leurs anciennes références documentaires ne sont pas remappées et leur vocabulaire n'est pas repris.
 
-**Phase V2-alpha.** `V2-alpha` nomme la prochaine phase. Ce nom ne valide ni architecture, ni découpage, ni panel, ni campagne, ni exécution ; ces décisions attendent la fin du Graph Engineering et une autorité explicite.
+**Phase V2-alpha.** `V2-alpha` nomme la prochaine phase. Ce nom ne valide ni architecture, ni découpage, ni panel, ni campagne, ni exécution ; ces décisions exigent une autorité explicite.
 
 ## 13. Arrêt
 
