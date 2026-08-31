@@ -2,8 +2,9 @@
 style_gate: pass
 date: 2026-08-30
 updated: 2026-08-31
-status: PASS_V1_CORRIGE_LOCAL
+status: PASS_V2_CORRIGE_LOCAL
 git_base: 81c217e0a585e89c0151090d6cef9581b8a2c741
+v2_git_base: 73ec72f4a3a908c8dd0494ca901c68469b103f51
 ---
 
 # Loop et Graph Engineering appliqués aux boucles agentiques d’Ayo
@@ -344,6 +345,20 @@ Le premier candidat reste une seule fixture Benchmark Lab‑X défectueuse et r�
 
 `[DÉDUCTION]` Ces relectures ont conduit aux trois corrections Oracle. Les contre-exécutions post-correction les valident localement ; elles n’autorisent pas V2.
 
+### Extension V2 agentique et revue Grok 4.6
+
+`[DÉCISION D’AYO]` Ayo a ensuite autorisé le V2 dans un worktree et une branche dédiés. La route A vérifie la source courante. La route B copie `tools/choisir_provider.py`, remplace une ligne correcte de `budget_de` par un défaut, puis confie uniquement cette copie à Codex. L’oracle comporte trois assertions et aucune écriture externe.
+
+`[OBSERVATION LOCALE]` Deux sessions Codex ont réellement utilisé `gpt-5.6-sol` : `01a05729-b014-7d00-abe5-8a74aeda3e2f`, puis `01a05730-21e4-7101-bc8c-1e407ceda0ab`. Elles ont toutes deux rendu l’oracle vert avec des correctifs octet pour octet différents. Elles totalisent 177,174 secondes, 366 664 tokens d’entrée dont 294 400 en cache, 3 399 tokens de sortie et 370 063 tokens au total. Le coût monétaire Codex n’est pas exposé et reste `INCONNU`. Une tentative de configuration a été refusée avant génération et n’est pas comptée comme appel candidat.
+
+`[OBSERVATION LOCALE]` La première tentative a été interrompue avant publication du reçu B. Le terminal a rendu `HOLD`. La reprise a conservé exactement les octets et dates de D/S, commencé sur B et n’a rejoué aucun reçu fermé. La seconde tentative a fermé B et J, puis le terminal a rendu `PASS_PILOTE_AGENTIQUE_LOCAL`.
+
+`[TEXTE INTÉGRAL]` Grok Build a annoncé `grok-4.6` comme modèle sélectionné ; la sortie d’usage identifie `grok-4.6-build`. La session `01a05738-943a-7c43-9c4b-6ff1a1bd01db` a rendu `CORRIGER_V2`. Elle a observé que le reçu terminal B comptait un appel alors que deux tentatives avaient réellement été consommées. La revue a utilisé 556 144 tokens au total et a exposé un coût de 0,0987734 USD.
+
+`[OBSERVATION LOCALE]` Une seule passe corrective a ajouté un journal B immuable et chaîné. La reprise supprime seulement le workspace et le temporaire non publié ; elle conserve les tentatives. Le reçu B terminal porte désormais `attempt=2` et `candidate_calls=2`. Le vérificateur refuse un journal absent, discontinu, surnuméraire ou non aligné sur la dernière tentative. Les six tests V1 et V2 passent. Une campagne fraîche rejouant les deux sorties agentiques observées rend A `PASS`, B interrompu `HOLD`, puis B repris `PASS`, sans nouvel appel modèle.
+
+`[DÉDUCTION]` Le V2 prouve une charge agentique réversible, l’interruption, la reprise et la provenance cumulée de deux tentatives dans ce périmètre. Il ne prouve pas encore une boucle de plusieurs heures, une panne brutale, un effet externe, le coût monétaire Codex ou le multi-écrivain.
+
 ### Différence avec l’orchestration directe U‑025
 
 `[TEXTE INTÉGRAL]` Le contrôle direct et `B` obtiennent la même racine et la même conclusion U‑025. L’exécution directe ne porte ni reçu de dépendance, ni bifurcation, ni jointure, ni terminal extérieur. Le pilote ajoute ces preuves, l’arrêt/reprise externe et la matrice de fausses fins.
@@ -360,17 +375,17 @@ Le premier candidat reste une seule fixture Benchmark Lab‑X défectueuse et r�
 
 ## 9. Verdict
 
-**Verdict : V1 corrigé localement. Les trois corrections Oracle et leurs contre-exécutions sont vertes.**
+**Verdict : V1 et V2 corrigés localement. Les contre-exécutions sont vertes.**
 
 `[TEXTE INTÉGRAL]` Le V1 vérifie la dépendance, la bifurcation, la jointure, l’évaluation avant fermeture, la publication exclusive, l’interruption pendant fermeture, la reprise depuis `D/S` et le refus des 13 fausses fins. `PASS_PILOTE_LOCAL` reste le verdict terminal réduit d’une trace locale et mono-écrivain validée par `V`. Il ne vaut ni preuve de panne électrique, ni sûreté multi-écrivain, ni acceptation globale du Graph Engineering.
 
-`[DÉDUCTION]` Le prochain choix porte sur une première tranche réellement agentique dans Benchmark Lab‑X. Le V1 n’autorise pas cette tranche de lui-même.
+`[DÉDUCTION]` Le prochain choix porte sur un pilote long et borné dans Benchmark Lab‑X. Le V2 permet de le proposer, mais ne l’autorise pas de lui-même.
 
-**État d’autorité : HOLD sur V2 et sur la généralisation globale.** Aucune mémoire, directive, skill, hook, configuration Codex ou Claude, ni plateforme n’a été modifiée. Aucun commit, push, merge ou publication n’a été effectué.
+**État d’autorité : PASS local sur V2 corrigé ; HOLD sur le pilote long et sur la généralisation globale.** Aucune mémoire, directive, skill, hook, configuration Codex ou Claude, ni plateforme n’a été modifiée. Aucun push, merge ou publication n’a été effectué.
 
 ## 10. Hypothèses globales conservées, sans application
 
-La généralisation reste suspendue. Les éléments suivants restent des hypothèses à réexaminer seulement après un pilote agentique concluant :
+La généralisation reste suspendue. Les éléments suivants restent des hypothèses à réexaminer seulement après un pilote long concluant :
 
 1. `[DÉDUCTION]` Définir un reçu de nœud commun : identité, tentative, parents, état, sortie hachée, propriétaire, contrat d’évaluation, provenance, temps, coût et intervention humaine.
 2. `[DÉDUCTION]` Exiger un vérificateur terminal extérieur pour toute exécution qui comporte une bifurcation ou une jointure. Le runner ne doit jamais se déclarer vert lui-même.
@@ -386,5 +401,7 @@ La généralisation reste suspendue. Les éléments suivants restent des hypoth�
 `[TEXTE INTÉGRAL]` Une page canonique autonome a été préparée dans `docs/experiments/graph-engineering-canonical-wiki.md`. Elle contient les définitions, le glossaire AOV, les primitives `/goal` et `/loop`, la gestion d’erreurs, les guardrails, les boucles de plus de 24 heures, les décisions Herdr/Paperclip et les limites du pilote.
 
 `[TEXTE INTÉGRAL]` L’adaptateur LLM Wiki a accepté localement la session `session_19202ad3c25be4e4`. L’opération suivante a été refusée avant capture avec `state=REJECT` et `LLM_WIKI_AGENT_UNKNOWN_VERB`. La procédure impose alors l’arrêt sans seconde tentative modifiée. Aucun contenu n’a donc été capturé ou proposé dans le Wiki pendant cette tranche.
+
+`[OBSERVATION LOCALE]` Une nouvelle invocation locale, le 31 août 2026, a été refusée avant capture avec `LLM_WIKI_AGENT_INVALID_ARGV`. La procédure a de nouveau imposé l’arrêt immédiat, sans accès direct ni tentative reformulée.
 
 **État : page prête localement, ingestion LLM Wiki en HOLD.**

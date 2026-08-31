@@ -123,7 +123,7 @@ Conclusion verte alors qu’un nœud requis manque, qu’une branche incorrecte 
 
 Le pilote Benchmark Lab‑X V1 corrigé utilise un graphe codé en dur, Python standard, un reçu JSON immuable par nœud et un vérificateur terminal séparé. Chaque évaluateur s’exécute avant la fermeture de son reçu. La publication exclusive passe par un temporaire synchronisé, puis le répertoire est synchronisé. Aucun moteur générique n’est nécessaire.
 
-Le prochain incrément agentique réutilise ce harnais dans un nouveau worktree. Une seule branche produit un patch candidat isolé ; la jointure l’évalue dans une copie jetable. Les commandes et les preuves du V1 restent dans son rapport.
+Le V2 agentique réutilise ce harnais dans un worktree distinct. La route A vérifie la source courante sans modèle. La route B injecte un défaut d’une ligne dans une copie isolée, laisse Codex produire le correctif, puis exécute un oracle de trois assertions. Chaque tentative évaluée est écrite une seule fois dans `nodes/B/attempts/`. Une reprise conserve ce journal et les reçus fermés, reconstruit seulement le workspace non fermé, puis aligne le reçu B terminal sur le nombre exact de tentatives.
 
 Un DSL, une interface visuelle, une base de données, un moteur distribué, le multi-écrivain ou une nouvelle plateforme restent hors périmètre tant qu’un essai ne démontre pas leur nécessité.
 
@@ -199,11 +199,17 @@ Conserver : état durable, postconditions, terminal borné, erreurs classées et
 
 La preuve reste locale et déterministe. Elle couvre une interruption contrôlée pendant la fermeture de `B`, sans arrêt brutal du processus ni panne électrique. Elle ne démontre ni exécution exactement une fois, ni effet externe, ni transfert à tous les projets.
 
+`[OBSERVATION LOCALE]` Le V2 a ensuite exécuté deux sessions Codex réellement observées sous `gpt-5.6-sol`. Les deux correctifs ont satisfait les trois assertions, sans être identiques octet pour octet. La première tentative a été interrompue avant publication du reçu B ; le terminal est resté en `HOLD`. Après reprise, les octets et dates de D/S sont restés inchangés et B a été le premier nœud repris.
+
+`[OBSERVATION LOCALE]` Grok Build a sélectionné explicitement `grok-4.6` ; la trace de revue rapporte `grok-4.6-build`. Son verdict initial `CORRIGER_V2` a identifié une perte de provenance : le reçu terminal ne comptait que la seconde tentative. Une seule passe corrective a ajouté le journal immuable des tentatives, aligné `attempt` et `candidate_calls`, puis fait refuser au terminal tout journal absent, discontinu ou non aligné. Six tests V1 et V2 passent. Une campagne de correction fraîche rend A `PASS`, B interrompu `HOLD`, puis B repris `PASS` avec deux tentatives durables.
+
+`[DÉDUCTION]` Ce résultat autorise à proposer un pilote long dans Benchmark Lab‑X. Il ne prouve ni une durée de plusieurs heures, ni une panne réelle, ni un coût monétaire Codex, ni la sûreté multi-écrivain. Il n’autorise aucune généralisation globale.
+
 ## Seuil de complexification
 
 Ajouter un composant seulement lorsqu’un essai produit un problème que les primitives natives et les reçus ne peuvent pas résoudre : perte d’état, double effet, conflit d’écriture, absence de reprise ou observabilité insuffisante.
 
-`[DÉCISION D’AYO]` Le prochain essai autorisé ajoute une seule charge agentique réversible dans Benchmark Lab‑X. Aucune mutation globale ne découle automatiquement de cette page.
+`[DÉDUCTION]` Le prochain essai proposé est une boucle longue bornée dans Benchmark Lab‑X, sous autorité distincte d’Ayo. Aucune mutation globale ne découle automatiquement de cette page.
 
 ## Sources principales
 
