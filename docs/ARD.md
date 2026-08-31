@@ -201,4 +201,4 @@ V0 et V1 restent dans leurs questions, panels, schémas et verdicts d'origine. U
 
 Les abonnements, produits agentiques, autres harnais dépouillés, comparaisons de harnais, OrbStack et `perso-hermes` n'appartiennent pas à cette architecture active. Ils ne reçoivent ni objet, ni flux, ni interface anticipée. Leur étude dépend d'un besoin démontré dans une itération antérieure, conformément aux [règles KISS](RULES.md#11-kiss-et-évolution).
 
-Le nom `V2-alpha` désigne la prochaine phase sans canoniser de plateforme, de conteneur, de service, d'architecture ou de découpage. Ces choix attendent la validation du Graph Engineering.
+Le nom `V2-alpha` désigne la prochaine phase sans canoniser de plateforme, de conteneur, de service, d'architecture ou de découpage. Ces choix relèvent de décisions distinctes.

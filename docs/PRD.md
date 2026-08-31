@@ -18,7 +18,7 @@ L'[ARD](ARD.md) décrit le modèle logique. Les [règles](RULES.md) portent les 
 
 **FAIT ÉTABLI** : le besoin originel est de permettre à la communauté Lab X de tester elle-même des solutions d'IA sur des tâches utiles, avec des preuves lisibles plutôt qu'un palmarès repris d'un tiers.
 
-**DÉCISION PROPRIÉTAIRE** : le produit met maintenant le modèle en avant. Pour une tâche et un contrat fixés avant l'exécution, il doit indiquer quelles configurations modèle plus accès direct ou API accomplissent le travail sous le même Pi, puis rendre lisibles le coût et les bénéfices prévus parmi les seules configurations admissibles.
+**DÉCISION PROPRIÉTAIRE** : le produit met maintenant le modèle en avant. Pour une tâche et un contrat fixés avant l'exécution, il doit indiquer quelles configurations de modèle, avec leur mode d'interrogation du LLM (accès OAuth ou API directe), accomplissent le travail sous le même harnais Pi, puis rendre lisibles le coût et les bénéfices prévus parmi les seules configurations admissibles.
 
 Le nom du modèle ne suffit toutefois pas comme preuve. Le modèle est l'identifiant principal présenté, mais le verdict s'applique à sa configuration observée sous les conditions de test communes déclarées. Aucun effet que le fournisseur, l'effort, Pi ou ses réglages peuvent influencer n'est attribué au seul modèle.
 
@@ -30,24 +30,24 @@ Le nom du modèle ne suffit toutefois pas comme preuve. Le modèle est l'identif
 
 Le produit a vocation à devenir public et accessible à tous après cette phase initiale. Cette vocation cible ne constitue ni une publication actuelle, ni une autorisation de merge, de publication ou d'ouverture d'accès.
 
-**HYPOTHÈSE NON VÉRIFIÉE** : des membres de Lab X contribueront des besoins ou reliront des sorties si le protocole reste compréhensible et le coût d'entrée raisonnable. Une observation d'usage est nécessaire avant d'en faire une promesse.
+**HYPOTHÈSE NON VÉRIFIÉE** : des membres de Lab X contribueront aux définitions des besoins ou reliront des sorties si le protocole reste compréhensible et le coût d'entrée raisonnable. Une observation d'usage est nécessaire avant d'en faire une promesse.
 
 ### 3.2 Jobs-to-be-done
 
-| Situation | Job-to-be-done | Résultat utile |
-|---|---|---|
-| Je dois choisir un modèle pour une tâche précise | savoir quelles configurations accomplissent le travail sous le même Pi | verdicts bornés par un contrat explicite |
-| Plusieurs configurations satisfont le contrat | identifier la moins chère lorsque tous leurs coûts sont connus et comparables | comparaison économique bornée ou conclusion `INCOMPLETE` |
-| Une option admissible plus chère existe | comprendre ce qu'elle apporte sur les critères prévus | bénéfices traçables, sans score global |
-| La preuve ne suffit pas | éviter une recommandation artificielle | verdict `INDETERMINE` motivé |
-| Je veux vérifier une conclusion | retrouver tâche, contrat, configuration, sortie et preuves | chaîne d'attribution bornée |
-| Je participe à la phase initiale Lab X | éprouver le produit et contribuer à partir de tâches et preuves concrètes | retours situés sans prétendre à une validation publique |
+| Situation                                        | Job-to-be-done                                                                | Résultat utile                                           |
+| ------------------------------------------------ | ----------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Je dois choisir un modèle pour une tâche précise | savoir quelles configurations accomplissent le travail sous le même Pi        | verdicts bornés par un contrat explicite                 |
+| Plusieurs configurations satisfont le contrat    | identifier la moins chère lorsque tous leurs coûts sont connus et comparables | comparaison économique bornée ou conclusion `INCOMPLETE` |
+| Une option admissible plus chère existe          | comprendre ce qu'elle apporte sur les critères prévus                         | bénéfices traçables, sans score global                   |
+| La preuve ne suffit pas                          | éviter une recommandation artificielle                                        | verdict `INDETERMINE` motivé                             |
+| Je veux vérifier une conclusion                  | retrouver tâche, contrat, configuration, sortie et preuves                    | chaîne d'attribution bornée                              |
+| Je participe à la phase initiale Lab X           | éprouver le produit et contribuer à partir de tâches et preuves concrètes     | retours situés sans prétendre à une validation publique  |
 
-Le [demandeur-lecteur](../CONTEXT.md#demandeur-lecteur) exprime son besoin. Il n'a pas à inventer un seuil, une métrique ou une méthode de jugement : le [responsable de campagne](../CONTEXT.md#responsable-de-campagne) prépare et approuve le contrat avant toute exécution. Ces deux rôles génériques peuvent être tenus par la même personne dans le premier prototype ; aucun rôle n'est lié à une personne ou à un pseudonyme.
+Le [demandeur-lecteur](../CONTEXT.md#demandeur-lecteur) exprime son besoin. Il n'a pas à inventer un seuil, une métrique ou une méthode de jugement : le [responsable de campagne](../CONTEXT.md#responsable-de-campagne) prépare et approuve le contrat avant toute exécution. Ces deux rôles génériques peuvent être tenus par la même personne dans le premier prototype ; aucun rôle n'est lié à une personne ou à une entité.
 
 ## 4. Question active
 
-> Pour une tâche précise et un contrat de réussite fixé avant l'exécution, quelles configurations associant un modèle à un accès direct ou API accomplissent la tâche sous le même Pi ? Lorsque leurs coûts sont connus et comparables, laquelle ou lesquelles coûtent le moins, et quels bénéfices prévus une option plus chère apporte-t-elle ?
+> Pour une tâche précise et un contrat de réussite fixé avant l'exécution, quelles configurations associant un modèle à un accès direct ou API accomplissent la tâche sous le même harnais Pi ? Lorsque leurs coûts sont connus et comparables, laquelle ou lesquelles coûtent le moins, et quels bénéfices prévus une option plus chère apporte-t-elle ?
 
 Cette question remplace les formulations générales centrées sur « qualité et stabilité » et les deux profils actifs. Qualité ou stabilité ne deviennent des critères que si une tâche les définit de manière testable avant l'exécution, dans la limite du contrat minimal.
 
@@ -144,7 +144,7 @@ La variante A de maquette reste une direction réversible de présentation, pas 
 ## 11. Hors périmètre documentaire
 
 - conception d'une plateforme
-- architecture et découpage de V2-alpha avant validation du Graph Engineering
+- décisions d'architecture et de découpage de V2-alpha
 - panel définitif
 - appels candidats, retries, achats ou campagnes
 - classement rétrospectif de V0 ou V1
