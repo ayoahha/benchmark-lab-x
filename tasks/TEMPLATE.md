@@ -2,247 +2,223 @@
 style_gate: pass
 ---
 
-# Carte de workflow : <nom lisible>
+# Carte de tâche : `<nom lisible>`
 
-Ce gabarit décrit une décision réelle et le contrat hybride qui permet d’évaluer une sortie. Supprimer les aides entre chevrons avant approbation. Ne fixer aucun nombre, seuil ou délai sans en citer l’autorité ou la justification mesurée.
+Statut de campagne : `<porté par l'Issue et le champ Status du Project>`
+
+Ce gabarit prépare le contrat minimal d'une tâche du premier prototype. Une carte approuvée n'autorise ni acquisition, ni campagne, ni publication.
+
+Toute extension suit la [règle KISS](../docs/specification/RULES.md#11-kiss-et-évolution).
 
 ## 1. Identité et autorité
 
 | Champ | Valeur |
 |---|---|
-| Identifiant | `<slug>` |
-| Version de carte (`card_version`) | `<version>` |
-| `qualification_status` | `brouillon` / `en attente d'approbation` / `qualifiée` / `retirée` |
-| `execution_status` | `non exécutée` / `exécutée` |
-| Propriétaire de la décision | `<rôle humain>` |
-| Date de référence | `<date>` |
-| Empreinte du registre | `<sha256>` |
-| Approbation humaine liée à l’empreinte | `<référence ou absente>` |
+| Identifiant de la carte | `<slug non canonique>` |
+| Tâche | `<travail précis>` |
+| Demandeur-lecteur | `<besoin exprimé par ce rôle>` |
+| Responsable de campagne | `<rôle tenu, sans identité codée>` |
+| Date de préparation | `<date>` |
+| Approbation du responsable de campagne avant exécution | `EN_ATTENTE` / `<preuve et date>` |
+| Appels candidats autorisés | `aucun` / `<autorité exacte>` |
+| Retries autorisés | `aucun` / `<autorité exacte>` |
+| Dépense maximale | `zéro` / `<montant, devise et périmètre>` |
 
-Une consolidation par plusieurs humains ou LLM produit un brouillon. Seule l’approbation humaine liée aux empreintes qualifie la carte.
+Une valeur `EN_ATTENTE` interdit l'exécution. Le demandeur-lecteur fournit son besoin ; le responsable de campagne prépare et approuve le contrat. Les deux rôles peuvent être tenus par la même personne.
 
-## 2. Besoin et décision réelle
+## 2. Besoin et résultat attendu
 
-### Workflow exact
+### Situation
 
-<Qui accomplit quel travail, dans quel contexte réel ?>
+`<acteur, contexte et besoin>`
+
+### Résultat attendu
+
+`<artefact ou état précis qui sert le besoin>`
 
 ### Décision éclairée
 
-<Quel choix concret la comparaison doit-elle permettre ?>
-
-### Sortie attendue
-
-<Quel artefact utilisable doit être produit ?>
-
-### Conséquences d’une sortie inacceptable
-
-<Risques, reprises ou mauvaises décisions possibles>
+`<choix entre des modèles sur cette tâche précise>`
 
 ### Conclusion permise
 
-<Formulation exacte, limitée à ce workflow, au panel, à la date et aux contraintes>
+`<conclusion bornée à la tâche, au contrat, aux configurations, aux conditions de test communes et à la date>`
 
-### Hors périmètre
+### Conclusions interdites
 
-<Ce que cette carte ne mesure pas et les généralisations interdites>
+- meilleur modèle absolu
+- classement universel
+- podium général ou graphique trompeur
+- effet causal du modèle isolé, ou effet attribué au seul modèle alors que le fournisseur, l'effort, Pi ou ses réglages peuvent l'influencer
+- conclusion hors de la tâche ou du contrat
+- requalification de V0 ou V1
 
-## 3. Stimulus candidat-visible
+## 3. Entrées et sortie brute
 
-### Consigne exacte
+### Stimulus
 
-<Texte exact ou chemin versionné>
+`<texte exact ou chemin versionné>`
 
-### Entrées autorisées
+### Entrées et outils autorisés
 
-| Chemin ou objet | Rôle | Empreinte | Visible par le candidat |
-|---|---|---|:---:|
-| `<entrée>` | `<rôle>` | `<sha256>` | oui / non |
+| Élément | Rôle | Visible au candidat | Identité ou empreinte |
+|---|---|:---:|---|
+| `<entrée ou outil>` | `<rôle>` | oui / non | `<version, SHA-256 ou INCONNU>` |
 
-Tout objet absent de cette liste est refusé. Les actifs juge et les témoins restent invisibles au candidat.
+Tout élément non listé est indisponible. Aucun secret ou chemin externe n'est autorisé sans décision explicite.
 
-### Interface de sortie
+### Sortie brute attendue
 
-<Format, encodage, fichiers attendus, structure et contraintes entièrement décidables>
+`<artefact, encodage et emplacement attendus>`
 
-### Paramètres et ressources
+La sortie brute est conservée avant contrôle ou jugement. Aucun post-traitement silencieux n'est permis.
 
-| Élément | Valeur | Autorité ou justification | Conséquence observable |
+## 4. Contrat de réussite
+
+### Obligations
+
+| ID | Obligation | Preuve attendue |
+|---|---|---|
+| `O1` | `<condition obligatoire>` | `<observation prévue avant exécution>` |
+
+### Erreurs éliminatoires
+
+| ID | Erreur | Preuve | Effet |
 |---|---|---|---|
-| `<paramètre ou ressource>` | `<valeur>` | `<source>` | `<effet>` |
+| `E1` | `<défaut précis>` | `<observation>` | interdit `SATISFAIT` |
 
-Supprimer les lignes sans effet sur la mesure. Ne pas ajouter de valeur par défaut sans autorité.
+### Critères secondaires
 
-## 4. Politique de données et sécurité
+Conserver au maximum deux lignes. Un critère est défini avant l'exécution et sert seulement à expliquer le bénéfice d'une configuration déjà `SATISFAIT`. Sans unité et sens favorable fixés ici, il reste descriptif et ne départage pas.
 
-| Exigence | Preuve ou règle |
-|---|---|
-| Données synthétiques ou publiques réutilisables | `<provenance>` |
-| Donnée client réelle | `aucune` |
-| Secret | `aucun` |
-| Connecteur de production | `aucun` |
-| Action externe | `interdite` |
-| Outils et permissions | `<aucun ou manifeste minimal>` |
-| Réseau | `<interdit ou destination explicitement autorisée>` |
+| ID | Critère | Question observable | Unité | Sens favorable | Preuve |
+|---|---|---|---|---|---|
+| `S1` | `<nom>` | `<question>` | `<unité ou descriptif>` | `<plus haut / plus bas / oui>` | `<observation>` |
+| `S2` | `<nom ou supprimer la ligne>` | `<question>` | `<unité ou descriptif>` | `<plus haut / plus bas / oui>` | `<observation>` |
 
-## 5. Contrat de sortie acceptable
+### Verdicts
 
-Une sortie est officiellement acceptable si, et seulement si, elle obtient :
+- `SATISFAIT` : résultat attendu et obligations prouvés, aucune erreur éliminatoire
+- `NE SATISFAIT PAS` : erreur éliminatoire ou obligation non remplie établie
+- `INDETERMINE` : preuve insuffisante ou contradictoire
 
-`PASS automatique + ACCEPTABLE humain`
+Aucun autre verdict, score global ou seuil ajouté après résultat n'est permis.
 
-### 5.1 Contrôles automatiques
+## 5. Configurations modèle plus accès direct ou API
 
-Chaque ligne porte sur une propriété entièrement décidable par code.
+| Champ | Configuration A | Configuration B |
+|---|---|---|
+| Fournisseur | `<valeur>` | `<valeur>` |
+| Modèle | `<valeur>` | `<valeur>` |
+| Accès direct ou API | `<valeur>` | `<valeur>` |
+| Route demandée | `<valeur ou INCONNU>` | `<valeur ou INCONNU>` |
+| Route observée | `<valeur ou INCONNU>` | `<valeur ou INCONNU>` |
+| Paramètres | `<valeurs>` | `<valeurs>` |
+| Effort de raisonnement | `<valeur effective ou INCONNU>` | `<valeur effective ou INCONNU>` |
+| Identité observée requise | `<preuve>` | `<preuve>` |
 
-| ID | Propriété observable | Méthode déterministe | Preuve attendue | Verdict d’échec |
-|---|---|---|---|---|
-| `<AUTO-ID>` | `<propriété unique>` | `<exécution, parsing, comptage, contrainte ou oracle>` | `<reçu ou artefact>` | `FAIL` |
+Ajouter seulement les colonnes nécessaires au panel autorisé. Les conditions de test communes ne sont pas répétées ici : elles vivent en section 6. Les abonnements et produits agentiques ne sont pas des configurations actives de ce gabarit.
 
-Une propriété qui exige une interprétation humaine est retirée de ce tableau et placée dans la rubrique humaine.
+## 6. Conditions de test communes
 
-### 5.2 Rubrique humaine aveugle
+Déclarées une fois, avant le premier candidat, et référencées par toutes les configurations de la section 5.
 
-| Dimension | Question de jugement | Signes d’acceptabilité | Motifs de refus | Limites |
-|---|---|---|---|---|
-| `<dimension>` | `<question>` | `<signes observables>` | `<défauts matériels>` | `<ce que la rubrique ne tranche pas>` |
+| Champ | Valeur commune figée | Statut |
+|---|---|---|
+| Paquet ou fork Pi | `<valeur>` | `<déclarée / configurée / active / observée>` |
+| Version exécutée | `<valeur ou INCONNU>` | `<statut>` |
+| Paquets ou extensions | `<identifiants exacts ou aucun>` | `<statut>` |
+| Outils | `<liste ou aucun>` | `<statut>` |
+| Skills | `<état>` | `<statut>` |
+| Contexte | `<identité ou empreinte>` | `<statut>` |
+| Réglages par défaut de Pi | `<fournisseur, modèle et effort par défaut>` | `<statut>` |
+| Environnement | `<valeur>` | `<statut>` |
+| Date de gel | `<date>` | observée |
 
-Verdicts autorisés :
+Tout changement d'un de ces champs ouvre une nouvelle comparaison. Pi est obligatoire ; la carte ne propose ni harnais alternatif, ni comparaison de harnais.
 
-- `ACCEPTABLE` : la sortie satisfait la rubrique pour l’usage déclaré
-- `NOT_ACCEPTABLE` : un défaut matériel empêche cet usage
-- `UNABLE_TO_JUDGE` : les éléments disponibles ne permettent pas un jugement fiable
+## 7. Acquisition et incidents
 
-La présentation masque l’identité de la configuration, son coût et toute métadonnée susceptible de la révéler. La rubrique et l’ordre de présentation sont gelés avant la revue officielle.
-
-### 5.3 Juge fantôme
+### Base de coût fixée avant exécution
 
 | Champ | Valeur |
 |---|---|
-| Activé | oui / non |
-| Moment | après gel du verdict humain |
-| Effet officiel | aucun |
-| Identité et paramètres | `<si activé>` |
+| Périmètre d'attribution | `<coûts inclus et exclus>` |
+| Tentatives comptées | `<première tentative, retries autorisés, incidents>` |
+| Unité commune | `<devise et unité>` |
+| Règle de conversion | `<source, date et formule, ou SANS OBJET>` |
 
-## 6. Témoins et qualification de l’instrument
-
-| Contrôle ou dimension | Témoin | Attente | Producteur et provenance | Empreinte |
-|---|---|---|---|---|
-| `<ID>` | `<positif, négatif ou cas frontière>` | `<résultat attendu>` | `<source indépendante>` | `<sha256>` |
-
-### Indépendance
-
-<Ce que le producteur des témoins pouvait voir et ce qui lui était interdit>
-
-### Limites de qualification
-
-<Ce que les témoins prouvent et ce qu’ils ne prouvent pas>
-
-## 7. Plan de mesure
-
-| Champ | Valeur et justification |
+| Champ | Valeur |
 |---|---|
-| Unité d’acquisition | `<définition>` |
-| Type de variation | `<aucune, répétition, instances distinctes ou autre>` |
-| Nombre d’acquisitions | `<valeur décidée ou à décider, avec autorité>` |
-| Ordre et aveuglement | `<règle>` |
-| Arrêt anticipé | `<condition autorisée ou aucune>` |
-| Fraîcheur requise | `<condition et justification>` |
-| Agrégation | `<règle préenregistrée>` |
-| Revendication permise | `<portée exacte>` |
+| Une acquisition par configuration suffit-elle à la conclusion permise ? | `<oui justifié / non et besoin observé>` |
+| Politique de retry | `<règle autorisée ou aucun>` |
+| Règle d'arrêt | `<condition>` |
+| Source du coût observé | `<reçu, ou INCONNU>` |
 
-Ce gabarit n’impose aucun plan de répétition. Le plan retenu doit suffire à la décision visée sans revendiquer plus que ses preuves.
-
-## 8. Panel et configurations
-
-### Critères d’inclusion
-
-<Compatibilité avec le besoin, disponibilité des preuves, fraîcheur et contraintes>
-
-### Critères d’exclusion
-
-<Motifs vérifiables et absences connues>
-
-### Configurations fixes
-
-| Alias aveugle | Modèle et révision | Fournisseur et route attendus | Paramètres | Politique de données | Adaptateur et harnais |
-|---|---|---|---|---|---|
-| `<alias>` | `<identité>` | `<identité>` | `<valeurs>` | `<politique>` | `<versions>` |
-
-Route, fournisseur et paramètres servis doivent être observables pour un résultat officiel.
-
-### Politiques de routage
-
-| Alias aveugle | Politique | Contraintes | Observations requises | Condition d’admission |
-|---|---|---|---|---|
-| `<alias>` | `<par exemple OpenRouter Auto Router>` | `<bornes déclarées>` | `<modèle, fournisseur, route, paramètres>` | `<diagnostic et canari>` |
-
-Une politique de routage n’est jamais présentée comme un modèle fixe.
-
-## 9. Provenance et preuves d’acquisition
-
-| Objet | Attendu | Observé | Source | Empreinte ou reçu |
-|---|---|---|---|---|
-| Carte et stimulus | `<version>` | `<version>` | `<chemin>` | `<sha256>` |
-| Configuration | `<identité>` | `<identité servie>` | `<métadonnées>` | `<reçu>` |
-| Paramètres | `<valeurs>` | `<valeurs observables>` | `<métadonnées>` | `<reçu>` |
-| Prix | `<unité datée>` | `<coût>` | `<source officielle>` | `<reçu>` |
-| Latence | `<frontières>` | `<mesure>` | `<horloge>` | `<reçu>` |
-
-Une observation absente reste absente. Elle n’est pas déduite d’un comportement attendu.
-
-## 10. Incidents et couverture
-
-| Classe | Définition pour cette carte | Effet sur la décision |
+| Classe | Preuve | Effet |
 |---|---|---|
-| `PROVIDER_FAILURE` | `<panne de la route appartenant à la configuration>` | échec bout en bout, sans verdict de qualité |
-| `HARNESS_ERROR` | `<défaut empêchant une mesure fiable>` | non pénalisant, couverture manquante visible |
-| `<autre classe versionnée>` | `<définition>` | `<effet>` |
+| Sortie obtenue | artefact relié au reçu | appliquer le contrat |
+| Incident fournisseur | preuve attribuable | publier séparément |
+| `HARNESS_ERROR` | défaut du dispositif | réduire la couverture, sans produire `NE SATISFAIT PAS` |
+| Preuve manquante | champ requis absent | `INDETERMINE` ou `INCONNU` |
 
-## 11. Analyse décisionnelle
+Répétitions et statistiques restent absentes tant que la règle KISS n'autorise pas leur ajout.
 
-| Élément | Règle préenregistrée |
-|---|---|
-| Taux de sorties officiellement acceptables | `<numérateur, dénominateur et états exclus>` |
-| Coût fournisseur par sortie officiellement acceptable | `<dépense fournisseur incluse, traitement de zéro sortie acceptable ; effort humain et opérations consignés séparément>` |
-| Latence | `<mesure et résumé>` |
-| Couverture du harnais | `<mesure et condition d’abstention>` |
-| Provenance | `<champs obligatoires>` |
-| Budget | `<facultatif, valeur et autorité si présent>` |
-| Front de Pareto | taux d'acceptation officiel maximisé, coût fournisseur par sortie officiellement acceptable minimisé, latence préenregistrée minimisée ; couverture hors axes |
-| Préférence de recommandation | `<explicite ou absente>` |
+## 8. Verdicts et décision économique
 
-Sans préférence explicite suffisante, présenter toutes les configurations compatibles et comparables, y compris les plus chères, puis le front de Pareto observé. Ne pas désigner un gagnant unique.
+| Configuration | Erreurs éliminatoires | Obligations | Verdict | Motif court | Critères ou constats concernés | Preuves | Coût observé | Bénéfices sur S1 ou S2 |
+|---|---|---|---|---|---|---|---|---|
+| A | `<résultat>` | `<résultat>` | `<verdict>` | `<phrase intelligible expliquant le verdict>` | `<identifiants O, E ou S concernés>` | `<références>` | `<valeur et unité, ou INCONNU>` | `<faits>` |
+| B | `<résultat>` | `<résultat>` | `<verdict>` | `<phrase intelligible expliquant le verdict>` | `<identifiants O, E ou S concernés>` | `<références>` | `<valeur et unité, ou INCONNU>` | `<faits>` |
 
-## 12. Sources publiques de contexte
+Responsable des verdicts : `<rôle>`.
 
-| Source primaire | Date de publication ou de collecte | Signal utilisé | Comparabilité | Fraîcheur | Limites |
-|---|---|---|---|---|---|
-| `<URL>` | `<date>` | `<signal>` | `<comparable ou contexte seulement>` | `<état>` | `<limites>` |
+Appliquer l'ordre suivant :
 
-Ne fusionner aucun score incomparable et ne créer aucun score global. Les essais Lab-X priment seulement pour le workflow exact mesuré.
+1. erreurs éliminatoires ;
+2. obligations et preuve ;
+3. verdict ;
+4. exclusion de `NE SATISFAIT PAS` et `INDETERMINE` ;
+5. coût connu et comparable parmi les seuls `SATISFAIT` ;
+6. bénéfices prévus des `SATISFAIT` plus chers.
 
-## 13. Cycle de vie
+Ces six opérations restent internes. La restitution publique en montre deux étapes : les verdicts et leurs motifs, puis les coûts connus et comparables, la conclusion économique et les bénéfices prévus ; le reste s'ouvre sur demande.
 
-| Événement | Condition | Action |
-|---|---|---|
-| Qualification | `<preuves et approbation liées aux empreintes>` | rendre la version admissible |
-| Révision | `<stimulus, acceptabilité ou conclusion modifiés>` | créer une nouvelle version |
-| Exécution | `<campagne verrouillée et autorisée>` | écrire des reçus immuables |
-| Retrait | `<obsolescence, contamination, fuite ou proxy inadéquat>` | retirer sans effacer l’historique |
+### Conclusion économique
 
-## 14. Checklist de qualification
+`<COMPLETE si tous les coûts SATISFAIT sont connus et comparables ; sinon INCOMPLETE>`
 
-- [ ] besoin exact, décision réelle et conclusion permise explicites
-- [ ] stimulus et interface de sortie liés par empreinte
-- [ ] aucune donnée client réelle, aucun secret, connecteur de production ou action externe
-- [ ] contrôles automatiques entièrement décidables par code
-- [ ] rubrique humaine aveugle versionnée
-- [ ] formule `PASS automatique + ACCEPTABLE humain` appliquée
-- [ ] juge fantôme placé après gel humain et sans effet officiel
-- [ ] témoins, provenance, attentes et limites documentés
-- [ ] plan de mesure justifié sans valeur arbitraire
-- [ ] panel, configurations et politiques de routage identifiés sans ambiguïté
-- [ ] incidents fournisseur et défauts du harnais séparés
-- [ ] règles de coût, latence, couverture, provenance et abstention préenregistrées
-- [ ] approbation humaine liée aux empreintes obtenue
+### Configurations `SATISFAIT` co-moins-chères
+
+`<identités, ou AUCUNE ; si la conclusion est INCOMPLETE, aucune option n'est déclarée globalement moins chère>`
+
+Un coût inconnu ou non comparable peut conserver l'admissibilité sur les critères non économiques ; les coûts connus restent visibles, mais la conclusion économique est `INCOMPLETE`. Cette mention n'est pas un quatrième verdict. Un coût `INCONNU` ne satisfait jamais une obligation de coût et ne prouve aucune supériorité économique.
+
+### Bénéfices prévus des options `SATISFAIT` plus chères
+
+`<liens aux seuls critères S1 et S2 déclarés, ou AUCUN>`
+
+## 9. Limite d'attribution
+
+La restitution contient cette formulation ou son équivalent :
+
+> Le verdict porte sur la configuration observée sous les conditions de test communes déclarées. Il n'attribue pas au seul modèle un effet que le fournisseur, l'effort, Pi ou ses réglages peuvent influencer, et ne démontre pas que le modèle isolé aurait produit le même résultat sous un autre harnais, fournisseur, contexte ou environnement.
+
+## 10. Qualification documentaire
+
+- [ ] résultat attendu, obligations et erreurs éliminatoires sont définis avant exécution
+- [ ] les trois verdicts sont présents
+- [ ] zéro à deux critères secondaires sont prévus, avec unité et sens favorable s'ils départagent
+- [ ] le responsable de campagne a approuvé le contrat ou l'exécution reste interdite
+- [ ] les conditions de test communes sont déclarées une fois et identiques entre les configurations comparées
+- [ ] chaque configuration expose ses valeurs propres, dont l'effort de raisonnement effectif
+- [ ] chaque configuration distingue sa route demandée de sa route observée ; toute valeur non prouvée reste `INCONNU`
+- [ ] la base de coût fixe le périmètre d'attribution, les tentatives comptées, l'unité commune et la conversion éventuelle avant exécution
+- [ ] chaque verdict porte un motif, ses preuves et son responsable
+- [ ] les non-`SATISFAIT` sont exclus de la comparaison économique et la conclusion est `INCOMPLETE` si un coût `SATISFAIT` est inconnu ou non comparable
+- [ ] aucun score global, podium général, classement universel ou graphique trompeur n'est produit
+- [ ] la limite d'attribution est visible
+- [ ] les éléments différés restent absents
+- [ ] la conclusion est bornée au contrat, aux conditions communes et à la date
+
+Le scénario `quote-thread-summary`, s'il est utilisé dans une maquette, reste un choix local réversible et ne devient pas une tâche canonique.
