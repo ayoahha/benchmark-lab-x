@@ -81,7 +81,7 @@ def cost_summary(contract: dict[str, Any], manifest: dict[str, Any] | None) -> d
 def owner_review(report: dict[str, Any]) -> bytes:
     cost = report["cost"]
     usage = cost["usage"]
-    tests = ", ".join(f"{name}: {count}" for name, count in report["tests_discovered"].items())
+    tests = ", ".join(f"{name}: {count}" for name, count in sorted(report["tests_discovered"].items()))
     changed = ", ".join(report["local_git_evidence"]["changed_paths"]) or "aucun"
     validation_seconds = sum(Decimal(str(item["wall_seconds"])) for item in report["acceptance"])
     if usage is None:

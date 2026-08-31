@@ -423,8 +423,8 @@ class GraphEngineeringV22Test(unittest.TestCase):
         before = {
             "head": git(ROOT, "rev-parse", "HEAD"),
             "branch": git(ROOT, "symbolic-ref", "HEAD"),
-            "index": ge.digest(index_path.read_bytes()),
             "status": git(ROOT, "status", "--porcelain=v1", "-z", "--untracked-files=all"),
+            "index": ge.digest(index_path.read_bytes()),
         }
         runs_root = ROOT / "runs"
         runs_root.mkdir(exist_ok=True)
@@ -454,8 +454,8 @@ class GraphEngineeringV22Test(unittest.TestCase):
         after = {
             "head": git(ROOT, "rev-parse", "HEAD"),
             "branch": git(ROOT, "symbolic-ref", "HEAD"),
-            "index": ge.digest(index_path.read_bytes()),
             "status": git(ROOT, "status", "--porcelain=v1", "-z", "--untracked-files=all"),
+            "index": ge.digest(index_path.read_bytes()),
         }
         self.assertEqual(before, after)
 
