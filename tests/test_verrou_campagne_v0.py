@@ -22,6 +22,7 @@ from tools.valider_verrou_campagne_v0 import (
     main,
     valider_verrou_campagne_v0,
 )
+from tests._helpers_v1 import extraire_revision_historique
 
 
 def _sha256(contenu: bytes) -> str:
@@ -42,6 +43,13 @@ def _canonical(document: object) -> bytes:
 
 
 class VerrouCampagneV0Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.revision = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.revision.cleanup)
+        cls.racine_historique = Path(cls.revision.name)
+        extraire_revision_historique(cls.racine_historique)
+
     def setUp(self) -> None:
         self.verrou_public = json.loads(VERROU_PAR_DEFAUT.read_bytes())
         self.manifeste_public = json.loads(MANIFESTE_PAR_DEFAUT.read_bytes())
@@ -156,7 +164,7 @@ class VerrouCampagneV0Tests(unittest.TestCase):
             fixture["manifest"],
             fixture["receipt"],
             fixture["store"],
-            RACINE,
+            self.racine_historique,
             fixture["commitments"],
         )
 

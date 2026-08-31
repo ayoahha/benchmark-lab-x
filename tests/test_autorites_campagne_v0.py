@@ -11,6 +11,7 @@ from tools.valider_autorites_campagne_v0 import (
     ErreurAutorites,
     valider_autorites_campagne_v0,
 )
+from tests._helpers_v1 import extraire_revision_historique
 
 
 RACINE = Path(__file__).resolve().parents[1]
@@ -21,6 +22,13 @@ FRAGMENT = (
 
 
 class AutoritesCampagneV0Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.revision = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.revision.cleanup)
+        cls.racine_historique = Path(cls.revision.name)
+        extraire_revision_historique(cls.racine_historique)
+
     def setUp(self) -> None:
         self.document = json.loads(FRAGMENT.read_bytes())
 
@@ -32,10 +40,17 @@ class AutoritesCampagneV0Tests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaises(ErreurAutorites):
-                valider_autorites_campagne_v0(fragment)
+                valider_autorites_campagne_v0(
+                    fragment=fragment,
+                    racine=self.racine_historique,
+                )
 
     def test_fragment_canonique_est_valide(self) -> None:
-        recu = valider_autorites_campagne_v0()
+        fragment = self.racine_historique / FRAGMENT.relative_to(RACINE)
+        recu = valider_autorites_campagne_v0(
+            fragment=fragment,
+            racine=self.racine_historique,
+        )
 
         self.assertEqual("AUTORITES_CAMPAGNE_V0_OK", recu["status"])
         self.assertEqual(EMPREINTE_FRAGMENT_ATTENDUE, recu["fragment_sha256"])

@@ -9,13 +9,13 @@ Version contractuelle 7, 11 août 2026
 
 Statut : **historique et spécialisé, candidat non officiel**
 
-> Ce document conserve le contrat prospectif du prototype pentagone-rotatif. Il n’est pas une autorité de la V0 décisionnelle active et ne doit pas être généralisé à ses cartes. Le [PRD](PRD.md), l’[ARD](ARD.md), les [invariants universels](RULES.md) et chaque carte approuvée gouvernent la V0.
+> Ce document conserve le contrat prospectif du prototype pentagone-rotatif. Il n'est pas une autorité du produit courant et ne doit pas être généralisé à V2-alpha. Le [PRD](PRD.md), l'[ARD](ARD.md) et les [règles](RULES.md) gouvernent le produit courant.
 
 ## 1. Autorité et portée
 
 Ce document reste la source de vérité du seul modèle prospectif spécialisé task-v5 / verify-v7. Dans ce périmètre historique, il gouverne les états de mesure, les classes causales, les verdicts d’axe, les stades, les budgets, les preuves, les métriques, la vue rétroactive et le canari OpenRouter de cette tranche.
 
-Les références `R-*` de ce document renvoient au contrat historique conservé dans l’[archive RULES](archive/legacy-benchmark-v0-2026-08-14/docs-RULES.md), pas aux nouveaux invariants `U-*`. La carte [pentagone-rotatif task-v5](../tasks/dev/pentagone-rotatif/task-v5.md) porte uniquement le contenu visible par le candidat et les choix propres à cette modalité.
+Les références `R-*` de ce document renvoient à la [version historique de RULES](https://github.com/ayoahha/benchmark-lab-x/blob/38e226a59020aad517cd0dbb16892ffb87d448ab/docs/RULES.md), conservée par Git, pas aux invariants courants. La carte [pentagone-rotatif task-v5](../tasks/dev/pentagone-rotatif/task-v5.md) porte uniquement le contenu visible par le candidat et les choix propres à cette modalité.
 
 Ce contrat s’applique prospectivement. Il ne modifie aucun fichier task-v4, reçu, lock ou résultat historique. Cette tranche ne produit aucune acquisition, notation, renotation, vue rétroactive ni preuve d’exécution.
 
