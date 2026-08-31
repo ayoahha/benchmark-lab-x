@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
+from tools import preuve_u025_p1 as p1
 from tools.preuve_u025_p1 import (
     CASES,
     DEFAULT_PROOF,
@@ -17,11 +21,27 @@ from tools.preuve_u025_p1 import (
     validate,
     verify_proof,
 )
+from tests._helpers_v1 import extraire_revision_historique
 
 
 class PreuveU025P1Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.revision = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.revision.cleanup)
+        cls.racine_historique = Path(cls.revision.name)
+        extraire_revision_historique(cls.racine_historique)
+
     def test_preuve_commise_est_complete_et_reproductible(self) -> None:
-        result = verify_proof(DEFAULT_PROOF)
+        paquet_historique = (
+            self.racine_historique / "tasks/dev/pre-cadrage-entretien-client"
+        )
+        with (
+            patch.object(p1, "ROOT", self.racine_historique),
+            patch.object(p1, "PACKAGE", paquet_historique),
+        ):
+            result = verify_proof(DEFAULT_PROOF)
+            self.assertEqual(build_files(), build_files())
 
         self.assertEqual("PASS", result["verdict"])
         self.assertEqual(16, result["cases"])
@@ -30,7 +50,6 @@ class PreuveU025P1Tests(unittest.TestCase):
         self.assertEqual(42, result["effort_facts"])
         self.assertEqual(0, result["candidate_calls"])
         self.assertEqual("0", result["supplier_spend"])
-        self.assertEqual(build_files(), build_files())
 
     def test_tous_les_temoins_traversent_les_trois_voies(self) -> None:
         files = build_files()

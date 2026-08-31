@@ -8,7 +8,7 @@ Statut de campagne : `<porté par l'Issue et le champ Status du Project>`
 
 Ce gabarit prépare le contrat minimal d'une tâche du premier prototype. Une carte approuvée n'autorise ni acquisition, ni campagne, ni publication.
 
-Toute extension suit la [règle KISS](../docs/specification/RULES.md#11-kiss-et-évolution).
+Toute extension suit la [règle KISS](../docs/RULES.md#11-kiss-et-évolution).
 
 ## 1. Identité et autorité
 

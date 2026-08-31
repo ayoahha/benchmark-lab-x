@@ -2,250 +2,203 @@
 style_gate: pass
 ---
 
-# Architecture de la V0 décisionnelle
+# ARD : modèle logique de Benchmark Lab-X
 
-Version documentaire du 14 août 2026
+Décisions propriétaires intégrées : 31 août 2026
 
-## 1. Rôle et autorité
+## 1. Portée
 
-Ce document décrit l’architecture logique choisie pour répondre à la question : « Sur le workflow exact de mon besoin, combien me coûte en pratique une sortie acceptable, et quelle configuration choisir ? »
+Cet ARD décrit les objets, frontières et flux minimaux du premier prototype. Il ne choisit ni plateforme, ni stockage, ni interface, ni technologie future.
 
-Le [PRD](PRD.md) gouverne le produit et les décisions attendues. [RULES](RULES.md) porte les invariants universels. Le [gabarit de carte](../tasks/TEMPLATE.md) décrit le contrat d’un workflow mesuré.
+Le [PRD](PRD.md) gouverne le besoin et le périmètre. Les [règles](RULES.md) portent les invariants. Le [glossaire](../CONTEXT.md) fixe le sens des termes. Le [gabarit de carte](../tasks/TEMPLATE.md) prépare le contrat d'une tâche.
 
-Cette architecture est neutre vis-à-vis de l’outil. Un composant peut être manuel, fourni par une solution existante ou développé dans Lab-X. L’architecture ne justifie pas, à elle seule, une plateforme spécifique.
+## 2. Principes
 
-## 2. État des capacités
+1. Le modèle est l'objet produit mis en avant.
+2. La configuration observée, reliée aux conditions de test communes, est l'unité de preuve.
+3. Le premier prototype compare uniquement des accès directs ou API sous le même Pi.
+4. Pi est obligatoire ; son état appartient aux conditions de test communes déclarées avant le premier candidat.
+5. Chaque tâche possède un contrat de réussite approuvé avant toute sortie.
+6. Une sortie brute précède son contrôle et son verdict.
+7. L'admissibilité précède le coût.
+8. Une conclusion est située et n'isole pas causalement le modèle.
+9. Les campagnes historiques restent immuables.
+10. La complexité entre seulement après preuve d'un besoin antérieur.
+11. L'utilisation commence avec la communauté Lab X pour éprouver et contribuer ; la vocation publique ultérieure reste séparée de toute autorité de publication.
 
-| Capacité | État | Portée prouvée |
+## 3. Pi comme frontière constante
+
+Pi est le seul harnais du premier prototype. Sa constance réduit une source de variation entre configurations ; elle ne prouve pas que Pi est neutre ou que le modèle seul cause le résultat. Pi, ses paquets et l'environnement sont présentés une fois comme conditions de test communes, jamais comme propriétés répétées de chaque modèle.
+
+### 3.1 État de Pi relevé le 30 août 2026
+
+**FAIT ÉTABLI**, relevé du 30 août 2026 depuis le contrat d'harmonisation et `/Users/ayo/.pi/agent/settings.json` ; chaque valeur porte son statut :
+
+| Champ | Valeur relevée | Statut |
 |---|---|---|
-| Paquet pré-cadrage | fait actuel | contrat de sortie compilé, version exacte approuvée par D1 et intégrité cryptographique vérifiée par M2.1, sans mesure comparative |
-| Campagnes, reçus et prototypes antérieurs | fait actuel historique | preuves immuables de leurs contrats propres, non transférables à la V0 |
-| Pilote décisionnel pré-cadrage | décision V0 | architecture et protocole documentaire choisis, campagne comparative non exécutée |
-| Rapport interne de décision | décision V0 | sortie recommandée, pas encore produite à partir d’une campagne V0 |
-| Import de benchmarks publics | décision de méthode | contexte séparé, provenance et limites obligatoires |
-| Site ou sélecteur | prospectif conditionnel | seulement après une décision utile du pilote ou une abstention justifiée acceptée par le propriétaire, et sous la porte outil du PRD |
-| Comparaison des abonnements | prospectif V1 | produit, plan, quotas et expérience comme identité |
-| Auto-hébergement | prospectif V2 | coût complet, matériel, stack, exploitation et souveraineté comme identité |
+| Paquet ou fork | `@earendil-works/pi-coding-agent` | déclaré |
+| Version | `0.84.4` d'après `lastChangelogVersion` ; version exécutée `INCONNU` | déclaré, non vérifié à l'exécution |
+| Paquets configurés | `npm:pi-context-view`, `npm:@ff-labs/pi-fff`, `npm:@dietrichgebert/ponytail` | configuré, non prouvé actif |
+| Skills exclus | `!skills/**`, `!/Users/ayo/.agents/skills/**` | configuré |
+| Réglages par défaut | `defaultProvider` `vllm`, `defaultModel` `qwen38-27b`, `defaultThinkingLevel` `medium` | configuré ; les valeurs effectives par candidat sont relevées dans sa configuration observée |
+| Outils | `INCONNU` | non relevé |
+| Contexte | `INCONNU` | non relevé |
+| Environnement d'exécution candidat | aucune exécution candidate dans cette tranche | sans objet |
+| Date de relevé | 30 août 2026 | observé |
 
-Le dépôt contient une ancienne architecture centrée sur une campagne HTML et des cartes techniques. Elle est conservée dans l’[archive documentaire](archive/legacy-benchmark-v0-2026-08-14/README.md) et dans ses preuves historiques. Elle n’est pas l’architecture produit active.
+`déclaré` vient d'une source documentaire, `configuré` d'un fichier de réglages, `actif` d'une preuve de chargement, `observé` d'une exécution. `lastChangelogVersion` ne prouve pas la version exécutée. Les valeurs `INCONNU` ne sont pas remplacées par une hypothèse. Avant une exécution réelle, le reçu des conditions communes complète la version exécutée, les outils, le contexte et l'environnement, puis fige l'ensemble pour les candidats comparés.
 
-## 3. Objets et identités
+## 4. Objets et responsabilités
 
-### 3.1 Carte de workflow
+### 4.1 Tâche et contrat de réussite
 
-Une carte décrit un besoin exact et une décision réelle. Elle lie :
+Responsabilité : relier un besoin précis à un résultat attendu, des obligations, des erreurs éliminatoires, trois verdicts permis et au maximum deux critères secondaires, puis fixer la base de coût avant exécution : périmètre d'attribution, tentatives comptées, unité commune et règle de conversion éventuelle.
 
-- le contexte d’usage et la décision à prendre
-- le stimulus candidat-visible
-- le contrat de sortie
-- les contrôles automatiques entièrement décidables par code
-- la rubrique humaine aveugle
-- les témoins, la provenance et les limites
-- la politique de données et les empreintes d’approbation
+Le contrat est préparé et approuvé par le responsable de campagne avant toute exécution. Une modification après observation d'une sortie crée un nouveau contrat ; elle ne réécrit pas le précédent.
 
-Une carte approuvée reste immuable. Toute modification qui change le stimulus, l’acceptabilité ou la conclusion permise crée une nouvelle version.
+### 4.2 Conditions de test communes
 
-### 3.2 Paquet de carte et registre
+Responsabilité : déclarer une fois, avant le premier candidat, ce que toutes les configurations comparées partagent : état de Pi (paquet ou fork, version, paquets, outils, skills, contexte, réglages par défaut), environnement et date de gel. Chaque valeur porte son statut : déclarée, configurée, active ou observée.
 
-Le paquet rassemble les fichiers nécessaires à l’exécution et à l’évaluation d’une carte. Le registre décrit leur rôle et leur version. Le manifeste machine-readable du paquet liste ses fichiers et leurs empreintes, sans hash autoréférentiel. Le paquet sépare `qualification_status` et `execution_status`.
+Toute configuration comparée référence ces conditions. Une condition commune modifiée ouvre une nouvelle comparaison ; elle ne requalifie pas les sorties déjà obtenues. Aucun schéma physique, registre versionné, API ou service n'est prescrit.
 
-Le paquet pré-cadrage actuel qualifie un contrat de sortie. Il ne contient pas encore les preuves d’une comparaison de configurations.
+### 4.3 Configuration observée
 
-Les champs `qualification_status` et `approbation` embarqués dans le manifeste sont un instantané immuable de sa création. Ils ne doivent pas être modifiés après la décision propriétaire, car toute modification changerait l’empreinte approuvée.
+Responsabilité : conserver, pour un candidat, tout ce qui borne l'attribution de sa sortie :
 
-Trois autorités restent distinctes :
+- fournisseur
+- modèle
+- accès direct ou API
+- route demandée et route observée
+- paramètres
+- effort de raisonnement
+- identité demandée et identité observée
+- référence aux conditions de test communes
 
-- l’intégrité cryptographique des fichiers présents est établie par la [preuve M2.1](https://github.com/ayoahha/benchmark-lab-x/issues/34#issuecomment-5302877516)
-- la [décision propriétaire D1](https://github.com/ayoahha/benchmark-lab-x/issues/15#issuecomment-5301590597) approuve exactement le paquet identifié par le SHA-256 `8030128d159e4203483b19f0e37692a53f01baecc38fbccaa321541c23e71a10` ; cette preuve GitHub externe liée à l’empreinte porte l’état courant de qualification
-- la règle documentaire explique comment interpréter l’instantané du manifeste et la preuve externe ; elle ne devient canonique qu’après fusion dans la branche principale
+Une demande et une observation restent distinctes. Une identité, une route ou une valeur absente reste `INCONNU`.
 
-Cette approbation ne prouve aucune comparaison de configurations et n’autorise aucune exécution.
+### 4.4 Acquisition
 
-### 3.3 Configuration fixe
+Responsabilité : exécuter une unité autorisée et conserver :
 
-Une configuration fixe comprend tous les éléments susceptibles d’influencer la sortie ou son coût :
+- tâche et contrat
+- configuration demandée et observée
+- requête
+- sortie brute ou absence de sortie
+- chronologie
+- coût observé
+- incident, retry et intervention
+- reçu relié aux autres preuves
 
-- modèle et révision demandés
-- fournisseur, route et endpoint lorsqu’ils sont fixés
-- paramètres envoyés et limites applicables
-- politique de données
-- version de l’adaptateur et du harnais
-- outils, environnement et intervention humaine lorsqu’ils font partie du workflow
+Une acquisition ne décide pas de son propre verdict.
 
-La route, le fournisseur et les paramètres effectivement servis sont observés dans les reçus. Une divergence avec l’identité verrouillée rend la preuve officielle inutilisable pour cette configuration.
+### 4.5 Évaluation
 
-### 3.4 Politique de routage
+Responsabilité : appliquer les erreurs éliminatoires et obligations du contrat, puis produire exactement un verdict publiable :
 
-OpenRouter Auto Router est une politique de routage distincte, jamais l’identité d’un modèle fixe. Son identité de campagne comprend au minimum la politique demandée, ses contraintes, les paramètres envoyés, la version de l’adaptateur et les observations retournées.
+- `SATISFAIT`
+- `NE SATISFAIT PAS`
+- `INDETERMINE`
 
-Le modèle, le fournisseur, la route et les paramètres servis sont des observations. La politique peut sélectionner des routes différentes entre des acquisitions. Cette variabilité fait partie de l’objet mesuré et doit rester visible.
+Le verdict porte les éléments exigés par la règle « Verdict explicable » des [règles](RULES.md#6-erreurs-et-verdict) : valeur, motif court, critères ou constats concernés, références de preuve et responsable. Les critères secondaires décrivent uniquement les résultats déjà `SATISFAIT`. Ils ne compensent jamais une erreur éliminatoire.
 
-### 3.5 Campagne et acquisition
+### 4.6 Vue de décision
 
-Une campagne immuable lie :
+Responsabilité : exclure `NE SATISFAIT PAS` et `INDETERMINE` de la comparaison économique, comparer seulement les coûts connus et comparables des configurations `SATISFAIT`, puis exposer les bénéfices prévus sur les seuls critères secondaires déclarés, selon les règles de [coût et bénéfices](RULES.md#8-coût-et-bénéfices). Si le coût d'au moins une configuration `SATISFAIT` est inconnu ou non comparable, elle conserve son admissibilité, les coûts connus restent visibles, mais la vue ne déclare aucune option globalement moins chère et marque la conclusion économique `INCOMPLETE`.
 
-- une version exacte de carte et de paquet
-- le panel de configurations admissibles
-- les conditions de comparabilité et de fraîcheur
-- le plan d’acquisition justifié
-- les prix et unités monétaires datés
-- les règles de validation et d’analyse
-- les autorisations et empreintes nécessaires
+Elle ne calcule aucun score global, ne fusionne jamais coût et bénéfice, et ne modifie ni sortie, ni reçu, ni verdict source.
 
-Une acquisition est une tentative prévue pour une configuration dans cette campagne. Son reçu sépare l’attendu de l’observé et conserve coûts, latence, provenance, statut fournisseur et empreintes utiles.
+### 4.7 Restitution
 
-Aucun nombre d’acquisitions n’est imposé par l’architecture. Le plan est justifié par la décision visée et les preuves nécessaires.
+Responsabilité : rendre la conclusion compréhensible et vérifiable en exactement deux étapes visibles : admissibilité de toutes les configurations avec verdict et motif synthétique, puis coût observé et bénéfices prévus parmi les seules configurations `SATISFAIT`. Une conclusion économique `INCOMPLETE` laisse les coûts connus visibles sans déclarer d'option globalement moins chère. Critères, preuves, incidents, inconnues, limite d'attribution et conditions de test communes s'ouvrent sur demande, sans former une troisième étape.
 
-### 3.6 Versions typées
+La restitution affiche la limite d'attribution : le verdict porte sur la configuration observée sous les conditions communes, pas sur le modèle isolé. Elle ne produit ni podium général, ni score global, ni graphique trompeur.
 
-Chaque campagne porte un `campaign_id` immuable et référence la valeur exacte de chaque dimension versionnée dont elle dépend. La matrice suivante est normative et minimale. Elle type les dimensions sans inventer de schéma logiciel ni de règle de compatibilité : une règle de compatibilité n’existe que lorsqu’elle est déclarée par l’objet concerné.
+## 5. Flux minimal
 
-| Dimension | Objet typé | Valeur ou état courant |
-|---|---|---|
-| `product_version` | version produit cumulative | `V0` ; V1 et V2 prospectives |
-| `measurement_profile` | profil de mesure parallèle : API, abonnement ou auto-hébergé | API, seul profil ouvert |
-| `card_version` | version d’une carte de workflow et de son paquet | portée par le registre et le manifeste du paquet |
-| `artifact_schema` | schéma de la sortie candidate ; le champ `version` de l’enveloppe YAML du pré-cadrage désigne cette dimension, pas la version produit | `V0` |
-| `protocol_version` | protocole de mesure d’une campagne ; `benchmark-lab-x/protocol/v2` reste historique | à déclarer avant la première campagne |
-| `receipt_schema` | schéma des reçus d’acquisition | à déclarer avant la première campagne |
-| `decision_policy_version` | politique de décision appliquée à une campagne | à déclarer avant la première campagne |
-| `view_schema` | schéma d’une vue ou d’un rapport régénérable | à déclarer avant la première vue |
-
-## 4. Composants logiques
-
-```mermaid
-flowchart LR
-    A["Besoin et contraintes"] --> B["Carte et paquet approuvés"]
-    B --> C["Cadre de campagne"]
-    C --> D["Runner et adaptateurs"]
-    D --> E["Preuves et reçus immuables"]
-    E --> F["Validation automatique"]
-    E --> G["Revue humaine aveugle"]
-    G --> H["Juge fantôme après gel"]
-    F --> I["Analyse décisionnelle"]
-    G --> I
-    E --> I
-    J["Sources publiques séparées"] --> I
-    I --> K["Rapport interne ou abstention"]
+```text
+Besoin précis du demandeur-lecteur
+  -> Contrat de réussite préparé et approuvé par le responsable de campagne
+     -> Conditions de test communes déclarées avant le premier candidat
+        -> Configurations modèle + accès direct/API sous ces conditions
+           -> Acquisition autorisée
+              -> Sortie brute ou incident
+                 -> Erreurs éliminatoires et obligations
+                    -> SATISFAIT / NE SATISFAIT PAS / INDETERMINE, avec motif et preuves
+                       -> Coût parmi les seuls SATISFAIT
+                          -> Bénéfices prévus des SATISFAIT plus chers
+                             -> Restitution en deux étapes
 ```
 
-### 4.1 Registre et paquet de carte
+Cette représentation décrit des dépendances. Elle n'impose aucun service ni schéma physique.
 
-Responsabilités :
+## 6. Identités, jointures et immutabilité
 
-- valider les chemins autorisés et les empreintes
-- distinguer stimulus, actifs juge et témoins
-- lier l’approbation humaine à la version exacte
-- refuser toute donnée client réelle, tout secret et tout connecteur de production
+Chaque tâche, contrat, conditions de test communes, configuration, acquisition, sortie et verdict possède une identité vérifiable. Les jointures relient explicitement :
 
-### 4.2 Cadre de campagne
+- la tâche à son contrat approuvé
+- la configuration à ses conditions de test communes
+- l'acquisition à sa configuration demandée et observée
+- la sortie au reçu d'acquisition
+- le verdict à la sortie, au contrat utilisés et à ses preuves
+- la vue de décision aux seuls verdicts compatibles
 
-Il transforme la décision à éclairer en plan verrouillé. Il fixe le panel, la carte, les configurations, les sources de prix, les critères de fraîcheur, les préférences éventuelles et les règles de sortie.
+Un libellé public n'est pas une clé de jointure. La sortie brute et les preuves historiques ne sont pas corrigées silencieusement.
 
-Sans budget ni autre préférence explicite, il ne préconfigure aucun gagnant. Il demande une restitution de toutes les configurations compatibles et comparables, suivie du front de Pareto observé.
+Une vue de décision refuse au minimum :
 
-### 4.3 Runner et adaptateurs
+- contrats différents ou modifiés après résultat
+- conditions de test communes différentes entre candidats présentés comme comparables
+- identité incomplète au regard du contrat
+- sortie modifiée après acquisition
+- bénéfice absent des critères prévus
+- recommandation économique fondée sur une configuration non `SATISFAIT` ou sur un coût `INCONNU`
 
-Le runner orchestre les acquisitions sans porter la sémantique d’un fournisseur. Chaque adaptateur :
+## 7. Verdict, coût et bénéfices
 
-- sérialise la requête attendue
-- observe la réponse et les métadonnées réellement disponibles
-- classe séparément sortie candidate, panne fournisseur et défaut du harnais
-- consigne route, fournisseur, paramètres, usage, coût et latence lorsque la source les fournit
-- refuse d’inventer une observation absente
+L'ordre interne est celui des six opérations des [règles](RULES.md#7-ordre-de-décision) :
 
-Une panne fournisseur pénalise la réussite bout en bout lorsque la route appartient à la configuration. `HARNESS_ERROR` ne pénalise pas la configuration, mais réduit la couverture et reste visible.
+1. erreurs éliminatoires ;
+2. obligations et preuve ;
+3. verdict d'admissibilité ;
+4. exclusion de `NE SATISFAIT PAS` et `INDETERMINE` de la recommandation économique ;
+5. coût connu et comparable entre les seuls `SATISFAIT` ;
+6. bénéfices prévus des options `SATISFAIT` plus chères.
 
-### 4.4 Canari de route
+Une valeur absente reste `INCONNU`. Un résultat `INDETERMINE` n'est ni un succès par défaut ni un échec inventé. Le coût n'est jamais agrégé à l'admissibilité ni au bénéfice dans une note unique. Une conclusion économique `INCOMPLETE` n'est pas un quatrième verdict.
 
-Avant toute configuration officielle OpenRouter, un canari distinct vérifie que l’adaptateur peut observer les éléments nécessaires. Pour une configuration fixe, il doit notamment rendre vérifiables route, fournisseur et paramètres servis.
+## 8. Incidents et attribution
 
-Auto Router est diagnostiqué avant son admission officielle. Le canari ne prouve aucun bénéfice du routage et ne devient ni une acquisition comparative ni un score.
+| Classe | Sens | Effet |
+|---|---|---|
+| Sortie obtenue | artefact disponible pour le contrat | entre dans l'évaluation |
+| Incident fournisseur | fournisseur ou route n'accomplit pas l'unité prévue | observation attribuable, séparée du contenu de la sortie |
+| `HARNESS_ERROR` | Pi ou le dispositif empêche l'attribution | réduit la couverture, ne devient pas `NE SATISFAIT PAS` |
+| Preuve manquante | identité ou preuve nécessaire absente | `INDETERMINE` ou `INCONNU` selon le champ |
 
-### 4.5 Registre de preuves
+Le verdict n'attribue pas au seul modèle un effet que le fournisseur, l'effort, Pi ou ses réglages peuvent influencer, et ne permet pas d'affirmer que le modèle isolé aurait produit la même sortie avec un autre harnais, fournisseur, contexte ou environnement.
 
-Le registre de preuves est append-only. Il conserve les liens entre :
+## 9. Vues historiques
 
-- carte, paquet et approbation
-- campagne et configuration attendue
-- requête, réponse et métadonnées observées
-- contrôle automatique et version de l’instrument
-- présentation aveugle et verdict humain gelé
-- analyse, sources de prix et rapport produit
+V0 et V1 restent dans leurs questions, panels, schémas et verdicts d'origine. Une vue historique peut les résumer fidèlement. Elle ne peut pas :
 
-Une vue peut évoluer. Un reçu ou une campagne historique ne change pas.
+- renoter une sortie et appeler cela le verdict d'origine
+- fabriquer des répétitions ou une stabilité
+- déduire un rang qualitatif des `FAIL G-001`
+- transformer un `PASS` de qualification du harnais en `PASS` produit
+- produire une baseline, un coût par résultat acceptable ou une recommandation absente
+- remplacer une inconnue par une estimation
 
-### 4.6 Validation automatique
+## 10. Sécurité et autorité
 
-Le validateur automatique traite seulement les propriétés entièrement décidables par code. Il produit `PASS`, `FAIL` ou un état technique explicite avec les preuves nécessaires.
+- données réelles ou sensibles exclues sans autorité explicite
+- secrets absents des tâches, sorties publiées et reçus publics
+- permissions minimales et outils déclarés
+- sorties brutes privées par défaut avant décision de publication
+- appels candidats, achats, dépassements et retries soumis à autorité explicite
 
-Une propriété sémantique, esthétique ou utile à un humain n’est pas transformée en pseudo-test mécanique. Elle appartient à la revue humaine.
+## 11. Éléments différés
 
-### 4.7 Revue humaine aveugle
+Les abonnements, produits agentiques, autres harnais dépouillés, comparaisons de harnais, OrbStack et `perso-hermes` n'appartiennent pas à cette architecture active. Ils ne reçoivent ni objet, ni flux, ni interface anticipée. Leur étude dépend d'un besoin démontré dans une itération antérieure, conformément aux [règles KISS](RULES.md#11-kiss-et-évolution).
 
-Le poste de revue présente la sortie sans identité de configuration, coût ni métadonnée susceptible de dévoiler le candidat. La rubrique versionnée permet les verdicts `ACCEPTABLE`, `NOT_ACCEPTABLE` ou `UNABLE_TO_JUDGE`, avec justification liée à la sortie.
-
-Le verdict officiel d’une sortie est obtenu seulement par la formule : `PASS automatique + ACCEPTABLE humain`.
-
-Le juge LLM fantôme intervient après gel du verdict humain. Son avis est stocké séparément et ne modifie ni l’acceptabilité officielle ni la campagne.
-
-### 4.8 Analyse décisionnelle
-
-L’analyse calcule et présente :
-
-- taux de sorties officiellement acceptables
-- coût fournisseur par sortie officiellement acceptable, l’effort humain et les opérations restant consignés séparément sans conversion monétaire implicite
-- latence
-- couverture du harnais
-- provenance et fraîcheur
-
-Elle ne fusionne pas des scores publics incompatibles avec le pilote local. Elle peut joindre des signaux externes comme contexte séparé.
-
-Avec une préférence explicite, elle recommande la configuration compatible qui répond à cette préférence. Sans préférence suffisante, elle affiche les configurations compatibles et comparables, le front de Pareto observé, puis s’abstient de désigner un gagnant unique.
-
-### 4.9 Rapport interne
-
-Le rapport interne est la sortie V0. Il montre les résultats, dénominateurs, coûts, pannes fournisseur, défauts de couverture, provenance, limites et motifs d’abstention. Il distingue clairement fait mesuré, interprétation et hypothèse.
-
-Aucun site public n’est nécessaire pour produire cette décision.
-
-### 4.10 Import externe futur
-
-Un importateur futur peut enregistrer des benchmarks publics avec source primaire, date, protocole, population, fraîcheur et limites. Il ne crée pas de score global et ne rend pas comparables des mesures qui ne le sont pas.
-
-GDPval et les méthodes comparables inspirent le réalisme des tâches et l’évaluation experte. Ils ne remplacent pas automatiquement le pilote sur le workflow exact.
-
-## 5. Flux V0
-
-1. Qualifier le besoin, le contrat de sortie et la décision visée.
-2. Approuver les empreintes du paquet de carte.
-3. Comparer Promptfoo, Ori Eval et une méthode manuelle à l’effort complet nécessaire.
-4. Arrêter la plateforme spécifique si l’une de ces voies produit la même décision sans perte pertinente avec moins d’effort complet.
-5. Diagnostiquer Auto Router et qualifier les canaris nécessaires.
-6. Verrouiller carte, panel, configurations, prix, plan d’acquisition et préférences.
-7. Exécuter les acquisitions et écrire les reçus immuables.
-8. Appliquer les contrôles automatiques.
-9. Geler les verdicts humains aveugles.
-10. Calculer les mesures et produire le rapport ou l’abstention.
-11. Exécuter éventuellement le juge fantôme, sans effet officiel.
-
-La numérotation décrit l’ordre logique. Elle ne fixe ni délai, ni nombre de runs, ni nombre de relectures.
-
-## 6. Frontières de sécurité
-
-- aucune donnée client réelle, aucun secret et aucun connecteur de production dans une carte V0
-- aucun actif juge envoyé au candidat
-- aucune action externe autorisée par une sortie candidate
-- secrets d’API fournis uniquement au transport autorisé, jamais aux artefacts durables
-- permissions minimales et environnement isolé pour toute exécution outillée
-- arrêt fail-closed lorsque l’identité, la provenance ou l’intégrité ne sont pas prouvées
-
-## 7. Évolution
-
-Les contrats et politiques sont versionnés. Les campagnes et reçus restent immuables. Les vues peuvent être régénérées en indiquant leur version et leurs sources.
-
-Les versions produit sont cumulatives et les profils de mesure sont parallèles. V1 ajoute le profil abonnement : l’identité inclut produit, plan, quotas, resets, interface, harnais et intervention humaine. V2 ajoute le profil auto-hébergé : l’identité inclut modèle, checkpoint, quantification, matériel, stack, énergie, amortissement, administration, occupation GPU, confidentialité et souveraineté. Coût marginal et coût complet restent séparés. Chaque profil est qualifié indépendamment. Aucune comparaison inter-profils n’est permise sans contrat commun explicite.
-
-La souveraineté est une dimension d’identité distincte de la confidentialité : un déploiement confidentiel peut rester dépendant d’un fournisseur, d’une juridiction ou d’une chaîne matérielle non souveraine. Ses critères détaillés ne sont pas définis ici. Une spécification propriétaire et une preuve associée sont requises avant l’ouverture du profil auto-hébergé.
-
-Le site ou sélecteur reste conditionnel. Il devient envisageable seulement après une décision utile du pilote ou une abstention justifiée acceptée par le propriétaire, et sous la porte outil du PRD. Il reçoit besoin, contraintes et budget facultatif, puis recommande ou s’abstient avec provenance.
+Le nom `V2-alpha` désigne la prochaine phase sans canoniser de plateforme, de conteneur, de service, d'architecture ou de découpage. Ces choix attendent la validation du Graph Engineering.

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
-import io
 import json
 from pathlib import Path
 import tempfile
@@ -10,9 +8,10 @@ import unittest
 
 from tools.valider_contrats_versionnes_campagne_v0 import (
     EMPREINTE_MATRICE_ATTENDUE,
-    main,
+    ErreurContratsVersionnes,
     valider_contrats_versionnes_campagne_v0,
 )
+from tests._helpers_v1 import extraire_revision_historique
 
 
 RACINE = Path(__file__).resolve().parents[1]
@@ -23,6 +22,13 @@ MATRICE = (
 
 
 class ContratsVersionnesCampagneV0Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.revision = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.revision.cleanup)
+        cls.racine_historique = Path(cls.revision.name)
+        extraire_revision_historique(cls.racine_historique)
+
     def setUp(self) -> None:
         self.document = json.loads(MATRICE.read_bytes())
 
@@ -33,11 +39,18 @@ class ContratsVersionnesCampagneV0Tests(unittest.TestCase):
                 json.dumps(document, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                self.assertNotEqual(0, main([str(matrice)]))
+            with self.assertRaises(ErreurContratsVersionnes):
+                valider_contrats_versionnes_campagne_v0(
+                    matrice=matrice,
+                    racine=self.racine_historique,
+                )
 
     def test_matrice_canonique_est_valide(self) -> None:
-        recu = valider_contrats_versionnes_campagne_v0()
+        matrice = self.racine_historique / MATRICE.relative_to(RACINE)
+        recu = valider_contrats_versionnes_campagne_v0(
+            matrice=matrice,
+            racine=self.racine_historique,
+        )
 
         self.assertEqual("CONTRATS_VERSIONNES_CAMPAGNE_V0_OK", recu["status"])
         self.assertEqual(EMPREINTE_MATRICE_ATTENDUE, recu["matrix_sha256"])

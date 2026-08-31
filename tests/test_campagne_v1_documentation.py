@@ -35,6 +35,7 @@ sys.path.insert(0, str(RACINE / "tools"))
 sys.path.insert(0, str(RACINE))
 
 import campagne_v1 as M  # noqa: E402
+from tests._helpers_v1 import materialiser_contrats_historiques  # noqa: E402
 
 _CAMPAGNE = Path("tasks/dev/pre-cadrage-entretien-client/campagne-v1")
 _PAQUET = Path("tasks/dev/pre-cadrage-entretien-client")
@@ -239,6 +240,7 @@ class _RacineJetable(unittest.TestCase):
         for nom in _FICHIERS_PAQUET:
             (racine / _PAQUET / nom).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(RACINE / _PAQUET / nom, racine / _PAQUET / nom)
+        materialiser_contrats_historiques(racine)
         return racine
 
     def _executer(self, racine: Path, *arguments: str) -> dict:
@@ -765,29 +767,14 @@ class GuideUtilisationTests(unittest.TestCase):
         self.assertIn("aucun classement", self.texte)
 
 
-class LienDepuisLeReadmeRacineTests(unittest.TestCase):
-    """Le README racine porte le lien minimal vers le guide, et rien de plus."""
+class ReadmeCourantTests(unittest.TestCase):
+    """Le README courant ne réactive pas le parcours historique V1."""
 
     def setUp(self):
         self.texte = (RACINE / "README.md").read_text(encoding="utf-8")
 
-    def test_lien_relatif_unique_vers_le_guide(self):
-        cible = M.CHEMIN_GUIDE_UTILISATION.as_posix()
-        self.assertEqual(self.texte.count(f"]({cible})"), 1)
-
-    def test_lien_designe_un_fichier_present(self):
-        self.assertTrue(_GUIDE.is_file())
-
-    def test_ajout_limite_a_une_seule_ligne(self):
-        lignes = [
-            ligne
-            for ligne in self.texte.splitlines()
-            if M.CHEMIN_GUIDE_UTILISATION.as_posix() in ligne
-        ]
-        self.assertEqual(len(lignes), 1)
-        # Item de liste ordinaire portant un lien et un seul
-        self.assertRegex(lignes[0], r"^(?:- |\d+\. )")
-        self.assertEqual(len(re.findall(r"\]\([^)]+\)", lignes[0])), 1)
+    def test_guide_historique_absent_du_readme(self):
+        self.assertNotIn(M.CHEMIN_GUIDE_UTILISATION.as_posix(), self.texte)
 
 
 if __name__ == "__main__":

@@ -10,9 +10,51 @@ production n'est contourné."""
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path
+import subprocess
+import tarfile
 from typing import Callable
+
+
+HISTORICAL_CONTRACT_COMMIT = "38e226a59020aad517cd0dbb16892ffb87d448ab"
+HISTORICAL_CONTRACT_PATHS = (
+    "docs/ARD.md",
+    "docs/PRD.md",
+    "docs/RULES.md",
+)
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+def historical_file_bytes(relative_path: str) -> bytes:
+    """Lit un fichier historique depuis Git sans copie persistante."""
+    return subprocess.check_output(
+        [
+            "git",
+            "show",
+            f"{HISTORICAL_CONTRACT_COMMIT}:{relative_path}",
+        ],
+        cwd=REPOSITORY_ROOT,
+    )
+
+
+def materialiser_contrats_historiques(root: Path) -> None:
+    """Matérialise les trois contrats historiques dans une fixture jetable."""
+    for relative_path in HISTORICAL_CONTRACT_PATHS:
+        destination = root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(historical_file_bytes(relative_path))
+
+
+def extraire_revision_historique(destination: Path) -> None:
+    """Extrait la révision historique dans une fixture jetable."""
+    archive = subprocess.check_output(
+        ["git", "archive", HISTORICAL_CONTRACT_COMMIT],
+        cwd=REPOSITORY_ROOT,
+    )
+    with tarfile.open(fileobj=io.BytesIO(archive)) as bundle:
+        bundle.extractall(destination, filter="data")
 
 
 def retirer_couverture_publiee(chemin_etat: "Path") -> None:

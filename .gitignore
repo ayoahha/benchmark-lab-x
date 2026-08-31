@@ -1,8 +1,9 @@
 runs/
 reports/
 .vscode/
-.claude-octopus/
+.claude*/
 __pycache__/
+.pytest_cache/
 *.pyc
 .env*
 !.env.example
