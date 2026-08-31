@@ -136,6 +136,10 @@ class Fixture:
 
                 session_id = "{SESSION_ID}"
                 model = sys.argv[sys.argv.index("--model") + 1]
+                sandbox = (
+                    sys.argv[sys.argv.index("--sandbox") + 1]
+                    if "--sandbox" in sys.argv else "danger-full-access"
+                )
                 print(json.dumps({{"type": "thread.started", "thread_id": session_id}}), flush=True)
                 waiting = os.environ.get("GE22_FAKE_WAIT") == "1" and "resume" not in sys.argv
                 if waiting:
@@ -151,7 +155,7 @@ class Fixture:
                     "payload": {{
                         "model": model,
                         "cwd": str(Path.cwd()),
-                        "sandbox_policy": {{"type": "workspace-write", "network_access": False}},
+                        "sandbox_policy": {{"type": sandbox, "network_access": False}},
                     }},
                 }})
                 with path.open("a", encoding="utf-8") as stream:

@@ -93,11 +93,15 @@ def command_for(contract: dict[str, Any], *, resume: bool, session_id: str | Non
     binary = contract["harness"]["binary_path"]
     model = contract["harness"]["model_expected"]
     agent_root = str(ge.worktree_path(contract) / contract["scope"]["agent_root"])
+    command = [
+        binary, "exec", "--model", model, "--sandbox", "workspace-write",
+        "--cd", agent_root, "--json",
+    ]
     if resume:
         if not session_id:
             raise ge.GraphHold("session attestée requise pour reprendre")
-        return [binary, "exec", "resume", "--model", model, "--json", session_id, "-"]
-    return [binary, "exec", "--model", model, "--sandbox", "workspace-write", "--cd", agent_root, "--json", "-"]
+        return [*command, "resume", session_id, "-"]
+    return [*command, "-"]
 
 
 def adapter_dir(contract: dict[str, Any]) -> Path:
