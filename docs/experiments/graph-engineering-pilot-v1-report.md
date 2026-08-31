@@ -2,9 +2,10 @@
 style_gate: pass
 date: 2026-08-30
 updated: 2026-08-31
-status: PASS_V2_CORRIGE_LOCAL
+status: PASS_V2_1_LONG_LOCAL
 git_base: 81c217e0a585e89c0151090d6cef9581b8a2c741
 v2_git_base: 73ec72f4a3a908c8dd0494ca901c68469b103f51
+v2_1_git_base: 575f80ac96bcd0dbd9dd3f4dc3a806320a7d30bf
 ---
 
 # Loop et Graph Engineering appliqués aux boucles agentiques d’Ayo
@@ -359,6 +360,22 @@ Le premier candidat reste une seule fixture Benchmark Lab‑X défectueuse et r�
 
 `[DÉDUCTION]` Le V2 prouve une charge agentique réversible, l’interruption, la reprise et la provenance cumulée de deux tentatives dans ce périmètre. Il ne prouve pas encore une boucle de plusieurs heures, une panne brutale, un effet externe, le coût monétaire Codex ou le multi-écrivain.
 
+### Pilote long V2.1
+
+`[DÉCISION D’AYO]` Ayo a autorisé un pilote de deux heures, une seule session Codex candidate et quatre contrôles espacés de 30 minutes. La branche `experiment/graph-engineering-pilot-v2-long` et son worktree restent séparés de `main`. Aucun push, merge ou déploiement n’est autorisé.
+
+`[OBSERVATION LOCALE]` La session Codex `01a05796-7905-7e51-b20c-c4327d4de605` a utilisé le modèle demandé et observé `gpt-5.6-sol`. Elle a corrigé la copie isolée en 50,11 secondes avec 162 641 tokens au total. Sa source exacte a été conservée dans `nodes/B/attempts/1.json`, puis le processus du harnais s’est arrêté avec le code 86 avant publication des reçus B et J.
+
+`[OBSERVATION LOCALE]` L’oracle lancé par Codex avait créé `__pycache__`. Le premier évaluateur l’a refusé avant journalisation. L’unique passe corrective du contrat a supprimé seulement le cache compilé attendu de `choisir_provider.py` ; tout autre fichier reste interdit. Aucun second appel modèle n’a été effectué.
+
+`[OBSERVATION LOCALE]` Les quatre contrôles ont eu lieu à 12:01:30, 12:32:11, 13:02:40 et 13:33:17 UTC. Leurs espacements sont de 30 min 41 s, 30 min 29 s et 30 min 37 s. Les trois premiers ont rendu `WAITING_UNTIL_DEADLINE`; le quatrième a rendu `READY_TO_RESUME`. Le terminal est resté `HOLD` et l’empreinte `4e35b704b4de2cfcad4c4f18f9494a363787df5ce5b31f0c64bad641ab469727` n’a pas changé.
+
+`[OBSERVATION LOCALE]` La reprise a fermé B et J depuis la tentative unique, sans rejouer D ou S et sans nouvel appel candidat. Le premier terminal vert a mesuré 7 430,572471 secondes, au-delà des 7 200 secondes exigées. Les octets et dates de D, S et de la tentative sont restés identiques. B porte `attempt=1`, `candidate_calls=1` et le candidat `ebe2e68f17845caf21418624b41989b65040facb98a89923e0d0a75eca987fe5`.
+
+`[OBSERVATION LOCALE]` Aucun faux vert, conflit d’écriture ou perte de contexte n’a été observé. Ayo n’est pas intervenu après son GO. Le coût monétaire Codex reste `INCONNU`. Le pilotage a nécessité une correction du harnais et quatre observations planifiées par la session principale.
+
+`[DÉDUCTION]` Le V2.1 prouve localement une boucle de plus de deux heures, l’arrêt brutal injecté après écriture durable, l’attente fail-closed et la reprise exacte sans nouvel appel. Il ne prouve pas une panne électrique, un effet externe, la sûreté multi-écrivain ou la transférabilité.
+
 ### Différence avec l’orchestration directe U‑025
 
 `[TEXTE INTÉGRAL]` Le contrôle direct et `B` obtiennent la même racine et la même conclusion U‑025. L’exécution directe ne porte ni reçu de dépendance, ni bifurcation, ni jointure, ni terminal extérieur. Le pilote ajoute ces preuves, l’arrêt/reprise externe et la matrice de fausses fins.
@@ -367,25 +384,25 @@ Le premier candidat reste une seule fixture Benchmark Lab‑X défectueuse et r�
 
 ### Limites de la preuve
 
-- `[TEXTE INTÉGRAL]` L’interruption reste contrôlée : après `S` ou pendant la fermeture du reçu `B`. Aucun processus n’a été tué brutalement.
+- `[TEXTE INTÉGRAL]` V1 et V2 utilisent des interruptions contrôlées. V2.1 ajoute `os._exit(86)` après la journalisation durable et avant les reçus B/J. Cette injection ne simule ni panne électrique ni corruption du stockage.
 - `[TEXTE INTÉGRAL]` Les reçus utilisent `fsync`, publication atomique exclusive et synchronisation du répertoire, sans protocole général de panne électrique.
-- `[TEXTE INTÉGRAL]` Aucun effet externe, appel modèle, achat, réseau, multi-écrivain ou conflit réel n’a été testé.
+- `[TEXTE INTÉGRAL]` Le candidat V2.1 utilise un appel Codex. Aucun effet externe métier, achat, multi-écrivain ou conflit réel n’a été testé.
 - `[DÉDUCTION]` Le pilote ne prouve ni `exactly-once`, ni reprise après écriture arbitraire, ni vivacité, ni absence de deadlock, ni transférabilité.
 - `[DÉDUCTION]` Les 13 fausses fins rejetées prouvent ces 13 cas, pas l’élimination de toutes les fausses fins.
 
 ## 9. Verdict
 
-**Verdict : V1 et V2 corrigés localement. Les contre-exécutions sont vertes.**
+**Verdict : V2.1 long probant localement. Envisager une généralisation exige encore une décision d’Ayo.**
 
 `[TEXTE INTÉGRAL]` Le V1 vérifie la dépendance, la bifurcation, la jointure, l’évaluation avant fermeture, la publication exclusive, l’interruption pendant fermeture, la reprise depuis `D/S` et le refus des 13 fausses fins. `PASS_PILOTE_LOCAL` reste le verdict terminal réduit d’une trace locale et mono-écrivain validée par `V`. Il ne vaut ni preuve de panne électrique, ni sûreté multi-écrivain, ni acceptation globale du Graph Engineering.
 
-`[DÉDUCTION]` Le prochain choix porte sur un pilote long et borné dans Benchmark Lab‑X. Le V2 permet de le proposer, mais ne l’autorise pas de lui-même.
+`[TEXTE INTÉGRAL]` Le V2.1 vérifie une durée supérieure à deux heures, quatre contrôles espacés sans mutation, un arrêt brutal après journalisation, un terminal `HOLD` avant reprise et une reprise exacte sans second appel candidat.
 
-**État d’autorité : PASS local sur V2 corrigé ; HOLD sur le pilote long et sur la généralisation globale.** Aucune mémoire, directive, skill, hook, configuration Codex ou Claude, ni plateforme n’a été modifiée. Aucun push, merge ou publication n’a été effectué.
+**État d’autorité : `PASS_V2_1_LONG_LOCAL` ; généralisation globale en attente d’une décision explicite.** Aucune mémoire, directive, skill, hook, configuration Codex ou Claude, ni plateforme n’a été modifiée. Aucun push, merge ou déploiement n’a été effectué.
 
 ## 10. Hypothèses globales conservées, sans application
 
-La généralisation reste suspendue. Les éléments suivants restent des hypothèses à réexaminer seulement après un pilote long concluant :
+Le pilote long est concluant dans son périmètre local. Ayo peut maintenant examiner les changements suivants ; aucun n’est appliqué par ce rapport :
 
 1. `[DÉDUCTION]` Définir un reçu de nœud commun : identité, tentative, parents, état, sortie hachée, propriétaire, contrat d’évaluation, provenance, temps, coût et intervention humaine.
 2. `[DÉDUCTION]` Exiger un vérificateur terminal extérieur pour toute exécution qui comporte une bifurcation ou une jointure. Le runner ne doit jamais se déclarer vert lui-même.
@@ -394,14 +411,12 @@ La généralisation reste suspendue. Les éléments suivants restent des hypoth�
 5. `[DÉDUCTION]` Réutiliser Codex, Claude Code, Git et les primitives du projet avant d’envisager une plateforme supplémentaire. Les guardrails automatiques traitent les erreurs récupérables ; les gates humaines restent réservées aux effets sensibles ou ambigus. Herdr et Paperclip local restent hors du chemin de généralisation.
 6. `[HYPOTHÈSE NON VÉRIFIÉE]` Une instruction partagée légère pourrait devenir utile après un second pilote concordant. Créer une skill maintenant serait prématuré.
 
-`[DÉDUCTION]` Aucun changement global ne doit être appliqué avant le choix explicite d’Ayo. La synthèse canonique destinée au LLM Wiki est préparée séparément. Toute généralisation opérationnelle attend encore son choix explicite.
+`[DÉDUCTION]` Aucun changement global ne doit être appliqué avant le choix explicite d’Ayo. Toute généralisation opérationnelle attend encore cette décision.
 
 ## 11. Mise à disposition dans LLM Wiki
 
 `[TEXTE INTÉGRAL]` Une page canonique autonome a été préparée dans `docs/experiments/graph-engineering-canonical-wiki.md`. Elle contient les définitions, le glossaire AOV, les primitives `/goal` et `/loop`, la gestion d’erreurs, les guardrails, les boucles de plus de 24 heures, les décisions Herdr/Paperclip et les limites du pilote.
 
-`[TEXTE INTÉGRAL]` L’adaptateur LLM Wiki a accepté localement la session `session_19202ad3c25be4e4`. L’opération suivante a été refusée avant capture avec `state=REJECT` et `LLM_WIKI_AGENT_UNKNOWN_VERB`. La procédure impose alors l’arrêt sans seconde tentative modifiée. Aucun contenu n’a donc été capturé ou proposé dans le Wiki pendant cette tranche.
+`[OBSERVATION LOCALE]` Une tâche Codex dédiée a ensuite enregistré la session `session_3f2395003101337d`. La recherche du titre exact a trouvé la page active `page_e32819e14fa894dde8ed0d8bb537953d`, reliée à la source `src_d0dcacc825d3d1c7`. Aucune capture, proposition ou duplication n’a été créée.
 
-`[OBSERVATION LOCALE]` Une nouvelle invocation locale, le 31 août 2026, a été refusée avant capture avec `LLM_WIKI_AGENT_INVALID_ARGV`. La procédure a de nouveau imposé l’arrêt immédiat, sans accès direct ni tentative reformulée.
-
-**État : page prête localement, ingestion LLM Wiki en HOLD.**
+**État : page active dans LLM Wiki. Les ajouts V2.1 locaux ne sont pas publiés par cette tranche.**

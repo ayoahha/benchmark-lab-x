@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import difflib
 import json
 import os
@@ -47,9 +48,38 @@ def attempt_path(run_dir: Path, attempt: int) -> Path:
     return run_dir / "nodes" / "B" / "attempts" / f"{attempt}.json"
 
 
-def genesis_value(run_id: str, scenario: str) -> dict[str, Any]:
+def utc_value(value: str | None = None) -> datetime:
+    if value is None:
+        return datetime.now(timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise PilotError("horodatage UTC invalide") from error
+    if parsed.tzinfo is None:
+        raise PilotError("horodatage UTC sans fuseau")
+    return parsed.astimezone(timezone.utc)
+
+
+def utc_text(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def genesis_value(
+    run_id: str,
+    scenario: str,
+    started_utc: str,
+    duration_seconds: int,
+    clock_mode: str,
+) -> dict[str, Any]:
     if scenario not in {"control", "defect"}:
         raise PilotError("scénario inconnu")
+    if not isinstance(duration_seconds, int) or duration_seconds < 0:
+        raise PilotError("durée invalide")
+    if scenario == "defect" and duration_seconds == 0:
+        raise PilotError("le scénario defect exige une durée positive")
+    if clock_mode not in {"system", "synthetic"}:
+        raise PilotError("mode d’horloge invalide")
+    start = utc_value(started_utc)
     route = "A" if scenario == "control" else "B"
     return {
         "schema_version": "graph-engineering-pilot-v2/genesis/v1",
@@ -61,7 +91,31 @@ def genesis_value(run_id: str, scenario: str) -> dict[str, Any]:
         "selected_nodes": ["D", "S", route, "J"],
         "external_effects_authorized": False,
         "owner": OWNER,
+        "started_utc": utc_text(start),
+        "duration_seconds": duration_seconds,
+        "not_before_utc": utc_text(start + timedelta(seconds=duration_seconds)),
+        "clock_mode": clock_mode,
     }
+
+
+def validated_genesis(run_dir: Path, scenario: str | None = None) -> dict[str, Any]:
+    genesis = v1.read_json(run_dir / "genesis.json")
+    observed_scenario = genesis.get("scenario")
+    if scenario is not None and observed_scenario != scenario:
+        raise PilotError("scénario de genèse divergent")
+    try:
+        expected = genesis_value(
+            run_dir.name,
+            observed_scenario,
+            genesis["started_utc"],
+            genesis["duration_seconds"],
+            genesis["clock_mode"],
+        )
+    except (KeyError, TypeError):
+        raise PilotError("genèse temporelle invalide") from None
+    if genesis != expected:
+        raise PilotError("genèse divergente")
+    return genesis
 
 
 def run_acceptance(module_directory: Path) -> dict[str, Any]:
@@ -165,6 +219,27 @@ def prepare_agent_workspace(run_dir: Path) -> Path:
     return workspace
 
 
+def remove_agent_python_cache(run_dir: Path) -> None:
+    workspace = run_dir / "nodes" / "B" / "workspace"
+    cache = workspace / "__pycache__"
+    if not cache.exists():
+        return
+    entries = list(cache.iterdir()) if cache.is_dir() and not cache.is_symlink() else []
+    if (
+        not entries
+        or any(
+            entry.is_symlink()
+            or not entry.is_file()
+            or not entry.name.startswith("choisir_provider.")
+            or entry.suffix != ".pyc"
+            for entry in entries
+        )
+    ):
+        raise PilotError("cache Python agent inattendu")
+    shutil.rmtree(cache)
+    v1.sync_directory(workspace)
+
+
 def execute_prefix(
     run_dir: Path,
     genesis: dict[str, Any],
@@ -232,13 +307,18 @@ def execute_control(run_dir: Path, genesis: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_graph(run_dir: Path, scenario: str, *, resume: bool) -> dict[str, Any]:
+def run_graph(
+    run_dir: Path,
+    scenario: str,
+    *,
+    resume: bool,
+    duration_seconds: int,
+    now_utc: str | None,
+) -> dict[str, Any]:
     if resume:
         if scenario != "defect":
             raise PilotError("reprise réservée au scénario defect")
-        genesis = v1.read_json(run_dir / "genesis.json")
-        if genesis != genesis_value(run_dir.name, scenario):
-            raise PilotError("genèse divergente à la reprise")
+        genesis = validated_genesis(run_dir, scenario)
         nodes = run_dir / "nodes"
         if run_dir.is_symlink() or not run_dir.is_dir() or nodes.is_symlink() or not nodes.is_dir():
             raise PilotError("périmètre de reprise invalide")
@@ -259,7 +339,8 @@ def run_graph(run_dir: Path, scenario: str, *, resume: bool) -> dict[str, Any]:
                 temporary_receipts.append(path)
                 continue
             raise PilotError("périmètre B non engagé ambigu")
-        load_agent_attempts(run_dir)
+        if load_agent_attempts(run_dir):
+            raise PilotError("tentative déjà journalisée: utiliser la reprise exacte")
         workspace = b_directory / "workspace"
         if workspace.is_symlink() or not workspace.is_dir():
             raise PilotError("workspace B non engagé invalide")
@@ -275,7 +356,15 @@ def run_graph(run_dir: Path, scenario: str, *, resume: bool) -> dict[str, Any]:
             "replayed_nodes": [],
             "workspace": str(workspace),
         }
-    genesis = genesis_value(run_dir.name, scenario)
+    if scenario == "control" and duration_seconds != 0:
+        raise PilotError("le contrôle ne doit pas attendre")
+    genesis = genesis_value(
+        run_dir.name,
+        scenario,
+        utc_text(utc_value(now_utc)),
+        duration_seconds,
+        "synthetic" if now_utc is not None else "system",
+    )
     v1.write_new(run_dir / "genesis.json", genesis)
     if scenario == "control":
         return execute_control(run_dir, genesis)
@@ -434,7 +523,7 @@ def load_agent_attempts(run_dir: Path) -> list[dict[str, Any]]:
     }
     output_fields = {
         "defect_sha256", "candidate_sha256", "acceptance_verdict",
-        "acceptance_exit_code", "candidate_diff", "agent",
+        "acceptance_exit_code", "candidate_diff", "candidate_source_utf8", "agent",
     }
     for number, path in zip(numbers, paths, strict=True):
         attempt = v1.read_json(path)
@@ -456,6 +545,9 @@ def load_agent_attempts(run_dir: Path) -> list[dict[str, Any]]:
             or output.get("defect_sha256") != source_lock()["defect_sha256"]
             or not isinstance(output.get("candidate_sha256"), str)
             or len(output["candidate_sha256"]) != 64
+            or not isinstance(output.get("candidate_source_utf8"), str)
+            or v1.digest(output["candidate_source_utf8"].encode())
+            != output["candidate_sha256"]
             or output.get("acceptance_verdict") != "PASS"
             or output.get("acceptance_exit_code") != 0
             or not isinstance(output.get("candidate_diff"), str)
@@ -514,6 +606,10 @@ def evaluate_agent_workspace(
         raise PilotError("oracle agent modifié")
     candidate_path = workspace / "choisir_provider.py"
     candidate = candidate_path.read_bytes()
+    try:
+        candidate_text = candidate.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise PilotError("source candidate non UTF-8") from error
     defective = defective_source()
     if candidate == defective:
         raise PilotError("défaut non corrigé")
@@ -523,9 +619,10 @@ def evaluate_agent_workspace(
         "candidate_sha256": v1.digest(candidate),
         "acceptance_verdict": acceptance["verdict"],
         "acceptance_exit_code": acceptance["exit_code"],
+        "candidate_source_utf8": candidate_text,
         "candidate_diff": "".join(difflib.unified_diff(
             defective.decode().splitlines(keepends=True),
-            candidate.decode().splitlines(keepends=True),
+            candidate_text.splitlines(keepends=True),
             fromfile="a/tools/choisir_provider.py",
             tofile="b/tools/choisir_provider.py",
         )),
@@ -540,29 +637,71 @@ def evaluate_agent_workspace(
     return output, expected
 
 
-def continue_agent(
+def timing_state(genesis: dict[str, Any], now_utc: str | None) -> dict[str, Any]:
+    if genesis["clock_mode"] == "system" and now_utc is not None:
+        raise PilotError("substitution d’horloge interdite pour un pilote réel")
+    if genesis["clock_mode"] == "synthetic" and now_utc is None:
+        raise PilotError("horloge synthétique requise")
+    now = utc_value(now_utc)
+    started = utc_value(genesis["started_utc"])
+    deadline = utc_value(genesis["not_before_utc"])
+    elapsed = (now - started).total_seconds()
+    if elapsed < 0:
+        raise PilotError("horloge antérieure au début du pilote")
+    return {
+        "elapsed_seconds": elapsed,
+        "not_before_utc": genesis["not_before_utc"],
+        "ready": now >= deadline,
+    }
+
+
+def pending_agent_state(
     run_dir: Path,
-    agent_evidence_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    genesis = validated_genesis(run_dir, "defect")
+    if receipt_path(run_dir, "B").exists() or receipt_path(run_dir, "J").exists():
+        raise PilotError("reprise ambiguë")
+    b_directory = run_dir / "nodes" / "B"
+    if b_directory.is_symlink() or not b_directory.is_dir():
+        raise PilotError("périmètre B invalide")
+    if {path.name for path in b_directory.iterdir()} != {"workspace", "attempts"}:
+        raise PilotError("état B en attente ambigu")
+    d, s = load_prefix(run_dir, genesis)
+    attempts = load_agent_attempts(run_dir)
+    if len(attempts) != 1:
+        raise PilotError("une tentative B durable exacte est requise")
+    output = attempts[0]["output"]
+    observed, expected = evaluate_agent_workspace(run_dir, output["agent"])
+    if observed != expected or observed != output:
+        raise PilotError("workspace B divergent de la tentative durable")
+    return genesis, d, s, attempts[0]
+
+
+def pending_status(run_dir: Path, now_utc: str | None) -> dict[str, Any]:
+    before = v1.scope_snapshot(run_dir)
+    genesis, _, _, attempt = pending_agent_state(run_dir)
+    timing = timing_state(genesis, now_utc)
+    result = {
+        "state": "READY_TO_RESUME" if timing["ready"] else "WAITING_UNTIL_DEADLINE",
+        "candidate_calls": attempt["attempt"],
+        "elapsed_seconds": timing["elapsed_seconds"],
+        "not_before_utc": timing["not_before_utc"],
+    }
+    if v1.scope_snapshot(run_dir) != before:
+        raise PilotError("le contrôle d’attente a écrit")
+    return result
+
+
+def close_agent_branch(
+    run_dir: Path,
+    genesis: dict[str, Any],
+    d: dict[str, Any],
+    s: dict[str, Any],
+    attempt: dict[str, Any],
     *,
     interrupt_before_b_receipt: bool,
 ) -> dict[str, Any]:
-    genesis = v1.read_json(run_dir / "genesis.json")
-    if genesis != genesis_value(run_dir.name, "defect"):
-        raise PilotError("genèse defect divergente")
-    if receipt_path(run_dir, "B").exists() or receipt_path(run_dir, "J").exists():
-        raise PilotError("continuation ambiguë")
-    b_directory = run_dir / "nodes" / "B"
-    if any(
-        path.name.startswith(".receipt.json.") and path.name.endswith(".tmp")
-        for path in b_directory.iterdir()
-    ):
-        raise PilotError("reprise requise après interruption de B")
-    d, s = load_prefix(run_dir, genesis)
-    evidence = load_agent_evidence(agent_evidence_path)
-    output, expected = evaluate_agent_workspace(run_dir, evidence)
-    if output != expected:
-        raise PilotError("sortie du nœud B refusée par son évaluateur")
-    attempt = write_agent_attempt(run_dir, output)
+    output = attempt["output"]
     genesis_sha = v1.digest(v1.canonical(genesis))
     try:
         b = close_node(
@@ -572,7 +711,7 @@ def continue_agent(
             {"D": d["receipt_sha256"]},
             ["D->B"],
             output,
-            expected,
+            output,
             ["nodes/B/workspace/", "nodes/B/attempts/", "nodes/B/receipt.json"],
             cost={"external_cost_usd": "INCONNU", "candidate_calls": attempt["attempt"]},
             attempt=attempt["attempt"],
@@ -609,12 +748,70 @@ def continue_agent(
     }
 
 
-def terminal_verdict(run_dir: Path) -> dict[str, Any]:
+def continue_agent(
+    run_dir: Path,
+    agent_evidence_path: Path | None,
+    *,
+    interrupt_before_b_receipt: bool,
+    crash_after_attempt: bool,
+    reuse_last_attempt: bool,
+    now_utc: str | None,
+) -> dict[str, Any]:
+    if reuse_last_attempt and (interrupt_before_b_receipt or crash_after_attempt):
+        raise PilotError("la reprise exacte ne peut pas être réinterrompue")
+    if interrupt_before_b_receipt and crash_after_attempt:
+        raise PilotError("modes d’interruption incompatibles")
+    if reuse_last_attempt:
+        genesis, d, s, attempt = pending_agent_state(run_dir)
+        if not timing_state(genesis, now_utc)["ready"]:
+            raise PilotError("deadline de reprise non atteinte")
+        return close_agent_branch(
+            run_dir,
+            genesis,
+            d,
+            s,
+            attempt,
+            interrupt_before_b_receipt=False,
+        )
+    if agent_evidence_path is None:
+        raise PilotError("preuve agent requise")
+    genesis = validated_genesis(run_dir, "defect")
+    if receipt_path(run_dir, "B").exists() or receipt_path(run_dir, "J").exists():
+        raise PilotError("continuation ambiguë")
+    b_directory = run_dir / "nodes" / "B"
+    if any(
+        path.name.startswith(".receipt.json.") and path.name.endswith(".tmp")
+        for path in b_directory.iterdir()
+    ):
+        raise PilotError("reprise requise après interruption de B")
+    d, s = load_prefix(run_dir, genesis)
+    if load_agent_attempts(run_dir):
+        raise PilotError("tentative déjà journalisée: utiliser la reprise exacte")
+    evidence = load_agent_evidence(agent_evidence_path)
+    remove_agent_python_cache(run_dir)
+    output, expected = evaluate_agent_workspace(run_dir, evidence)
+    if output != expected:
+        raise PilotError("sortie du nœud B refusée par son évaluateur")
+    attempt = write_agent_attempt(run_dir, output)
+    if crash_after_attempt:
+        os._exit(86)
+    return close_agent_branch(
+        run_dir,
+        genesis,
+        d,
+        s,
+        attempt,
+        interrupt_before_b_receipt=interrupt_before_b_receipt,
+    )
+
+
+def terminal_verdict(run_dir: Path, now_utc: str | None = None) -> dict[str, Any]:
     before = v1.scope_snapshot(run_dir)
     try:
-        genesis = v1.read_json(run_dir / "genesis.json")
-        if genesis != genesis_value(run_dir.name, genesis.get("scenario", "")):
-            raise PilotError("genèse divergente")
+        genesis = validated_genesis(run_dir)
+        timing = timing_state(genesis, now_utc)
+        if not timing["ready"]:
+            raise PilotError("condition temporelle terminale non atteinte")
         if {path.name for path in run_dir.iterdir()} != {"genesis.json", "nodes"}:
             raise PilotError("état racine ambigu")
         selected = set(genesis["selected_nodes"])
@@ -648,8 +845,8 @@ def terminal_verdict(run_dir: Path) -> dict[str, Any]:
             }:
                 raise PilotError("état B ambigu")
             attempts = load_agent_attempts(run_dir)
-            if not attempts:
-                raise PilotError("historique des tentatives B absent")
+            if len(attempts) != 1:
+                raise PilotError("le terminal exige une tentative B unique")
             evidence = receipts["B"].get("output", {}).get("agent")
             if not isinstance(evidence, dict):
                 raise PilotError("preuve agent absente")
@@ -687,7 +884,12 @@ def terminal_verdict(run_dir: Path) -> dict[str, Any]:
             ["S->J", f"{route}->J"],
             j_output,
         )
-        result = {"verdict": "PASS_PILOTE_AGENTIQUE_LOCAL", "route": route}
+        result = {
+            "verdict": "PASS_PILOTE_AGENTIQUE_LOCAL",
+            "route": route,
+            "elapsed_seconds": timing["elapsed_seconds"],
+            "not_before_utc": timing["not_before_utc"],
+        }
     except (PilotError, KeyError, TypeError, ValueError) as error:
         result = {"verdict": "HOLD_PILOTE_AGENTIQUE_LOCAL", "error": str(error)}
     if v1.scope_snapshot(run_dir) != before:
@@ -702,26 +904,53 @@ def main() -> None:
     run_parser.add_argument("--run-dir", type=Path, required=True)
     run_parser.add_argument("--scenario", choices=("control", "defect"), required=True)
     run_parser.add_argument("--resume", action="store_true")
+    run_parser.add_argument("--duration-seconds", type=int, default=0)
+    run_parser.add_argument("--now-utc")
     continue_parser = subparsers.add_parser("continue")
     continue_parser.add_argument("--run-dir", type=Path, required=True)
-    continue_parser.add_argument("--agent-evidence", type=Path, required=True)
+    continuation = continue_parser.add_mutually_exclusive_group(required=True)
+    continuation.add_argument("--agent-evidence", type=Path)
+    continuation.add_argument("--reuse-last-attempt", action="store_true")
     continue_parser.add_argument("--interrupt-before-b-receipt", action="store_true")
+    continue_parser.add_argument("--crash-after-attempt", action="store_true")
+    continue_parser.add_argument("--now-utc")
+    status_parser = subparsers.add_parser("status")
+    status_parser.add_argument("--run-dir", type=Path, required=True)
+    status_parser.add_argument("--expect", choices=("waiting", "ready"), required=True)
+    status_parser.add_argument("--now-utc")
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--run-dir", type=Path, required=True)
+    verify_parser.add_argument("--now-utc")
     args = parser.parse_args()
     try:
         if args.command == "run":
-            result = run_graph(args.run_dir, args.scenario, resume=args.resume)
+            result = run_graph(
+                args.run_dir,
+                args.scenario,
+                resume=args.resume,
+                duration_seconds=args.duration_seconds,
+                now_utc=args.now_utc,
+            )
             exit_code = 0
         elif args.command == "continue":
             result = continue_agent(
                 args.run_dir,
                 args.agent_evidence,
                 interrupt_before_b_receipt=args.interrupt_before_b_receipt,
+                crash_after_attempt=args.crash_after_attempt,
+                reuse_last_attempt=args.reuse_last_attempt,
+                now_utc=args.now_utc,
             )
             exit_code = 0
+        elif args.command == "status":
+            result = pending_status(args.run_dir, args.now_utc)
+            expected = {
+                "waiting": "WAITING_UNTIL_DEADLINE",
+                "ready": "READY_TO_RESUME",
+            }[args.expect]
+            exit_code = 0 if result["state"] == expected else 1
         else:
-            result = terminal_verdict(args.run_dir)
+            result = terminal_verdict(args.run_dir, args.now_utc)
             exit_code = 0 if result["verdict"] == "PASS_PILOTE_AGENTIQUE_LOCAL" else 1
     except (PilotError, OSError, subprocess.SubprocessError) as error:
         result, exit_code = {"state": "HOLD_PILOTE_AGENTIQUE_LOCAL", "error": str(error)}, 1

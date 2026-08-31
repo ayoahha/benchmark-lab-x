@@ -2,7 +2,7 @@
 title: "Graph Engineering et Loop Engineering pour les boucles agentiques"
 date: 2026-08-30
 updated: 2026-08-31
-status: ready_for_llm_wiki
+status: ready_for_llm_wiki_update
 visibility: public
 style_gate: pass
 retrieval_terms:
@@ -203,13 +203,17 @@ La preuve reste locale et déterministe. Elle couvre une interruption contrôlé
 
 `[OBSERVATION LOCALE]` Grok Build a sélectionné explicitement `grok-4.6` ; la trace de revue rapporte `grok-4.6-build`. Son verdict initial `CORRIGER_V2` a identifié une perte de provenance : le reçu terminal ne comptait que la seconde tentative. Une seule passe corrective a ajouté le journal immuable des tentatives, aligné `attempt` et `candidate_calls`, puis fait refuser au terminal tout journal absent, discontinu ou non aligné. Six tests V1 et V2 passent. Une campagne de correction fraîche rend A `PASS`, B interrompu `HOLD`, puis B repris `PASS` avec deux tentatives durables.
 
-`[DÉDUCTION]` Ce résultat autorise à proposer un pilote long dans Benchmark Lab‑X. Il ne prouve ni une durée de plusieurs heures, ni une panne réelle, ni un coût monétaire Codex, ni la sûreté multi-écrivain. Il n’autorise aucune généralisation globale.
+`[OBSERVATION LOCALE]` Le V2.1 a ensuite duré 7 430,572471 secondes avant son premier terminal vert. Une session Codex observée sous `gpt-5.6-sol` a produit le candidat en 50,11 secondes. Le harnais a journalisé sa source exacte, puis s’est arrêté brutalement avec le code 86 avant les reçus B et J. Quatre contrôles espacés de plus de 30 minutes ont conservé la même empreinte, un seul appel candidat et un terminal `HOLD`. Après 7 200 secondes, la reprise a relu la tentative durable, fermé B et J sans nouvel appel, puis rendu `PASS_PILOTE_AGENTIQUE_LOCAL`.
+
+`[OBSERVATION LOCALE]` Le premier passage réel a aussi révélé un cache Python créé par l’oracle. L’évaluateur l’a refusé avant journalisation. L’unique passe corrective a supprimé seulement ce cache interpréteur attendu ; tout autre fichier reste bloquant. Aucun conflit d’écriture ni perte de contexte n’a été observé.
+
+`[DÉDUCTION]` Le pilote long prouve localement la durée bornée, l’arrêt brutal injecté, l’absence de faux vert avant l’échéance et la reprise exacte d’une tentative unique. Il ne prouve ni panne électrique, effet externe, coût monétaire Codex, sûreté multi-écrivain ou transférabilité. Toute généralisation reste une décision distincte d’Ayo.
 
 ## Seuil de complexification
 
 Ajouter un composant seulement lorsqu’un essai produit un problème que les primitives natives et les reçus ne peuvent pas résoudre : perte d’état, double effet, conflit d’écriture, absence de reprise ou observabilité insuffisante.
 
-`[DÉDUCTION]` Le prochain essai proposé est une boucle longue bornée dans Benchmark Lab‑X, sous autorité distincte d’Ayo. Aucune mutation globale ne découle automatiquement de cette page.
+`[DÉDUCTION]` Le pilote long n’a révélé aucun besoin de moteur supplémentaire. Ayo peut maintenant décider d’abandonner, de demander un autre pilote ciblé ou d’envisager une généralisation. Aucune mutation globale ne découle automatiquement de cette page.
 
 ## Sources principales
 
