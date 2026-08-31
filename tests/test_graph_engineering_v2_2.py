@@ -81,6 +81,17 @@ class Fixture:
                 },
             ],
             "harness": {"kind": "codex-exec", "binary": str(self.fake_codex), "model": "gpt-5.6-sol"},
+            "cost": {
+                "model": "gpt-5.6-sol",
+                "currency": "USD",
+                "input_per_million": "2",
+                "output_per_million": "10",
+                "cached_input_per_million": None,
+                "source": "OWNER_PROVIDED_2026-08-31",
+                "actual_incremental": "0",
+                "actual_status": "OWNER_DECLARED_SUBSCRIPTION_EXCLUDED",
+                "selection_criterion": False,
+            },
         }
         self.write_request()
         self.contract_path = self.run_dir / "contract.json"
@@ -169,17 +180,30 @@ class Fixture:
                 if waiting:
                     time.sleep(60)
                 Path("target.txt").write_text("READY\\n", encoding="utf-8")
-                print(json.dumps({{"type": "turn.completed", "usage": {{"input_tokens": 1, "output_tokens": 1}}}}), flush=True)
+                usage_event = {{"type": "turn.completed", "usage": {{
+                    "input_tokens": 10,
+                    "cached_input_tokens": 4,
+                    "cache_write_input_tokens": 0,
+                    "output_tokens": 3,
+                    "reasoning_output_tokens": 1,
+                }}}}
+                usage_mode = os.environ.get("GE22_FAKE_USAGE", "normal")
+                if usage_mode != "missing":
+                    print(json.dumps(usage_event), flush=True)
+                if usage_mode == "duplicate":
+                    print(json.dumps(usage_event), flush=True)
                 """
             ),
             encoding="utf-8",
         )
         self.fake_codex.chmod(0o755)
 
-    def agent_environment(self, *, wait: bool = False) -> dict[str, str]:
+    def agent_environment(self, *, wait: bool = False, usage: str = "normal") -> dict[str, str]:
         values = {"GE22_FAKE_SESSION_ROOT": str(self.sessions)}
         if wait:
             values["GE22_FAKE_WAIT"] = "1"
+        if usage != "normal":
+            values["GE22_FAKE_USAGE"] = usage
         return values
 
     def complete_agent(self, *, interrupted: bool = False) -> dict[str, object]:
@@ -239,7 +263,17 @@ class GraphEngineeringV22Test(unittest.TestCase):
         )
         self.assertEqual(manifest["session_id"], SESSION_ID)
         self.assertEqual(manifest["agent_logical_sessions"], 1)
-        self.assertEqual(manifest["benchmark_candidate_calls"], 0)
+        self.assertEqual(manifest["benchmark_candidate_calls"], "NOT_DIRECTLY_OBSERVED")
+        self.assertEqual(
+            manifest["usage"],
+            {
+                "cache_write_input_tokens": 0,
+                "cached_input_tokens": 4,
+                "input_tokens": 10,
+                "output_tokens": 3,
+                "reasoning_output_tokens": 1,
+            },
+        )
         held = self._held(lambda: evaluator.evaluate(fixture.contract_path, session_roots=[fixture.sessions]))
         self.assertIn("objet absent", str(held.exception))
         artifacts_before_close = manifest["artifact_hashes"].copy()
@@ -254,7 +288,41 @@ class GraphEngineeringV22Test(unittest.TestCase):
         self.assertEqual(terminal["tests_discovered"], {"repository": 3})
         report = ge.read_object(fixture.run_dir / "pilot-report.json")
         self.assertTrue(report["evaluation_start_matches_agent_end"])
-        self.assertEqual(report["git_effects"]["agent_commits"], 0)
+        self.assertEqual(report["local_git_evidence"]["agent_commits"], 0)
+        self.assertEqual(report["local_git_evidence"]["remote_effects"], "NOT_DIRECTLY_OBSERVED")
+        self.assertEqual(
+            report["cost"]["api_equivalent_indicative"],
+            {
+                "cached_input_rate": "NOT_PROVIDED",
+                "flat_input_rate_estimate": "0.000050",
+                "input_rate_per_million": "2",
+                "known_non_cached_plus_output": "0.000042",
+                "output_rate_per_million": "10",
+                "reasoning_already_in_output_tokens": True,
+            },
+        )
+        review = (fixture.run_dir / "owner-review.md").read_text()
+        self.assertIn("style_gate: pass", review)
+        self.assertIn("Le coût n'est pas un critère de sélection", review)
+        repeated = evaluator.evaluate(fixture.contract_path, session_roots=[fixture.sessions])
+        self.assertTrue(repeated["reused_terminal_report"])
+
+    def test_missing_or_duplicate_terminal_usage_holds(self) -> None:
+        for case in ("missing", "duplicate"):
+            with self.subTest(case=case):
+                fixture = Fixture("B")
+                try:
+                    ge.prepare(fixture.contract_path)
+                    with patch.dict(os.environ, fixture.agent_environment(usage=case), clear=False):
+                        held = self._held(lambda: adapter.run_adapter(
+                            fixture.contract_path,
+                            resume=False,
+                            interrupt_after_session=False,
+                            session_roots=[fixture.sessions],
+                        ))
+                    self.assertIn("usage Codex absent ou ambigu", str(held.exception))
+                finally:
+                    fixture.close()
 
     def test_dirty_index_conflict_wrong_identity_symlink_and_lock_block_prepare(self) -> None:
         cases = ("dirty", "index", "conflict", "head", "branch", "symlink", "lock")
@@ -428,6 +496,14 @@ class GraphEngineeringV22Test(unittest.TestCase):
             self._held(lambda: ge.create_contract(linked.request_path))
         finally:
             linked.close()
+
+        invalid_cost = Fixture("B", create_contract=False)
+        try:
+            invalid_cost.request["cost"]["selection_criterion"] = True
+            invalid_cost.write_request()
+            self._held(lambda: ge.create_contract(invalid_cost.request_path))
+        finally:
+            invalid_cost.close()
 
     @staticmethod
     def _append(path: Path) -> None:

@@ -7,14 +7,138 @@ import os
 import re
 import stat
 import subprocess
+from decimal import Decimal
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, mkstemp
 from time import perf_counter
 from typing import Any
 
 from tools import graph_engineering_pilot_v1 as v1
 from tools import graph_engineering_v2_2 as ge
 from tools import graph_engineering_v2_2_adapter as adapter
+
+MILLION = Decimal("1000000")
+
+
+def usd(value: Decimal) -> str:
+    return format(value.quantize(Decimal("0.000001")), "f")
+
+
+def write_new_file(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path)
+        temporary.unlink()
+        v1.sync_directory(path.parent)
+    except FileExistsError as error:
+        raise v1.PilotError(f"objet fermé déjà présent: {path}") from error
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def cost_summary(contract: dict[str, Any], manifest: dict[str, Any] | None) -> dict[str, Any]:
+    declared = contract["cost"]
+    base = {
+        "actual_incremental": declared["actual_incremental"],
+        "actual_status": declared["actual_status"],
+        "currency": declared["currency"],
+        "model": declared["model"],
+        "selection_criterion": False,
+        "source": declared["source"],
+    }
+    if manifest is None:
+        return {**base, "usage": None, "api_equivalent_indicative": {"status": "NOT_APPLICABLE_NO_AGENT"}}
+    usage = manifest["usage"]
+    input_rate = Decimal(declared["input_per_million"])
+    output_rate = Decimal(declared["output_per_million"])
+    uncached = usage["input_tokens"] - usage["cached_input_tokens"]
+    known = (Decimal(uncached) * input_rate + Decimal(usage["output_tokens"]) * output_rate) / MILLION
+    flat = (
+        Decimal(usage["input_tokens"]) * input_rate
+        + Decimal(usage["output_tokens"]) * output_rate
+    ) / MILLION
+    return {
+        **base,
+        "usage": usage,
+        "api_equivalent_indicative": {
+            "known_non_cached_plus_output": usd(known),
+            "flat_input_rate_estimate": usd(flat),
+            "cached_input_rate": "NOT_PROVIDED",
+            "input_rate_per_million": declared["input_per_million"],
+            "output_rate_per_million": declared["output_per_million"],
+            "reasoning_already_in_output_tokens": True,
+        },
+    }
+
+
+def owner_review(report: dict[str, Any]) -> bytes:
+    cost = report["cost"]
+    usage = cost["usage"]
+    tests = ", ".join(f"{name}: {count}" for name, count in report["tests_discovered"].items())
+    changed = ", ".join(report["local_git_evidence"]["changed_paths"]) or "aucun"
+    validation_seconds = sum(Decimal(str(item["wall_seconds"])) for item in report["acceptance"])
+    if usage is None:
+        usage_line = "Aucun appel agent sur cette route."
+        estimate_line = "Non applicable sur cette route."
+    else:
+        usage_line = (
+            f"{usage['input_tokens']} tokens d'entrée, dont {usage['cached_input_tokens']} en cache ; "
+            f"{usage['output_tokens']} tokens de sortie, dont {usage['reasoning_output_tokens']} de raisonnement."
+        )
+        estimate = cost["api_equivalent_indicative"]
+        estimate_line = (
+            f"{estimate['flat_input_rate_estimate']} USD si tout l'input prend le tarif fourni ; "
+            f"sous-total hors cache connu {estimate['known_non_cached_plus_output']} USD. "
+            "Le tarif du cache n'a pas été fourni."
+        )
+    model = report["model_observed"] or "aucun"
+    session = report["session_id"] or "aucune"
+    text = f"""---
+style_gate: pass
+---
+
+# Revue propriétaire Graph Engineering V2.2
+
+Verdict : `{report['verdict']}`
+
+## Résultat
+
+- Run : `{report['run_id']}`
+- Route exécutée : `{' -> '.join(report['graph']['routes'][report['route']])}`
+- Modèle observé : `{model}`
+- Session Codex : `{session}`
+- Invocations : {report['adapter_process_invocations']} ; sessions logiques : {report['agent_logical_sessions']}
+- Fichiers modifiés : {changed}
+- Tests observés : {tests}
+- Validation locale : {validation_seconds.quantize(Decimal('0.001'))} secondes
+
+Le verdict prouve la cohérence locale du contrat, de la reprise, du périmètre d'écriture et des validations. Il ne lance pas V2-alpha et n'autorise aucun merge.
+
+## Coût
+
+- Coût incrémental déclaré par Ayo : {cost['actual_incremental']} {cost['currency']} hors abonnement OpenAI
+- Usage : {usage_line}
+- Estimation API indicative : {estimate_line}
+- Le coût n'est pas un critère de sélection
+
+## Limites
+
+- Les push, PR, merge et publications ne sont pas observés directement par ce pilote
+- Le résultat porte sur Codex Desktop et le modèle observé, sans routage multi-modèle
+- Le verrou reste actif jusqu'à la décision propriétaire
+
+## Décision attendue
+
+Ayo peut accepter ce diff local ou maintenir le pilote en HOLD. Le rapport source est `{report['report_sha256']}`.
+"""
+    return text.encode()
 
 
 def validate_operation_history(
@@ -91,7 +215,7 @@ def expected_artifacts(
         expected.add("adapter/manifest.json")
         expected.update(f"adapter/{path}" for path in manifest["artifact_hashes"])
     if evaluated:
-        expected.update({"evaluation/results.json", "pilot-report.json"})
+        expected.update({"evaluation/results.json", "pilot-report.json", "owner-review.md"})
     return expected
 
 
@@ -128,7 +252,8 @@ def validate_graph(
             "worktree_after_sha256": ge.digest(ge.canonical(manifest["worktree_after"])),
             "agent_logical_sessions": 1,
             "adapter_process_invocations": manifest["adapter_process_invocations"],
-            "benchmark_candidate_calls": 0,
+            "benchmark_candidate_calls": "NOT_DIRECTLY_OBSERVED",
+            "usage": manifest["usage"],
         }
         if (
             branch["parent_receipts"] != {"D": d["receipt_sha256"]}
@@ -223,6 +348,9 @@ def load_existing_report(contract: dict[str, Any], contract_sha256: str) -> dict
     results = ge.read_object(ge.run_dir(contract) / "evaluation" / "results.json")
     if report.get("evaluation_results_sha256") != ge.digest(ge.canonical(results)):
         raise ge.GraphHold("résultats d’évaluation divergents")
+    review_path = ge.run_dir(contract) / report.get("owner_review", "")
+    if not review_path.is_file() or review_path.read_bytes() != owner_review(report):
+        raise ge.GraphHold("revue propriétaire divergente")
     return report
 
 
@@ -299,9 +427,17 @@ def evaluate(
             "receipt_sha256": receipt_hashes,
             "manifest_sha256": manifest["manifest_sha256"] if manifest else None,
             "session_id": manifest["session_id"] if manifest else None,
+            "model_observed": manifest["model_observed"] if manifest else None,
             "agent_logical_sessions": manifest["agent_logical_sessions"] if manifest else 0,
             "adapter_process_invocations": manifest["adapter_process_invocations"] if manifest else 0,
-            "benchmark_candidate_calls": 0,
+            "benchmark_candidate_calls": (
+                manifest["benchmark_candidate_calls"] if manifest else "NOT_APPLICABLE_NO_AGENT"
+            ),
+            "agent_timing": (
+                {"started_utc": manifest["started_utc"], "ended_utc": manifest["ended_utc"]}
+                if manifest else None
+            ),
+            "cost": cost_summary(contract, manifest),
             "tests_discovered": tests_discovered,
             "acceptance": [
                 {
@@ -314,26 +450,31 @@ def evaluate(
                 for result in results
             ],
             "evaluation_results_sha256": ge.digest(ge.canonical(results_object)),
-            "git_effects": {
-                "agent_commits": 0,
-                "pushes": 0,
-                "pull_requests": 0,
-                "merges": 0,
-                "publications": 0,
+            "local_git_evidence": {
+                "agent_commits": int(before["head"] != contract["repository"]["head"]),
+                "head_unchanged": before["head"] == contract["repository"]["head"],
+                "branch_unchanged": before["branch"] == contract["repository"]["branch"],
+                "index_unchanged": not before["index_changed"],
+                "changed_paths": before["changed_paths"],
+                "remote_effects": "NOT_DIRECTLY_OBSERVED",
             },
             "limits": [
                 "Validation locale sur macOS et Codex CLI observé",
                 "Aucune activation V2-alpha ni généralisation",
+                "Les effets Git distants ne sont pas observés directement",
                 "Le verrou reste actif jusqu’à la revue propriétaire",
             ],
+            "owner_review": "owner-review.md",
             "created_utc": ge.utc_now(),
         }
         report = {**base, "report_sha256": ge.digest(ge.canonical(base))}
         v1.write_new(report_path, report)
+        write_new_file(ge.run_dir(contract) / "owner-review.md", owner_review(report))
     return {
         "verdict": ge.VERDICT_READY,
         "contract_sha256": contract_sha256,
         "report_sha256": report["report_sha256"],
+        "owner_review": str(ge.run_dir(contract) / "owner-review.md"),
         "tests_discovered": tests_discovered,
         "reused_terminal_report": False,
     }

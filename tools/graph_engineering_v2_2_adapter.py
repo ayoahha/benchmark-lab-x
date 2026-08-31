@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -165,6 +166,21 @@ def artifact_hashes(contract: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def terminal_usage(paths: list[Path]) -> dict[str, int]:
+    completed = []
+    for path in paths:
+        for line in path.read_bytes().splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ge.GraphHold("journal JSONL Codex illisible") from error
+            if event.get("type") == "turn.completed":
+                completed.append(event.get("usage"))
+    if len(completed) != 1:
+        raise ge.GraphHold("événement terminal d’usage Codex absent ou ambigu")
+    return ge.validate_usage(completed[0])
+
+
 def persist_session(contract: dict[str, Any], contract_sha256: str, session_id: str) -> None:
     path = session_receipt_path(contract)
     expected = {
@@ -181,11 +197,18 @@ def persist_session(contract: dict[str, Any], contract_sha256: str, session_id: 
 
 
 def stop_process(process: subprocess.Popen[bytes]) -> None:
-    process.terminate()
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
     try:
         process.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        process.kill()
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         process.wait()
 
 
@@ -222,6 +245,7 @@ def stream_agent(
                 stdout=subprocess.PIPE,
                 stderr=stderr_stream,
                 env=environment,
+                start_new_session=True,
             )
             assert process.stdin is not None
             assert process.stdout is not None
@@ -239,13 +263,13 @@ def stream_agent(
                     continue
                 session_id = event.get("thread_id")
                 if not isinstance(session_id, str) or not session_id:
-                    process.terminate()
+                    stop_process(process)
                     raise ge.GraphHold("thread.started sans session_id")
                 if observed_session_id not in {None, session_id}:
-                    process.terminate()
+                    stop_process(process)
                     raise ge.GraphHold("plusieurs session_id dans une invocation")
                 if expected_session_id is not None and session_id != expected_session_id:
-                    process.terminate()
+                    stop_process(process)
                     raise ge.GraphHold("second session_id refusé")
                 observed_session_id = session_id
                 persist_session(contract, contract_sha256, session_id)
@@ -386,6 +410,7 @@ def run_adapter(
         command_history = [item["command"] for item in starts]
         logs_stdout = [directory / f"stdout-{number}.jsonl" for number in range(1, invocation + 1)]
         logs_stderr = [directory / f"stderr-{number}.log" for number in range(1, invocation + 1)]
+        usage = terminal_usage(logs_stdout)
         artifacts = artifact_hashes(contract)
         base = {
             "schema_version": f"{ge.SCHEMA}/adapter-manifest/v1",
@@ -416,7 +441,8 @@ def run_adapter(
             "worktree_after": after,
             "agent_logical_sessions": 1,
             "adapter_process_invocations": invocation,
-            "benchmark_candidate_calls": 0,
+            "benchmark_candidate_calls": "NOT_DIRECTLY_OBSERVED",
+            "usage": usage,
             "artifact_hashes": artifacts,
         }
         manifest = {**base, "manifest_sha256": ge.digest(ge.canonical(base))}

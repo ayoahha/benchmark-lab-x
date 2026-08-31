@@ -10,6 +10,7 @@ import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -49,6 +50,13 @@ EXTERNAL_EFFECTS_FORBIDDEN = [
     "deployment",
 ]
 SHELLS = {"bash", "dash", "fish", "sh", "zsh"}
+USAGE_FIELDS = {
+    "input_tokens",
+    "cached_input_tokens",
+    "cache_write_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+}
 
 
 class GraphHold(RuntimeError):
@@ -253,6 +261,55 @@ def validate_acceptance(raw: object, worktree: Path) -> list[dict[str, Any]]:
     return commands
 
 
+def validate_cost(raw: object, model: str) -> dict[str, Any]:
+    required = {
+        "model",
+        "currency",
+        "input_per_million",
+        "output_per_million",
+        "cached_input_per_million",
+        "source",
+        "actual_incremental",
+        "actual_status",
+        "selection_criterion",
+    }
+    if not isinstance(raw, dict) or set(raw) != required:
+        raise GraphHold("provenance de coût invalide")
+    if (
+        raw["model"] != model
+        or raw["currency"] != "USD"
+        or raw["cached_input_per_million"] is not None
+        or not isinstance(raw["source"], str)
+        or not raw["source"]
+        or raw["actual_status"] != "OWNER_DECLARED_SUBSCRIPTION_EXCLUDED"
+        or raw["selection_criterion"] is not False
+    ):
+        raise GraphHold("provenance de coût divergente")
+    for field in ("input_per_million", "output_per_million", "actual_incremental"):
+        value = raw[field]
+        if not isinstance(value, str):
+            raise GraphHold(f"montant de coût invalide: {field}")
+        try:
+            amount = Decimal(value)
+        except InvalidOperation as error:
+            raise GraphHold(f"montant de coût invalide: {field}") from error
+        if not amount.is_finite() or amount < 0:
+            raise GraphHold(f"montant de coût invalide: {field}")
+    return dict(raw)
+
+
+def validate_usage(raw: object) -> dict[str, int]:
+    if not isinstance(raw, dict) or set(raw) != USAGE_FIELDS:
+        raise GraphHold("usage Codex invalide")
+    if any(not isinstance(raw[field], int) or isinstance(raw[field], bool) or raw[field] < 0 for field in USAGE_FIELDS):
+        raise GraphHold("compteurs d’usage Codex invalides")
+    if raw["cached_input_tokens"] > raw["input_tokens"]:
+        raise GraphHold("cache supérieur aux tokens d’entrée")
+    if raw["reasoning_output_tokens"] > raw["output_tokens"]:
+        raise GraphHold("raisonnement supérieur aux tokens de sortie")
+    return {field: raw[field] for field in sorted(USAGE_FIELDS)}
+
+
 def request_value(path: Path) -> dict[str, Any]:
     value = read_object(path)
     required = {
@@ -268,6 +325,7 @@ def request_value(path: Path) -> dict[str, Any]:
         "immutable_paths",
         "acceptance",
         "harness",
+        "cost",
     }
     if set(value) != required:
         raise GraphHold("champs de requête divergents")
@@ -334,6 +392,7 @@ def create_contract(request_path: Path) -> dict[str, Any]:
         raise GraphHold("harnais invalide")
     if harness["kind"] != "codex-exec" or not isinstance(harness["model"], str) or not harness["model"]:
         raise GraphHold("harnais ou modèle invalide")
+    cost = validate_cost(request["cost"], harness["model"])
     binary = shutil.which(harness["binary"])
     if binary is None:
         raise GraphHold("binaire du harnais absent")
@@ -382,6 +441,7 @@ def create_contract(request_path: Path) -> dict[str, Any]:
             "version": version_process.stdout.decode(errors="replace").strip(),
             "model_expected": harness["model"],
         },
+        "cost": cost,
         "max_logical_attempts": 1,
         "external_effects_forbidden": EXTERNAL_EFFECTS_FORBIDDEN,
         "writer_id": str(uuid4()),
@@ -414,6 +474,7 @@ def load_contract(contract_path: Path) -> tuple[dict[str, Any], str]:
         "scope",
         "acceptance",
         "harness",
+        "cost",
         "max_logical_attempts",
         "external_effects_forbidden",
         "writer_id",
@@ -494,6 +555,7 @@ def load_contract(contract_path: Path) -> tuple[dict[str, Any], str]:
         raise GraphHold("binaire du harnais modifié")
     if harness["kind"] != "codex-exec" or not harness["model_expected"]:
         raise GraphHold("harnais contractuel divergent")
+    validate_cost(contract["cost"], harness["model_expected"])
     return contract, digest(contract_path.read_bytes())
 
 
@@ -786,6 +848,7 @@ def load_adapter_manifest(contract: dict[str, Any], contract_sha256: str) -> dic
         "agent_logical_sessions",
         "adapter_process_invocations",
         "benchmark_candidate_calls",
+        "usage",
         "artifact_hashes",
     }
     if (
@@ -805,9 +868,10 @@ def load_adapter_manifest(contract: dict[str, Any], contract_sha256: str) -> dic
         or manifest.get("exit_code") != 0
         or manifest.get("agent_logical_sessions") != 1
         or manifest.get("adapter_process_invocations") not in {1, 2}
-        or manifest.get("benchmark_candidate_calls") != 0
+        or manifest.get("benchmark_candidate_calls") != "NOT_DIRECTLY_OBSERVED"
     ):
         raise GraphHold("manifeste adaptateur divergent")
+    validate_usage(manifest.get("usage"))
     artifacts = manifest.get("artifact_hashes")
     if not isinstance(artifacts, dict) or not artifacts:
         raise GraphHold("artefacts adaptateur absents")
@@ -858,7 +922,8 @@ def close_agent_branch(contract_path: Path) -> dict[str, Any]:
             "worktree_after_sha256": digest(canonical(manifest["worktree_after"])),
             "agent_logical_sessions": 1,
             "adapter_process_invocations": manifest["adapter_process_invocations"],
-            "benchmark_candidate_calls": 0,
+            "benchmark_candidate_calls": "NOT_DIRECTLY_OBSERVED",
+            "usage": manifest["usage"],
         }
         b = write_receipt(
             contract,
