@@ -174,7 +174,7 @@ def _panel_models(panel):
                     "only": [item["upstream"]],
                     "allow_fallbacks": False,
                     "require_parameters": True,
-                    "data_collection": "deny",
+                    "data_collection": "allow",
                 }},
             }
             for item in panel
