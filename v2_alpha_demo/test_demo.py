@@ -281,10 +281,12 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
         settings = json.loads((run / "settings.json").read_text())
         self.assertEqual(settings["retry"], {"enabled": False, "maxRetries": 0, "provider": {"maxRetries": 0, "timeoutMs": 300000}})
         self.assertFalse(settings["compaction"]["enabled"])
-        argv = (run / "C1.stderr.txt").read_text()
+        argv = json.loads((run / "C1.stderr.txt").read_text())
         self.assertNotIn("--max-tokens", argv)
         for option in ["--no-session", "--no-tools", "--no-extensions", "--no-skills", "--no-context-files", "--no-approve"]:
             self.assertIn(option, argv)
+        self.assertEqual(argv[-2], "--")
+        self.assertTrue(argv[-1].startswith("---\n"))
 
     def test_05_s9_rejects_hash_forecast_and_cap_drift(self):
         for field, replacement in [("seal_sha256", "0" * 64), ("contract_sha256", "0" * 64), ("panel_sha256", "0" * 64)]:
