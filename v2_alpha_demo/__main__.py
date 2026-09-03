@@ -543,7 +543,7 @@ def collect(run_dir, authority, repo_root=None, _collection_path=None, _own_sigt
                 stop_reason, interrupted = "INTERRUPTION_SIGTERM", RuntimeError("collect interrompu par SIGTERM")
                 break
             stdout_path, stderr_path = run / f"{config['id']}.stdout.jsonl", run / f"{config['id']}.stderr.txt"
-            argv = [seal["pi"]["path"], "--provider", "openrouter", "--model", config["model"], *COMMON_ARGS[2:], (run / "prompt.txt").read_text()]
+            argv = [seal["pi"]["path"], "--provider", "openrouter", "--model", config["model"], *COMMON_ARGS[2:], "--", (run / "prompt.txt").read_text()]
             process_incident = None
             if active["sigterm"]:
                 marker.unlink()
