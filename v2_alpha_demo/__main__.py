@@ -170,7 +170,7 @@ def _panel_models(panel):
         "providers": {"openrouter": {"modelOverrides": {
             item["model"]: {
                 "maxTokens": 2048,
-                "compat": {"openRouterRouting": {
+                "compat": {"maxTokensField": "max_tokens", "openRouterRouting": {
                     "only": [item["upstream"]],
                     "allow_fallbacks": False,
                     "require_parameters": True,
@@ -253,7 +253,7 @@ def prepare(run_dir, pi_binary=None, repo_root=None):
             "pi": {"path": str(pi), "sha256": _sha(pi), "version": PI_VERSION},
             "public_environment": public_environment,
             "public_environment_sha256": _value_sha(public_environment),
-            "requested_environment": {"PI_CODING_AGENT_DIR": run_id, "PI_SKIP_VERSION_CHECK": "1"},
+            "requested_environment": {"PI_CODING_AGENT_DIR": f"{run_id}/pi-agent", "PI_SKIP_VERSION_CHECK": "1"},
             "common_args": COMMON_ARGS,
         }
         _write_json(run / "seal.json", seal)
@@ -345,7 +345,15 @@ def _validate_s9(auth, run_id, seal, seal_sha, panel):
     return forecasts
 
 
-def _bounded_env(run):
+def _pi_agent_dir(run):
+    agent_dir = run / "pi-agent"
+    os.mkdir(agent_dir, 0o700)
+    for name in ["settings.json", "models.json"]:
+        _write_exclusive(agent_dir / name, (run / name).read_bytes())
+    return agent_dir
+
+
+def _bounded_env(agent_dir):
     env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "TMPDIR", "OPENROUTER_API_KEY"] if key in os.environ}
     if "V2_ALPHA_DEMO_TEST_SOCKET_FD" in os.environ:
         env["V2_ALPHA_DEMO_TEST_SOCKET_FD"] = os.environ["V2_ALPHA_DEMO_TEST_SOCKET_FD"]
@@ -354,7 +362,7 @@ def _bounded_env(run):
     for key in ["V2_ALPHA_DEMO_TEST_POPEN_GATE", "V2_ALPHA_DEMO_TEST_PRIVATE_RECEIPT_GATE", "V2_ALPHA_DEMO_TEST_TIMEOUT_SECONDS", "V2_ALPHA_DEMO_TEST_CANDIDATE_EXCEPTION"]:
         if key in os.environ:
             env[key] = os.environ[key]
-    env.update({"PI_CODING_AGENT_DIR": str(run), "PI_SKIP_VERSION_CHECK": "1"})
+    env.update({"PI_CODING_AGENT_DIR": str(agent_dir), "PI_SKIP_VERSION_CHECK": "1"})
     return env
 
 
@@ -518,7 +526,7 @@ def collect(run_dir, authority, repo_root=None, _collection_path=None, _own_sigt
     auth_raw = auth_path.read_bytes()
     auth = _strict_json_bytes(auth_raw, str(auth_path))
     forecasts = _validate_s9(auth, run_id, seal, _sha(run / "seal.json"), panel)
-    child_env = _bounded_env(run)
+    child_env = _bounded_env(_pi_agent_dir(run))
     copied_auth = run / "authorization-s9.json"
     _write_json_bytes(copied_auth, auth_raw)
     authority_sha = _sha(copied_auth)
@@ -557,6 +565,7 @@ def collect(run_dir, authority, repo_root=None, _collection_path=None, _own_sigt
                 test_fd = os.environ.get("V2_ALPHA_DEMO_TEST_SOCKET_FD")
                 process = subprocess.Popen(
                     argv, cwd=run, env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    umask=0o077,
                     start_new_session=os.environ.get("V2_ALPHA_DEMO_LAUNCH_SOCKET_FD") is None,
                     pass_fds=(int(test_fd),) if test_fd is not None else (),
                 )
