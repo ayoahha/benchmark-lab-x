@@ -136,6 +136,19 @@ def event(message):
 if sys.argv[1:] == ["--version"]:
     print({version!r})
     raise SystemExit(0)
+if {variant!r} == "migrating":
+    agent_dir = os.environ["PI_CODING_AGENT_DIR"]
+    if not all(os.path.isfile(os.path.join(agent_dir, name)) for name in ["settings.json", "models.json"]): raise SystemExit(3)
+    os.makedirs(os.path.join(agent_dir, "sessions", "fixture"), exist_ok=True)
+    for name in os.listdir(agent_dir):
+        if not name.endswith(".jsonl"): continue
+        source = os.path.join(agent_dir, name)
+        with open(source) as stream: header = json.loads(stream.readline())
+        if header.get("type") != "session" or not header.get("cwd"): continue
+        safe = "--" + header["cwd"].lstrip("/").replace("/", "-").replace(":", "-") + "--"
+        destination = os.path.join(agent_dir, "sessions", safe)
+        os.makedirs(destination, exist_ok=True)
+        os.rename(source, os.path.join(destination, name))
 model = sys.argv[sys.argv.index("--model") + 1]
 print(json.dumps(sys.argv[1:]), file=sys.stderr)
 cost = {{"openai/gpt-5.6-sol": 0.10, "anthropic/claude-fable-5": 0.12, "x-ai/grok-4.6": 0.08}}[model]
@@ -160,6 +173,7 @@ if {variant!r} in {{"timeout", "ignore-term", "linger", "detached-ignore-term"}}
     event(f"CANDIDATE_PIDS {{os.getpid()}} {{child.pid}}")
     if {variant!r} != "linger": time.sleep(60)
 message = {{"role":"assistant","provider":"openrouter","model":observed,"responseModel":observed,"stopReason":"stop","usage":{{"cost":{{"total":cost}}}},"content":content}}
+if {variant!r} == "migrating": print(json.dumps({{"type":"session","cwd":os.getcwd()}}))
 print(json.dumps({{"type":"message_end","message":message}}))
 raise SystemExit(7 if {variant!r} == "nonzero" else 0)
 '''
@@ -275,6 +289,7 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
         overrides = models["providers"]["openrouter"]["modelOverrides"]
         self.assertEqual(set(overrides), {"openai/gpt-5.6-sol", "anthropic/claude-fable-5", "x-ai/grok-4.6"})
         self.assertTrue(all(item["maxTokens"] == 2048 for item in overrides.values()))
+        self.assertTrue(all(item["compat"]["maxTokensField"] == "max_tokens" for item in overrides.values()))
         routes = {model: item["compat"]["openRouterRouting"] for model, item in overrides.items()}
         self.assertEqual({model: route["only"] for model, route in routes.items()}, {"openai/gpt-5.6-sol": ["openai"], "anthropic/claude-fable-5": ["anthropic"], "x-ai/grok-4.6": ["xai"]})
         self.assertTrue(all(route["allow_fallbacks"] is False and route["require_parameters"] is True and route["data_collection"] == "allow" for route in routes.values()))
@@ -287,6 +302,14 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
             self.assertIn(option, argv)
         self.assertEqual(argv[-2], "--")
         self.assertTrue(argv[-1].startswith("---\n"))
+
+    def test_04b_collect_isolates_pi_state_from_raw_evidence(self):
+        run = self.collected("migrating")
+        self.assertEqual(json.loads((run / "collection.json").read_text())["stop_reason"], "COMPLETE")
+        self.assertTrue(all((run / f"{config_id}.stdout.jsonl").is_file() for config_id in ["C1", "C2", "C3"]))
+        self.assertFalse((run / "sessions").exists())
+        self.assertTrue(all((run / name).stat().st_ino != (run / "pi-agent" / name).stat().st_ino for name in ["settings.json", "models.json"]))
+        self.assertTrue(all(stat.S_IMODE(path.stat().st_mode) == 0o700 for path in (run / "pi-agent").rglob("*") if path.is_dir()))
 
     def test_05_s9_rejects_hash_forecast_and_cap_drift(self):
         for field, replacement in [("seal_sha256", "0" * 64), ("contract_sha256", "0" * 64), ("panel_sha256", "0" * 64)]:
