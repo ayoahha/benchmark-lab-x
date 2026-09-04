@@ -155,6 +155,8 @@ cost = {{"openai/gpt-5.6-sol": 0.10, "anthropic/claude-fable-5": 0.12, "x-ai/gro
 observed = model
 content = [{{"type": "text", "text": {GOOD_OUTPUT!r}}}]
 if {variant!r} == "unknown-cost": cost = None
+if {variant!r} == "unknown-last" and model == "x-ai/grok-4.6": cost = None
+if {variant!r} == "zero-cost": cost = 0.0
 if {variant!r} == "negative": cost = -0.01
 if {variant!r} == "nan": cost = float("nan")
 if {variant!r} == "infinity": cost = float("inf")
@@ -173,6 +175,7 @@ if {variant!r} in {{"timeout", "ignore-term", "linger", "detached-ignore-term"}}
     event(f"CANDIDATE_PIDS {{os.getpid()}} {{child.pid}}")
     if {variant!r} != "linger": time.sleep(60)
 message = {{"role":"assistant","provider":"openrouter","model":observed,"responseModel":observed,"stopReason":"stop","usage":{{"cost":{{"total":cost}}}},"content":content}}
+if {variant!r} == "structured": message["provider"] = {{"name": "openrouter"}}; message["stopReason"] = ["stop"]
 if {variant!r} == "migrating": print(json.dumps({{"type":"session","cwd":os.getcwd()}}))
 print(json.dumps({{"type":"message_end","message":message}}))
 raise SystemExit(7 if {variant!r} == "nonzero" else 0)
@@ -433,7 +436,7 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
         for forbidden in ["fetch(", "http://", "https://", "Atlas Direct", GOOD_OUTPUT, "responseModel", "{&quot;", "{&#x27;"]:
             self.assertNotIn(forbidden, page)
-        for required in ["@media", "focus-visible", "non communiqué", "route", "effort", "Empreintes", "limite", "<meter"]:
+        for required in ["@media", "focus-visible", "non communiqué", "route", "effort", "Empreintes", "limite", 'class="bar"', "Vérifier cette restitution"]:
             self.assertIn(required.lower(), page.lower())
 
     def test_12b_human_ui_maps_models_states_costs_and_secondary_criteria(self):
@@ -453,14 +456,16 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
         }
         results["configurations"].reverse()
         page = demo._render_html(results).decode()
-        self.assertLess(page.index('<p class="config-id">C1</p>'), page.index('<p class="config-id">C2</p>'))
+        self.assertLess(page.index('<span class="config-id">C1</span>'), page.index('<span class="config-id">C2</span>'))
         self.assertIn("C1 · openai/gpt-5.6-sol", page)
         self.assertIn("verdict--success", page)
         self.assertIn("verdict--failure", page)
         self.assertIn("Clarté des décisions et des statuts", page)
         self.assertIn("Rigueur sur les montants et les échéances", page)
-        self.assertIn("Dépense totale observée", page)
-        self.assertIn("Dépense hors comparaison", page)
+        self.assertIn("Toutes configurations : dépense observée", page)
+        self.assertIn("Hors recommandation : dépense observée", page)
+        self.assertIn("Dépense observée, exclue de la recommandation", page)
+        self.assertIn("Prise en compte dans la recommandation", page)
         self.assertIn("Aucun incident constaté", page)
         self.assertNotIn("D-8D6C6B58B0DA", page)
         self.assertNotIn("AUCUN", page)
@@ -504,10 +509,351 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
         results["contract"]["panel"] = panel
         results["economy"] = {"status": "COMPLETE", "known_costs": costs, "least_expensive": [configurations[0]["blind_id"]], "benefits": {}}
         page = demo._render_html(results).decode()
-        self.assertEqual(page.count('class="result-card '), 15)
+        self.assertEqual(page.count('<article class="result '), 15)
         self.assertIn("C15", page)
         self.assertIn("provider/model-15", page)
         self.assertEqual(page.count('data-step="'), 2)
+
+    def fifteen(self, results, verdicts, unknown_cost=None):
+        prototype, failed = results["configurations"][0], json.loads(json.dumps(results["configurations"][0]))
+        failed["secondary"] = None
+        configurations, panel = [], []
+        for index, verdict in enumerate(verdicts, 1):
+            item = json.loads(json.dumps(prototype if verdict == "SATISFAIT" else failed))
+            item["blind_id"] = f"D-{index:012X}"
+            item["verdict"] = verdict
+            item["reason"] = f"motif synthétique {index}"
+            item["requested"]["id"] = f"C{index}"
+            item["requested"]["model"] = f"fournisseur-{index}/modele-synthetique-{index}"
+            item["observed"]["model"] = item["requested"]["model"]
+            item["cost"] = "INCONNU" if index == unknown_cost else index / 1000
+            configurations.append(item)
+            panel.append(item["requested"])
+        results["configurations"] = list(reversed(configurations))
+        results["contract"]["panel"] = panel
+        satisfied = [item for item in configurations if item["verdict"] == "SATISFAIT"]
+        known = {item["blind_id"]: item["cost"] for item in satisfied if item["cost"] != "INCONNU"}
+        if unknown_cost and any(item["verdict"] == "SATISFAIT" and item["cost"] == "INCONNU" for item in configurations):
+            results["economy"] = {"status": "INCOMPLETE", "known_costs": known, "least_expensive": [], "benefits": {}}
+        else:
+            results["economy"] = {"status": "COMPLETE", "known_costs": known, "least_expensive": [satisfied[0]["blind_id"]], "benefits": {}}
+        return configurations
+
+    def test_12e_fifteen_configurations_keep_two_readable_steps(self):
+        run = self.built()
+        results = json.loads((run / "results.json").read_text())
+        verdicts = ["SATISFAIT", "NE SATISFAIT PAS", "SATISFAIT", "INDETERMINE"] * 3 + ["SATISFAIT", "SATISFAIT", "NE SATISFAIT PAS"]
+        configurations = self.fifteen(results, verdicts)
+        page = demo._render_html(results).decode()
+        self.assertIn("<title>Synthèse d’un fil de courriels de devis · Salle de décision", page)
+        self.assertIn("<h1>Synthèse d’un fil de courriels de devis</h1>", page)
+        self.assertEqual(page.count('data-step="'), 2)
+        step1 = page[page.index('data-step="1"'):page.index('data-step="2"')]
+        step2 = page[page.index('data-step="2"'):page.index('id="verify"')]
+        verify = page[page.index('id="verify"'):]
+        positions = [step1.index(f'<span class="config-id">C{index}</span>') for index in range(1, 16)]
+        self.assertEqual(positions, sorted(positions))
+        for index, item in enumerate(configurations, 1):
+            self.assertEqual(step1.count(f"<summary>Examiner le résultat C{index}</summary>"), 1)
+            self.assertIn(item["reason"], step1)
+            self.assertIn(item["verdict"], step1)
+            self.assertIn(f"C{index} · fournisseur-{index}/modele-synthetique-{index}", step2)
+            self.assertIn(f"<h4>C{index} · fournisseur-{index}/modele-synthetique-{index}</h4>", verify)
+        self.assertEqual(step1.count("<summary>"), 15)
+        self.assertNotIn("USD", step1)
+        self.assertNotIn("Coût", step1)
+        self.assertEqual(step2.count("Prise en compte dans la recommandation"), 8)
+        self.assertEqual(step2.count("Dépense observée, exclue de la recommandation"), 7)
+        self.assertEqual(step2.count('class="bar"'), 15)
+        self.assertEqual(step2.count("<li class=\"excluded\">"), 7)
+        self.assertIn("La configuration la moins chère parmi celles qui satisfont le contrat est C1 · fournisseur-1/modele-synthetique-1", step2)
+        self.assertIn("0,0150 USD", step2)
+        self.assertIn("Hors recommandation : dépense observée", step2)
+        self.assertIn("Configurations admissibles : dépense observée", step2)
+        main_path = page[:page.index('id="verify"')]
+        for forbidden in ["Darwin", "arm64", "Python", "sha256", results["conditions"]["observed"]["git_head"], configurations[0]["fingerprints"]["receipt"]]:
+            self.assertNotIn(forbidden, main_path)
+        for required in ["Darwin", "arm64", results["conditions"]["observed"]["git_head"], configurations[14]["fingerprints"]["raw_jsonl"]]:
+            self.assertIn(required, verify)
+        self.assertNotIn("<meter", page)
+        self.assertNotIn("title=", page)
+
+    def test_12f_unknown_admissible_cost_keeps_incomplete_conclusion_and_shows_every_cost(self):
+        run = self.built()
+        results = json.loads((run / "results.json").read_text())
+        verdicts = ["SATISFAIT"] * 13 + ["SATISFAIT", "NE SATISFAIT PAS"]
+        self.fifteen(results, verdicts, unknown_cost=14)
+        page = demo._render_html(results).decode()
+        step2 = page[page.index('data-step="2"'):page.index('id="verify"')]
+        self.assertIn("Conclusion économique INCOMPLETE", step2)
+        self.assertNotIn("la moins chère", step2)
+        self.assertEqual(step2.count("Non communiqué"), 1)
+        self.assertIn("Coût non communiqué : la recommandation reste incomplète", step2)
+        self.assertEqual(step2.count("Coût connu ; recommandation suspendue (conclusion INCOMPLETE)"), 13)
+        self.assertEqual(step2.count('class="bar bar--none"'), 1)
+        self.assertIn("Toutes configurations : dépense connue", step2)
+        self.assertIn("1 coût non communiqué sur 15", step2)
+        self.assertIn("Configurations admissibles : dépense connue", step2)
+        self.assertIn("1 coût non communiqué sur 14", step2)
+        self.assertIn("Hors recommandation : dépense observée", step2)
+        self.assertNotIn("dépense totale", step2.lower())
+        self.assertIn("1 coût non communiqué sans barre", step2)
+        # coût inconnu d'une configuration non admissible : visible, exclue, sans effet sur la conclusion
+        results["configurations"][-1]["cost"] = "INCONNU"
+        results["configurations"][-1]["verdict"] = "NE SATISFAIT PAS"
+        page = demo._render_html(results).decode()
+        step2 = page[page.index('data-step="2"'):page.index('id="verify"')]
+        self.assertIn("Coût non communiqué, exclue de la recommandation", step2)
+        self.assertIn("Hors recommandation : dépense connue", step2)
+        self.assertIn("1 coût non communiqué sur 2", step2)
+        self.assertIn("2 coûts non communiqués sur 15", step2)
+        self.assertIn("2 coûts non communiqués sans barre", step2)
+        # plusieurs coûts inconnus admissibles
+        for item in results["configurations"][2:5]:
+            item["cost"] = "INCONNU"
+        page = demo._render_html(results).decode()
+        step2 = page[page.index('data-step="2"'):page.index('id="verify"')]
+        self.assertEqual(step2.count("Coût non communiqué : la recommandation reste incomplète"), 4)
+        self.assertIn("4 coûts non communiqués sur 13", step2)
+        self.assertIn("5 coûts non communiqués sur 15", step2)
+        # aucun coût connu : ni barre, ni maximum fictif, ni somme
+        for item in results["configurations"]:
+            item["cost"] = "INCONNU"
+        results["economy"] = {"status": "INCOMPLETE", "known_costs": {}, "least_expensive": [], "benefits": {}}
+        page = demo._render_html(results).decode()
+        step2 = page[page.index('data-step="2"'):page.index('id="verify"')]
+        self.assertNotIn('class="bar', step2)
+        self.assertNotIn("0,0000 USD", step2)
+        self.assertNotIn("--w:", step2)
+        self.assertIn("Aucun coût communiqué : pas d’échelle commune ni de barre.", step2)
+        self.assertEqual(step2.count("Aucun coût communiqué</strong>"), 3)
+        self.assertEqual(step2.count("Non communiqué"), 15)
+
+    def test_12h_full_journey_last_candidate_satisfied_with_unknown_cost(self):
+        run = self.prepared("unknown-last")
+        auth, _ = self.s9(run)
+        collection = demo.collect(run, auth, self.root)
+        self.assertEqual(collection["stop_reason"], "COUT_OU_BUDGET_INCONNU")
+        self.assertEqual(collection["spent"], "INCONNU")
+        self.assertEqual([item["executed"] for item in collection["matrix"]], [True, True, True])
+        self.assertEqual(json.loads((run / "C3.receipt.json").read_text())["cost"], "INCONNU")
+        demo.review(run, self.root)
+        decisions, _ = self.decisions(run)
+        authority, _ = self.s10(run, decisions)
+        results = demo.build(run, decisions, authority, self.root)
+        costs = {item["requested"]["id"]: item["cost"] for item in results["configurations"]}
+        self.assertEqual(costs["C3"], "INCONNU")
+        self.assertEqual([item["verdict"] for item in results["configurations"]], ["SATISFAIT"] * 3)
+        self.assertEqual(results["economy"]["status"], "INCOMPLETE")
+        self.assertEqual(results["economy"]["least_expensive"], [])
+        self.assertEqual(len(results["economy"]["known_costs"]), 2)
+        page = (run / "index.html").read_text()
+        step2 = page[page.index('data-step="2"'):page.index('id="verify"')]
+        self.assertIn("Conclusion économique INCOMPLETE", step2)
+        self.assertNotIn("la moins chère", step2)
+        self.assertIn("C3 · x-ai/grok-4.6", step2)
+        self.assertIn("Coût non communiqué : la recommandation reste incomplète", step2)
+        self.assertEqual(step2.count("Coût connu ; recommandation suspendue (conclusion INCOMPLETE)"), 2)
+        self.assertIn("1 coût non communiqué sur 3", step2)
+        self.assertIn("coût non communiqué par le canal observé", page)
+        self.assertNotIn("COUT_INCONNU_OU_INVALIDE", page)
+        self.assertNotIn("0,0000 USD", step2)
+
+    def test_12g_brief_is_frozen_by_campaign_or_falls_back_to_task_id(self):
+        run = self.built()
+        results = json.loads((run / "results.json").read_text())
+        results["contract"]["task_id"] = "tache-future"
+        results["task"] = "tache-future"
+        page = demo._render_html(results).decode()
+        self.assertIn("<h1>tache-future</h1>", page)
+        self.assertIn("Non documenté : aucun brief figé avant exécution.", page)
+        self.assertIn("Cette tâche n’a pas de brief figé avant exécution", page)
+        results["contract"]["brief"] = {"title": "Titre <figé>", "context": "Situation figée", "objective": "Objectif figé", "decision": "Décision figée"}
+        page = demo._render_html(results).decode()
+        self.assertIn("<h1>Titre &lt;figé&gt;</h1>", page)
+        for required in ["Situation figée", "Objectif figé", "Décision figée", "<dt>Résultat attendu</dt><dd>Une synthèse fidèle du fil historique selon le contrat G0.</dd>"]:
+            self.assertIn(required, page)
+        self.assertNotIn("Non documenté", page)
+        self.assertNotIn("rédigé après la campagne", page)
+        for bad in [{"title": "x"}, {**results["contract"]["brief"], "context": " "}, {**results["contract"]["brief"], "extra": "y"}, {**results["contract"]["brief"], "decision": 3}, {**results["contract"]["brief"], "expected": "remplacement du contrat"}]:
+            results["contract"]["brief"] = bad
+            with self.assertRaises(ValueError):
+                demo._render_html(results)
+        results["contract"]["brief"] = None
+        results["contract"]["task_id"] = "quote-thread-summary"
+        page = demo._render_html(results).decode()
+        self.assertIn("Ce brief de présentation a été rédigé après la campagne", page)
+        self.assertEqual(page.count("Synthèse d’un fil de courriels de devis"), 2)
+
+    def test_12i_zero_cost_is_a_communicated_cost(self):
+        run = self.prepared("zero-cost")
+        auth, _ = self.s9(run)
+        collection = demo.collect(run, auth, self.root)
+        self.assertEqual(collection["stop_reason"], "COMPLETE")
+        self.assertEqual(collection["spent"], 0.0)
+        demo.review(run, self.root)
+        decisions, _ = self.decisions(run)
+        authority, _ = self.s10(run, decisions)
+        results = demo.build(run, decisions, authority, self.root)
+        self.assertEqual(results["economy"]["status"], "COMPLETE")
+        self.assertEqual(len(results["economy"]["least_expensive"]), 3)
+        page = (run / "index.html").read_text()
+        step2 = page[page.index('data-step="2"'):page.index('id="verify"')]
+        self.assertIn("co-moins-chères", step2)
+        self.assertNotIn("Aucun coût communiqué", step2)
+        self.assertNotIn("Non communiqué", step2)
+        self.assertEqual(step2.count("0,0000 USD"), 3 + 2)
+        self.assertIn("Hors recommandation</span><strong>Aucune configuration</strong>", step2)
+        self.assertEqual(step2.count('style="--w:0.0%"'), 3)
+        self.assertIn("Tous les coûts communiqués sont nuls : barres vides, sans échelle.", step2)
+        self.assertIn("Toutes configurations : dépense observée", step2)
+        # coût nul parmi des coûts positifs : barre vide à l'échelle du maximum réel
+        results["configurations"][1]["cost"] = 0.01
+        results["economy"]["known_costs"][results["configurations"][1]["blind_id"]] = 0.01
+        results["economy"]["least_expensive"] = [results["configurations"][0]["blind_id"], results["configurations"][2]["blind_id"]]
+        page = demo._render_html(results).decode()
+        step2 = page[page.index('data-step="2"'):page.index('id="verify"')]
+        self.assertIn("coût connu le plus élevé (0,0100 USD)", step2)
+        self.assertEqual(step2.count('style="--w:0.0%"'), 2)
+        self.assertEqual(step2.count('style="--w:100.0%"'), 1)
+        # coût nul avec un coût inconnu : le nul reste communiqué, l'inconnu reste sans barre
+        results["configurations"][2]["cost"] = "INCONNU"
+        results["economy"] = {"status": "INCOMPLETE", "known_costs": {}, "least_expensive": [], "benefits": {}}
+        page = demo._render_html(results).decode()
+        step2 = page[page.index('data-step="2"'):page.index('id="verify"')]
+        self.assertEqual(step2.count("Non communiqué"), 1)
+        self.assertEqual(step2.count('class="bar bar--none"'), 1)
+        self.assertIn("1 coût non communiqué sans barre", step2)
+
+    def test_12j_structured_provider_observations_never_reach_the_page(self):
+        expected = {"id": "C1", "provider": "openrouter", "model": "openai/gpt-5.6-sol", "upstream": "openai", "thinking": "high"}
+        message = {"role": "assistant", "provider": {"name": "openrouter"}, "model": ["openai/gpt-5.6-sol"], "responseModel": 42, "stopReason": {"reason": "stop"}, "usage": {"cost": {"total": 0.1}}, "content": [{"type": "text", "text": "x"}]}
+        parsed = demo._attempt_result((json.dumps({"type": "message_end", "message": message}) + "\n").encode(), expected)
+        self.assertEqual(parsed["observed"], {"provider": "INCONNU", "model": "INCONNU", "responseModel": "INCONNU", "stopReason": "INCONNU"})
+        self.assertIn("OBSERVATION_NON_TEXTUELLE", parsed["incident"])
+        self.assertIn("IDENTITE_DIVERGENTE", parsed["incident"])
+        message["provider"], message["model"], message["responseModel"], message["stopReason"] = "openrouter", "openai/gpt-5.6-sol", " ", "stop"
+        parsed = demo._attempt_result((json.dumps({"type": "message_end", "message": message}) + "\n").encode(), expected)
+        self.assertEqual(parsed["observed"]["responseModel"], "INCONNU")
+        self.assertEqual(parsed["incident"], "OBSERVATION_NON_TEXTUELLE")
+        run = self.prepared("structured")
+        auth, _ = self.s9(run)
+        collection = demo.collect(run, auth, self.root)
+        receipt = json.loads((run / "C1.receipt.json").read_text())
+        self.assertEqual(receipt["observed"]["provider"], "INCONNU")
+        self.assertEqual(receipt["observed"]["stopReason"], "INCONNU")
+        self.assertIn("OBSERVATION_NON_TEXTUELLE", receipt["incident"])
+        self.assertEqual(collection["stop_reason"], "PROVENANCE_OU_ROUTE_DIVERGENTE")
+        self.assertFalse(demo._safe_satisfied(receipt))
+        built = self.built()
+        results = json.loads((built / "index.html").exists() and (built / "results.json").read_text())
+        item = results["configurations"][0]
+        item["observed"].update({"provider": "INCONNU", "model": "INCONNU", "responseModel": "INCONNU", "stopReason": "INCONNU"})
+        item["unknowns"] = ["provider", "model", "responseModel", "stopReason", "route", "effort"]
+        item["incident"] = "OBSERVATION_NON_TEXTUELLE;IDENTITE_DIVERGENTE"
+        item["verdict"], item["secondary"] = "INDETERMINE", None
+        results["economy"] = {"status": "COMPLETE", "known_costs": {}, "least_expensive": [], "benefits": {}}
+        page = demo._render_html(results).decode()
+        for forbidden in ["{&#x27;", "[&#x27;", "{&quot;", "[&quot;", "INCONNU", "OBSERVATION_NON_TEXTUELLE", "IDENTITE_DIVERGENTE", "stopReason", "responseModel"]:
+            self.assertNotIn(forbidden, page)
+        for required in ["Fournisseur non communiqué par le canal observé", "Modèle non communiqué par le canal observé", "Motif d’arrêt non communiqué par le canal observé", "une observation reçue n’était pas un texte et a été remplacée par une absence", "identité observée divergente de la demande"]:
+            self.assertIn(required, page)
+        self.assertEqual(page.count("<dt>Fournisseur</dt><dd>Non communiqué</dd>"), 1)
+
+    def test_12k_every_engine_incident_has_a_human_label(self):
+        run = self.built()
+        results = json.loads((run / "results.json").read_text())
+        engine_tokens = {
+            "JSONL_INVALIDE: JSON invalide (JSONL ligne 1): Expecting value": "flux de réponse illisible",
+            "TOURS_ASSISTANT_INVALIDES": "nombre de tours de réponse invalide",
+            "RETRY_DETECTE": "nouvelle tentative détectée",
+            "IDENTITE_DIVERGENTE": "identité observée divergente de la demande",
+            "RESPONSE_MODEL_DIVERGENT": "modèle de réponse divergent",
+            "ARRET_NON_FINAL": "arrêt non final de la réponse",
+            "SORTIE_NON_TEXTUELLE": "sortie non textuelle",
+            "COUT_INCONNU_OU_INVALIDE": "coût non communiqué par le canal observé",
+            "OBSERVATION_NON_TEXTUELLE": "une observation reçue n’était pas un texte",
+            "SIGTERM_GROUPE_TUE": "campagne interrompue par le superviseur pendant l’exécution",
+            "TIMEOUT_GROUPE_TUE": "durée maximale dépassée, exécution arrêtée",
+            "INTERRUPTION_GROUPE_TUE": "exécution interrompue par le dispositif",
+            "ERREUR_FOURNISSE": "erreur du fournisseur",
+            "PROCESS_START_ERROR": "démarrage du harnais impossible",
+        }
+        source = demo.PACKAGE_DIR.joinpath("__main__.py").read_text()
+        for token in ["JSONL_INVALIDE", "TOURS_ASSISTANT_INVALIDES", "RETRY_DETECTE", "IDENTITE_DIVERGENTE", "RESPONSE_MODEL_DIVERGENT", "ARRET_NON_FINAL", "SORTIE_NON_TEXTUELLE", "COUT_INCONNU_OU_INVALIDE", "OBSERVATION_NON_TEXTUELLE", "SIGTERM_GROUPE_TUE", "TIMEOUT_GROUPE_TUE", "INTERRUPTION_GROUPE_TUE", "ERREUR_FOURNISSE", "PROCESS_START_ERROR"]:
+            self.assertIn(f'"{token}', source)
+            self.assertIn(token, demo.INCIDENT_LABELS)
+        item = results["configurations"][1]
+        item["verdict"], item["secondary"] = "INDETERMINE", None
+        results["economy"] = {"status": "COMPLETE", "known_costs": {results["configurations"][0]["blind_id"]: results["configurations"][0]["cost"]}, "least_expensive": [results["configurations"][0]["blind_id"]], "benefits": {}}
+        for token, label in engine_tokens.items():
+            item["incident"] = f"{token};COUT_INCONNU_OU_INVALIDE"
+            page = demo._render_html(results).decode()
+            self.assertIn(label, page)
+            head = token.split(":")[0]
+            self.assertNotIn(head, page)
+            if head.lower().replace("_", " ") != label:
+                self.assertNotIn(head.lower().replace("_", " "), page)
+            self.assertNotIn("Expecting value", page)
+        item["incident"] = "JETON_FUTUR_INCONNU: détail interne"
+        page = demo._render_html(results).decode()
+        self.assertIn("incident technique non répertorié", page)
+        self.assertNotIn("JETON_FUTUR_INCONNU", page)
+        self.assertNotIn("jeton futur inconnu", page)
+        self.assertNotIn("détail interne", page)
+
+    def test_12l_ledger_cell_labels_stay_in_the_accessibility_tree_on_desktop(self):
+        run = self.built()
+        page = (run / "index.html").read_text()
+        style = page[page.index("<style>"):page.index("</style>")]
+        desktop, mobile = style.split("@media(max-width:760px)")
+        desktop_rule = desktop[desktop.index(".ledger .cell-label{"):]
+        desktop_rule = desktop_rule[:desktop_rule.index("}")]
+        self.assertNotIn("display:none", desktop_rule)
+        for required in ["position:absolute", "width:1px", "height:1px", "overflow:hidden", "clip:rect(0 0 0 0)"]:
+            self.assertIn(required, desktop_rule)
+        self.assertIn(".ledger .cell-label{position:static;width:auto;height:auto;overflow:visible;clip:auto;clip-path:none;white-space:normal;display:block}", mobile)
+        self.assertNotIn("display:none", desktop.split(".ledger-head{")[1].split("}")[0])
+        step2 = page[page.index('data-step="2"'):page.index('id="verify"')]
+        self.assertEqual(step2.count('<span class="cell-label">Configuration</span>'), 3)
+        self.assertEqual(step2.count('<span class="cell-label">Statut économique</span>'), 3)
+        self.assertNotIn("<script", page)
+        self.assertNotIn("tabindex", page)
+
+    def test_12n_invalid_streams_still_carry_four_unknown_observations(self):
+        expected = {"id": "C1", "provider": "openrouter", "model": "openai/gpt-5.6-sol", "upstream": "openai", "thinking": "high"}
+        unknown = {"provider": "INCONNU", "model": "INCONNU", "responseModel": "INCONNU", "stopReason": "INCONNU"}
+        invalid = demo._attempt_result(b'{"type": "message_end", "message": ', expected)
+        self.assertTrue(invalid["incident"].startswith("JSONL_INVALIDE"))
+        self.assertEqual(invalid["observed"], unknown)
+        for message in ["texte", ["liste"], 7, None]:
+            parsed = demo._attempt_result((json.dumps({"type": "message_end", "message": message}) + "\n").encode(), expected)
+            self.assertEqual(parsed["incident"], "TOURS_ASSISTANT_INVALIDES")
+            self.assertEqual(parsed["observed"], unknown)
+        run = self.built()
+        results = json.loads((run / "results.json").read_text())
+        for incident in ["JSONL_INVALIDE: JSON invalide (JSONL ligne 1): Expecting value", "TOURS_ASSISTANT_INVALIDES"]:
+            item = results["configurations"][1]
+            item["observed"] = {**unknown, "route": "INCONNU", "effort": "INCONNU"}
+            item["unknowns"] = ["provider", "model", "responseModel", "stopReason", "route", "effort"]
+            item["incident"], item["verdict"], item["secondary"], item["cost"] = incident, "INDETERMINE", None, "INCONNU"
+            results["economy"] = {"status": "COMPLETE", "known_costs": {results["configurations"][0]["blind_id"]: results["configurations"][0]["cost"]}, "least_expensive": [results["configurations"][0]["blind_id"]], "benefits": {}}
+            page = demo._render_html(results).decode()
+            for forbidden in ["None", "{}", "[]", "INCONNU", "JSONL_INVALIDE", "TOURS_ASSISTANT_INVALIDES", "Expecting value", "{&#x27;", "[&#x27;", "{&quot;", "[&quot;"]:
+                self.assertNotIn(forbidden, page)
+            for required in ["<dt>Fournisseur</dt><dd>Non communiqué</dd>", "<dt>Modèle</dt><dd>Non communiqué</dd>", "Fournisseur non communiqué par le canal observé", "Modèle non communiqué par le canal observé", "Modèle de réponse non communiqué par le canal observé", "Motif d’arrêt non communiqué par le canal observé"]:
+                self.assertIn(required, page)
+            self.assertIn("flux de réponse illisible" if incident.startswith("JSONL") else "nombre de tours de réponse invalide", page)
+
+    def test_12m_historical_brief_is_declared_unproven(self):
+        run = self.built()
+        page = (run / "index.html").read_text()
+        self.assertIn("n’est relié à aucune empreinte de source", page)
+        self.assertIn("il n’est pas prouvé par les artefacts de la campagne", page)
+        self.assertNotIn("à partir de la tâche et du fil source", page)
+        readme = demo.PACKAGE_DIR.joinpath("README.md").read_text()
+        self.assertIn("brief de présentation propre, rédigé après coup", readme)
+        self.assertIn("toute autre tâche retombe sur son identifiant", readme)
 
     def test_13_key_barrier_is_reusable_and_leaves_no_s9_artifact(self):
         for missing in [None, ""]:
