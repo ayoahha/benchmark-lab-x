@@ -89,7 +89,7 @@ Coût imputable aux tentatives déclarées d'une configuration. Le contrat fixe 
 Avantage d'une configuration `SATISFAIT` plus chère sur un critère secondaire défini avant l'exécution. Il n'est jamais fusionné avec le coût.
 
 ### Restitution
-Surface publique en exactement deux étapes : admissibilité de toutes les configurations avec verdict et motif synthétique, puis coût observé et bénéfices prévus parmi les seules configurations `SATISFAIT`. Critères, preuves, incidents, inconnues et conditions communes s'ouvrent sur demande, sans former une troisième étape.
+Surface publique en exactement deux étapes : admissibilité de toutes les configurations avec verdict et motif synthétique, puis coût observé de toutes les configurations, la recommandation économique et les bénéfices prévus restant limités aux seules configurations `SATISFAIT`. Critères, preuves, incidents, inconnues et conditions communes s'ouvrent sur demande, sans former une troisième étape.
 
 ### Attribution bornée
 Limite selon laquelle le verdict décrit la configuration observée sous les conditions de test communes, sans attribuer au seul modèle un effet que le fournisseur, l'effort, Pi ou ses réglages peuvent influencer.

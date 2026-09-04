@@ -104,13 +104,13 @@ Le verdict porte les éléments exigés par la règle « Verdict explicable » d
 
 ### 4.6 Vue de décision
 
-Responsabilité : exclure `NE SATISFAIT PAS` et `INDETERMINE` de la comparaison économique, comparer seulement les coûts connus et comparables des configurations `SATISFAIT`, puis exposer les bénéfices prévus sur les seuls critères secondaires déclarés, selon les règles de [coût et bénéfices](RULES.md#8-coût-et-bénéfices). Si le coût d'au moins une configuration `SATISFAIT` est inconnu ou non comparable, elle conserve son admissibilité, les coûts connus restent visibles, mais la vue ne déclare aucune option globalement moins chère et marque la conclusion économique `INCOMPLETE`.
+Responsabilité : exclure `NE SATISFAIT PAS` et `INDETERMINE` de la recommandation économique tout en laissant leur dépense observée visible, comparer seulement les coûts connus et comparables des configurations `SATISFAIT`, puis exposer les bénéfices prévus sur les seuls critères secondaires déclarés, selon les règles de [coût et bénéfices](RULES.md#8-coût-et-bénéfices). Si le coût d'au moins une configuration `SATISFAIT` est inconnu ou non comparable, elle conserve son admissibilité, les coûts connus restent visibles, mais la vue ne déclare aucune option globalement moins chère et marque la conclusion économique `INCOMPLETE`.
 
 Elle ne calcule aucun score global, ne fusionne jamais coût et bénéfice, et ne modifie ni sortie, ni reçu, ni verdict source.
 
 ### 4.7 Restitution
 
-Responsabilité : rendre la conclusion compréhensible et vérifiable en exactement deux étapes visibles : admissibilité de toutes les configurations avec verdict et motif synthétique, puis coût observé et bénéfices prévus parmi les seules configurations `SATISFAIT`. Une conclusion économique `INCOMPLETE` laisse les coûts connus visibles sans déclarer d'option globalement moins chère. Critères, preuves, incidents, inconnues, limite d'attribution et conditions de test communes s'ouvrent sur demande, sans former une troisième étape.
+Responsabilité : rendre la conclusion compréhensible et vérifiable en exactement deux étapes visibles : admissibilité de toutes les configurations avec verdict et motif synthétique, puis coût observé de toutes les configurations avec leur statut économique. La recommandation économique et les bénéfices prévus restent limités aux seules configurations `SATISFAIT`. Une conclusion économique `INCOMPLETE` laisse les coûts connus visibles sans déclarer d'option globalement moins chère. Critères, preuves, incidents, inconnues, limite d'attribution et conditions de test communes s'ouvrent sur demande, sans former une troisième étape.
 
 La restitution affiche la limite d'attribution : le verdict porte sur la configuration observée sous les conditions communes, pas sur le modèle isolé. Elle ne produit ni podium général, ni score global, ni graphique trompeur.
 
@@ -125,9 +125,10 @@ Besoin précis du demandeur-lecteur
               -> Sortie brute ou incident
                  -> Erreurs éliminatoires et obligations
                     -> SATISFAIT / NE SATISFAIT PAS / INDETERMINE, avec motif et preuves
-                       -> Coût parmi les seuls SATISFAIT
-                          -> Bénéfices prévus des SATISFAIT plus chers
-                             -> Restitution en deux étapes
+                       -> Coût observé de toutes les configurations
+                          -> Recommandation parmi les seuls SATISFAIT
+                             -> Bénéfices prévus des SATISFAIT plus chers
+                                -> Restitution en deux étapes
 ```
 
 Cette représentation décrit des dépendances. Elle n'impose aucun service ni schéma physique.

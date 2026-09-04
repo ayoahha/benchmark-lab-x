@@ -18,7 +18,7 @@ L'[ARD](ARD.md) décrit le modèle logique. Les [règles](RULES.md) portent les 
 
 **FAIT ÉTABLI** : le besoin originel est de permettre à la communauté Lab X de tester elle-même des solutions d'IA sur des tâches utiles, avec des preuves lisibles plutôt qu'un palmarès repris d'un tiers.
 
-**DÉCISION PROPRIÉTAIRE** : le produit met maintenant le modèle en avant. Pour une tâche et un contrat fixés avant l'exécution, il doit indiquer quelles configurations de modèle, avec leur mode d'interrogation du LLM (accès OAuth ou API directe), accomplissent le travail sous le même harnais Pi, puis rendre lisibles le coût et les bénéfices prévus parmi les seules configurations admissibles.
+**DÉCISION PROPRIÉTAIRE** : le produit met maintenant le modèle en avant. Pour une tâche et un contrat fixés avant l'exécution, il doit indiquer quelles configurations de modèle, avec leur mode d'interrogation du LLM (accès OAuth ou API directe), accomplissent le travail sous le même harnais Pi, puis rendre lisible le coût observé de chaque configuration. La recommandation économique et les bénéfices prévus restent limités aux seules configurations admissibles.
 
 Le nom du modèle ne suffit toutefois pas comme preuve. Le modèle est l'identifiant principal présenté, mais le verdict s'applique à sa configuration observée sous les conditions de test communes déclarées. Aucun effet que le fournisseur, l'effort, Pi ou ses réglages peuvent influencer n'est attribué au seul modèle.
 
@@ -133,7 +133,7 @@ V0 et V1 restent sous leurs contrats et verdicts d'origine. Elles ne fournissent
 La restitution comporte exactement deux étapes visibles :
 
 1. **Admissibilité** : toutes les configurations comparées, chacune avec son verdict et un motif synthétique ;
-2. **Comparaison économique** : coûts connus et comparables et bénéfices prévus parmi les seules configurations `SATISFAIT`. Si le coût d'au moins une configuration `SATISFAIT` est inconnu ou non comparable, les coûts connus restent visibles, mais aucune option n'est déclarée globalement moins chère et la conclusion économique porte la mention `INCOMPLETE`.
+2. **Comparaison économique** : coûts observés de toutes les configurations, chacune avec son verdict et son statut économique. La recommandation économique et les bénéfices prévus restent limités aux seules configurations `SATISFAIT`. Si le coût d'au moins une configuration `SATISFAIT` est inconnu ou non comparable, les coûts connus restent visibles, mais aucune option n'est déclarée globalement moins chère et la conclusion économique porte la mention `INCOMPLETE`.
 
 Cette mention ne crée pas un quatrième verdict et ne change pas l'admissibilité.
 
