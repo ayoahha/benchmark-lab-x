@@ -4,11 +4,11 @@ style_gate: pass
 
 # Instructions pour les agents
 
-## Mission et phase actuelle
+## Mission
 
 Benchmark Lab-X aide à choisir un modèle pour une tâche précise à partir de preuves lisibles. Le verdict porte sur la configuration observée sous des conditions communes, jamais sur le nom du modèle seul.
 
-La prochaine phase s'appelle `V2-alpha`. Son architecture, son découpage, son backlog, ses campagnes et son implémentation suivent les décisions explicites d'Ayo et les documents canoniques.
+Le périmètre, l'architecture, le backlog et les campagnes suivent les décisions explicites d'Ayo. Les canons ne portent aucun statut de livraison des versions ; README, GitHub et les reçus portent les faits opérationnels.
 
 ## Sources faisant autorité
 
@@ -37,7 +37,7 @@ La demande actuelle d'Ayo prévaut sur ce fichier. PRD, ARD et règles gouvernen
 
 ## Autorité et sécurité
 
-Une approbation documentaire n'autorise ni appel candidat, ni retry, ni dépense, ni campagne, ni publication, ni déploiement.
+Une approbation documentaire n'autorise ni appel candidat, ni retry, ni dépense, ni campagne, ni publication, ni déploiement. Intégration Git, exécution produit, appels candidats et budget, provisionnement et publication gardent des autorités distinctes.
 
 Demander une autorisation explicite avant toute opération Git destructive, fusion, suppression de branche, fermeture de PR ou d'Issue, release, appel payant ou action sur un système externe. Ne jamais exposer de secret. Les données et sorties réelles restent privées tant qu'une publication n'est pas autorisée.
 
@@ -45,15 +45,19 @@ Demander une autorisation explicite avant toute opération Git destructive, fusi
 
 GitHub Issues porte les tâches, dépendances, décisions et preuves. Le champ `Status` du [Project #5](https://github.com/users/ayoahha/projects/5) porte l'état de travail. Aucun backlog local ne le duplique.
 
-Créer ou redécouper les Issues V2-alpha seulement après une décision explicite d'Ayo sur le découpage de livraison. Une Issue se ferme avec sa preuve de résultat ou une décision explicite de remplacement.
+Créer ou redécouper les Issues seulement après décision explicite d'Ayo. Ne pas redécouper les anciennes cartes pour fabriquer le nouveau backlog. Utiliser Parent issue et Sub-issues progress pour Initiative, Epic et Story ; réserver « graphe » à l'exécution agentique. Le nombre d'Epics et de Stories découle des résultats décidés, au minimum KISS.
+
+Aucune Story de tâche, campagne ou candidat tant que son contenu, son panel et son budget ne sont pas décidés. Une Issue se ferme avec sa preuve de résultat ou une décision explicite de remplacement. Son état ne prouve pas l'état d'exécution d'une campagne.
 
 ## Validation
 
-Exécuter d'abord le test le plus proche du changement. Avant livraison d'un changement susceptible d'affecter le comportement, exécuter la validation complète :
+Exécuter d'abord le test le plus proche du changement. Avant livraison d'un changement susceptible d'affecter le comportement, exécuter les suites du périmètre concerné et la commande actuellement configurée en CI :
 
 ```bash
 uv run --with requests --with mpmath==1.3.0 python -m unittest discover -s tests
 ```
+
+Cette commande ne découvre pas la suite `v2_alpha_demo/test_demo.py`. Ne pas la présenter comme validation complète du moteur ; distinguer ses preuves macOS de celles réellement acquises sous Linux. Ne pas lancer un appel modèle pour compenser un test absent.
 
 Pour un changement documentaire, vérifier aussi les liens, les chemins canoniques et l'absence de source concurrente. Ne pas déplacer dans la prose un contrôle que la CI peut garantir.
 
@@ -69,4 +73,4 @@ S'arrêter dès que le résultat autorisé est prouvé. Si une information ou un
 
 ## Règles de revue
 
-Signaler comme bloquant toute nouvelle autorité documentaire concurrente, requalification de V0 ou V1, architecture V2-alpha sans autorité, secret versionné ou contournement d'une preuve requise. Laisser le formatage automatique aux outils du dépôt.
+Signaler comme bloquant toute nouvelle autorité documentaire concurrente, requalification de V0 ou V1, architecture présentée comme construite sans preuve ou choix d'architecture sans autorité, secret versionné ou contournement d'une preuve requise. Laisser le formatage automatique aux outils du dépôt.
