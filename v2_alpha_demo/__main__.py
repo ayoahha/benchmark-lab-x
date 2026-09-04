@@ -915,26 +915,202 @@ def _results(run, dossier, review_map, receipts, decisions):
     }
 
 
+def _e(value):
+    return html.escape(str(value), quote=True)
+
+
+def _money(value, decimals=4):
+    if value == "INCONNU":
+        return "Non communiqué"
+    amount = Decimal(str(value))
+    rendered = format(amount, "f") if decimals is None else f"{amount:.{decimals}f}"
+    return rendered.replace(".", ",") + " USD"
+
+
+def _public_label(item):
+    requested = item["requested"]
+    return f"{requested['id']} · {requested['model']}"
+
+
+def _render_dates(dates):
+    labels = {"prepared": "Campagne préparée", "reviewed": "Revue réalisée", "built": "Restitution initiale"}
+    months = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+    items = []
+    for key, label in labels.items():
+        raw = dates[key]
+        try:
+            value = datetime.fromisoformat(raw)
+            offset = value.strftime("%z")
+            zone = "UTC" if offset == "+0000" else f"UTC{offset[:3]}:{offset[3:]}"
+            display = f"{value.day} {months[value.month - 1]} {value.year} à {value:%H:%M} {zone}"
+        except (TypeError, ValueError):
+            display = str(raw)
+        items.append(f"<li><span>{label}</span><time datetime=\"{_e(raw)}\">{_e(display)}</time></li>")
+    return "<ul class=\"dates\">" + "".join(items) + "</ul>"
+
+
+def _render_conditions(conditions):
+    requested, applied, observed = conditions["requested"], conditions["applied"], conditions["observed"]
+    output = {"text-only": "Texte uniquement"}.get(requested["output"], requested["output"])
+    thinking = {"high": "Élevé", "medium": "Moyen", "low": "Faible"}.get(requested["thinking"], requested["thinking"])
+    session = {"ephemeral": "Éphémère"}.get(requested["session"], requested["session"])
+    requested_rows = [
+        ("Version de Pi", requested["pi_version"]), ("Sortie", output),
+        ("Limite de sortie", f"{requested['max_tokens']:,}".replace(",", " ") + " tokens"),
+        ("Durée maximale", f"{requested['timeout_seconds']} secondes"),
+        ("Effort demandé", thinking), ("Session", session),
+    ]
+    disabled_labels = {
+        "tools": "outils", "extensions": "extensions", "skills": "compétences",
+        "prompt_templates": "modèles de prompt", "themes": "thèmes",
+        "project_context": "contexte projet", "compaction": "compaction",
+        "retry": "nouvelle tentative",
+    }
+    disabled = [label for key, label in disabled_labels.items() if requested.get(key) is False]
+    observed_rows = [
+        ("Pi observé", observed["pi_version"]), ("Système", observed["system"]),
+        ("Architecture", observed["architecture"]), ("Python", observed["python"]),
+    ]
+    rows = lambda values: "".join(f"<dt>{_e(label)}</dt><dd>{_e(value)}</dd>" for label, value in values)
+    return (
+        "<div class=\"condition-grid\"><section><h3>Demandé</h3><dl>" + rows(requested_rows) +
+        f"</dl><p class=\"meta\"><strong>Désactivés :</strong> {_e(', '.join(disabled))}.</p></section>"
+        "<section><h3>Observé</h3><dl>" + rows(observed_rows) +
+        f"</dl><p class=\"meta\"><strong>Version du moteur :</strong> <code>{_e(observed['git_head'])}</code></p></section></div>"
+        "<details class=\"technical\"><summary>Empreintes de configuration et détails système</summary>"
+        f"<dl><dt>Réglages</dt><dd><code>{_e(applied['settings_sha256'])}</code></dd>"
+        f"<dt>Modèles</dt><dd><code>{_e(applied['models_sha256'])}</code></dd>"
+        f"<dt>Système complet</dt><dd>{_e(observed['system_version'])}</dd></dl></details>"
+    )
+
+
+def _render_fingerprints(fingerprints):
+    labels = {
+        "contract": "Contrat", "panel": "Panel", "seal": "Sceau de préparation",
+        "collection": "Collection", "review": "Revue", "decisions": "Décisions",
+        "authority_s9": "Autorité de collecte", "authority_s10": "Autorité de restitution",
+        "raw_jsonl": "Sortie brute", "final_text": "Texte final",
+        "receipt": "Reçu", "blind_copy": "Copie aveugle",
+    }
+    items = []
+    for key, value in fingerprints.items():
+        display = "Non disponible" if value is None else f"<code>{_e(value)}</code>"
+        items.append(f"<li><span>{_e(labels.get(key, key))}</span>{display}</li>")
+    return "<ul class=\"fingerprints\">" + "".join(items) + "</ul>"
+
+
+def _render_card(item, secondary_definitions):
+    requested, observed = item["requested"], item["observed"]
+    verdict_class = {"SATISFAIT": "success", "NE SATISFAIT PAS": "failure", "INDETERMINE": "unknown"}[item["verdict"]]
+    evidence_labels = {"blind-copy": "copie aveugle", "receipt": "reçu d’exécution", "incident": "reçu d’incident"}
+    findings = "".join(
+        f"<li><b>{_e(key)}</b><span>{_e(value['finding'])}</span><small>Preuve : {_e(evidence_labels.get(value['evidence'], value['evidence']))}</small></li>"
+        for key, value in item["findings"].items()
+    )
+    secondary = item["secondary"] or {}
+    if secondary:
+        criteria = "".join(
+            f"<li><span>{_e(definition['text'])}</span><strong>{_e(secondary[definition['id']].capitalize())}</strong></li>"
+            for definition in secondary_definitions
+        )
+    else:
+        criteria = "<li class=\"not-evaluated\">Critères secondaires non évalués pour cette configuration.</li>"
+    unknown_labels = {
+        "responseModel": "Modèle de réponse non communiqué par le canal observé",
+        "route": "Route observée non communiquée",
+        "effort": "Effort observé non communiqué",
+    }
+    unknowns = "".join(f"<li>{_e(unknown_labels.get(key, key))}</li>" for key in item["unknowns"])
+    observed_rows = [("Fournisseur", observed.get("provider")), ("Modèle", observed.get("model"))]
+    if observed.get("responseModel") != "INCONNU":
+        observed_rows.append(("Modèle déclaré dans la réponse", observed.get("responseModel")))
+    if observed.get("route") != "INCONNU":
+        observed_rows.append(("Route", observed.get("route")))
+    if observed.get("effort") != "INCONNU":
+        observed_rows.append(("Effort", observed.get("effort")))
+    rows = lambda values: "".join(f"<dt>{_e(label)}</dt><dd>{_e(value)}</dd>" for label, value in values)
+    incident = "Aucun incident constaté." if item["incident"] == "AUCUN" else f"Incident constaté : {_e(item['incident'])}."
+    return (
+        f"<article class=\"result-card result-card--{verdict_class}\">"
+        f"<div class=\"result-head\"><div><p class=\"config-id\">{_e(requested['id'])}</p><h3>{_e(requested['model'])}</h3></div>"
+        f"<p class=\"verdict verdict--{verdict_class}\">{_e(item['verdict'])}</p>"
+        f"<p class=\"card-cost\"><span>Coût observé</span><strong>{_e(_money(item['cost']))}</strong></p></div>"
+        f"<p class=\"reason\">{_e(item['reason'])}</p><ul class=\"criteria\">{criteria}</ul>"
+        "<details class=\"result-details\"><summary>Conditions, preuves et traçabilité</summary><div class=\"detail-grid\">"
+        f"<section><h4>Configuration demandée</h4><dl>{rows([('Fournisseur', requested['provider']), ('Modèle', requested['model']), ('Route amont', requested['upstream']), ('Effort demandé', requested['thinking'])])}</dl></section>"
+        f"<section><h4>Configuration observée</h4><dl>{rows(observed_rows)}</dl><ul class=\"unknowns\">{unknowns}</ul><p>{incident}</p><p class=\"meta\">Décision portée par {_e(item['role'])}.</p></section></div>"
+        f"<details class=\"technical\"><summary>Constats de la revue</summary><ul class=\"findings\">{findings}</ul></details>"
+        f"<details class=\"technical\"><summary>Empreintes de cette configuration</summary>{_render_fingerprints(item['fingerprints'])}</details>"
+        "</details></article>"
+    )
+
+
+def _render_economy(results):
+    economy, configurations, campaign = results["economy"], results["configurations"], results["contract"]
+    by_blind_id = {item["blind_id"]: item for item in configurations}
+    costs = [(by_blind_id[key], Decimal(str(value))) for key, value in economy["known_costs"].items() if key in by_blind_id]
+    costs.sort(key=lambda pair: (pair[1], pair[0]["requested"]["id"]))
+    maximum = max((value for _, value in costs), default=Decimal(1))
+    bars = "".join(
+        f"<li><div><strong>{_e(_public_label(item))}</strong><span>{_e(_money(value))}</span></div>"
+        f"<meter min=\"0\" max=\"{_e(maximum)}\" value=\"{_e(value)}\" aria-label=\"Coût observé de {_e(_public_label(item))}\">{_e(_money(value))}</meter>"
+        f"<small>Valeur enregistrée : {_e(_money(value, None))}</small></li>"
+        for item, value in costs
+    )
+    least = [by_blind_id[key] for key in economy["least_expensive"] if key in by_blind_id]
+    if economy["status"] == "INCOMPLETE":
+        conclusion = "Comparaison économique incomplète : les coûts connus restent visibles, sans option déclarée globalement moins chère."
+    elif len(least) == 1:
+        conclusion = f"La configuration la moins chère parmi celles qui satisfont le contrat est {_public_label(least[0])}, à {_money(least[0]['cost'])}."
+    elif least:
+        conclusion = "Les configurations co-moins-chères sont " + ", ".join(_public_label(item) for item in least) + "."
+    else:
+        conclusion = "Aucune configuration ne peut être comparée économiquement."
+    known_costs = [Decimal(str(item["cost"])) for item in configurations if item["cost"] != "INCONNU"]
+    unknown_costs = sum(item["cost"] == "INCONNU" for item in configurations)
+    excluded = [item for item in configurations if item["verdict"] != "SATISFAIT"]
+    excluded_known = [Decimal(str(item["cost"])) for item in excluded if item["cost"] != "INCONNU"]
+    total_label = "Dépense totale observée" if not unknown_costs else "Dépense connue"
+    totals = (
+        f"<div class=\"spend-summary\"><p><span>{total_label}</span><strong>{_e(_money(sum(known_costs, Decimal(0))))}</strong></p>"
+        f"<p><span>Plafond de campagne</span><strong>{_e(_money(campaign['cost_basis']['cap'], 2))}</strong></p>"
+        f"<p><span>Dépense hors comparaison</span><strong>{_e(_money(sum(excluded_known, Decimal(0))))}</strong></p></div>"
+    )
+    if economy["benefits"]:
+        definitions = {item["id"]: item["text"] for item in campaign["secondary"]}
+        benefit_items = "".join(
+            f"<li><strong>{_e(_public_label(by_blind_id[key]))}</strong> : {_e(', '.join(definitions[item] for item in value))}</li>"
+            for key, value in economy["benefits"].items() if key in by_blind_id
+        )
+        benefits = f"<div class=\"benefits\"><h3>Bénéfices prévus</h3><ul>{benefit_items}</ul></div>"
+    else:
+        benefits = "<p class=\"benefits\"><strong>Bénéfices prévus :</strong> aucun critère secondaire ne justifie ici le surcoût d’une autre option admissible.</p>"
+    if excluded:
+        excluded_items = "".join(f"<li><strong>{_e(_public_label(item))}</strong><span>{_e(item['reason'])}</span></li>" for item in excluded)
+        exclusions = f"<details><summary>{len(excluded)} configuration{'s' if len(excluded) > 1 else ''} exclue{'s' if len(excluded) > 1 else ''} de cette comparaison</summary><ul class=\"exclusions\">{excluded_items}</ul></details>"
+    else:
+        exclusions = ""
+    chart = f"<ol class=\"cost-bars\">{bars}</ol>" if bars else ""
+    return f"<div class=\"economy-callout\"><p>{_e(conclusion)}</p></div>{chart}{totals}{benefits}{exclusions}"
+
+
 def _render_html(results):
-    e = lambda value: html.escape(str(value), quote=True)
-    cards = []
-    for item in results["configurations"]:
-        requested, observed = item["requested"], item["observed"]
-        secondary = item["secondary"] or {}
-        findings = "".join(f"<li><b>{e(key)}</b> {e(value['finding'])} <small>{e(value['evidence'])}</small></li>" for key, value in item["findings"].items())
-        cards.append(f"<article><h3>{e(requested['model'])}</h3><p class='verdict'>{e(item['verdict'])}</p><p>{e(item['reason'])}</p><dl><dt>Demandé</dt><dd>{e(requested['provider'])} · {e(requested['model'])} · route {e(requested['upstream'])} · effort {e(requested['thinking'])}</dd><dt>Observé</dt><dd>{e(observed.get('provider'))} · {e(observed.get('model'))} · réponse {e(observed.get('responseModel'))} · route {e(observed.get('route'))} · effort {e(observed.get('effort'))}</dd><dt>Coût observé</dt><dd>{e(item['cost'])} USD</dd><dt>S1 / S2</dt><dd>{e(secondary.get('S1', 'sans objet'))} / {e(secondary.get('S2', 'sans objet'))}</dd><dt>Responsable</dt><dd>{e(item['role'])}</dd><dt>Incident</dt><dd>{e(item['incident'])}</dd><dt>Inconnues</dt><dd>{e(', '.join(item['unknowns']) or 'aucune')}</dd><dt>Empreintes</dt><dd>{e(item['fingerprints'])}</dd></dl><details><summary>Preuves</summary><ul>{findings}</ul></details></article>")
-    exclusions = [f"{item['requested']['model']}: {item['reason']}" for item in results["configurations"] if item["verdict"] != "SATISFAIT"]
-    economy = results["economy"]
+    panel_order = {item["id"]: index for index, item in enumerate(results["contract"]["panel"])}
+    configurations = sorted(results["configurations"], key=lambda item: panel_order.get(item["requested"]["id"], len(panel_order)))
+    view = {**results, "configurations": configurations}
     data = {
-        "task": results["task"], "contract": _contract_summary(results["contract"]), "dates": results["dates"],
-        "conditions": results["conditions"], "cards": "".join(cards),
-        "economy": f"Conclusion {e(economy['status'])}. Coûts connus: {e(economy['known_costs'])}. Moins chère(s): {e(economy['least_expensive'] or 'aucune')}. Bénéfices: {e(economy['benefits'] or 'aucun')}.",
-        "exclusions": e("; ".join(exclusions) or "aucune"), "fingerprints": results["fingerprints"], "limit": results["attribution_limit"],
+        "task": _e(results["task"]),
+        "contract": _contract_summary(results["contract"]),
+        "dates": _render_dates(results["dates"]),
+        "conditions": _render_conditions(results["conditions"]),
+        "cards": "".join(_render_card(item, results["contract"]["secondary"]) for item in configurations),
+        "economy": _render_economy(view),
+        "fingerprints": _render_fingerprints(results["fingerprints"]),
+        "limit": _e(results["attribution_limit"]),
     }
     template = (PACKAGE_DIR / "page.html").read_text()
     for key, value in data.items():
-        replacement = value if key == "cards" else e(json.dumps(value, ensure_ascii=False)) if isinstance(value, (dict, list)) else str(value)
-        template = template.replace("{{" + key + "}}", replacement)
+        template = template.replace("{{" + key + "}}", value)
     if "{{" in template:
         raise ValueError("gabarit incomplet")
     return template.encode()
@@ -943,7 +1119,7 @@ def _render_html(results):
 def _contract_summary(campaign):
     obligations = "".join(f"<li><b>{html.escape(item['id'])}</b> {html.escape(item['text'])}</li>" for item in campaign["obligations"])
     errors = "".join(f"<li><b>{html.escape(item['id'])}</b> {html.escape(item['text'])}</li>" for item in campaign["fatal_errors"])
-    return f"<p><b>Résultat attendu :</b> {html.escape(campaign['expected_result'])}</p><p><b>Panel :</b> {len(campaign['panel'])} configurations · <b>plafond :</b> {campaign['cost_basis']['cap']:.2f} {html.escape(campaign['cost_basis']['currency'])}</p><details><summary>6 obligations</summary><ul>{obligations}</ul></details><details><summary>3 erreurs éliminatoires</summary><ul>{errors}</ul></details>"
+    return f"<p><b>Résultat attendu :</b> {html.escape(campaign['expected_result'])}</p><p><b>Panel :</b> {len(campaign['panel'])} configurations · <b>plafond :</b> {_money(campaign['cost_basis']['cap'], 2)}</p><details><summary>{len(campaign['obligations'])} obligations</summary><ul>{obligations}</ul></details><details><summary>{len(campaign['fatal_errors'])} erreurs éliminatoires</summary><ul>{errors}</ul></details>"
 
 
 def build(run_dir, decisions, authority, repo_root=None):
@@ -977,6 +1153,42 @@ def build(run_dir, decisions, authority, repo_root=None):
     return results
 
 
+def present(source_run_dir, run_dir, repo_root=None):
+    source, source_id = _run_path(source_run_dir, repo_root)
+    _validate_final(source, source_id)
+    results_raw = (source / "results.json").read_bytes()
+    results = _strict_json_bytes(results_raw, str(source / "results.json"))
+    if not isinstance(results, dict) or results.get("schema") != "benchmark-lab-x-v2-alpha-results-1":
+        raise ValueError("résultats source invalides")
+    page = _render_html(results)
+    run, run_id = _run_path(run_dir, repo_root, create=True)
+    source_record = {
+        "schema": "benchmark-lab-x-v2-alpha-presentation-source-1",
+        "source_run": source_id,
+        "source_final_seal_sha256": _sha(source / "final-seal.json"),
+        "source_results_sha256": hashlib.sha256(results_raw).hexdigest(),
+    }
+    try:
+        _write_json_bytes(run / "results.json", results_raw)
+        _write_json(run / "source.json", source_record)
+        _write_exclusive(run / "index.html", page)
+        seal = {
+            "schema": "benchmark-lab-x-v2-alpha-presentation-seal-1",
+            "run": run_id,
+            "source_run": source_id,
+            "source_sha256": _sha(run / "source.json"),
+            "files": {name: _sha(run / name) for name in ["results.json", "index.html", "source.json"]},
+            "built_at": _now(),
+        }
+        _write_json(run / "presentation-seal.json", seal)
+        _private_tree(run)
+        _validate_presentation(run, run_id, repo_root)
+    except BaseException:
+        shutil.rmtree(run)
+        raise
+    return {"run": run_id, "source_run": source_id, "page": str(run / "index.html")}
+
+
 def _validate_final(run, run_id):
     seal = _load_json(run / "final-seal.json")
     if seal.get("schema") != "benchmark-lab-x-v2-alpha-final-seal-1" or seal.get("run") != run_id:
@@ -987,9 +1199,32 @@ def _validate_final(run, run_id):
     return run / "index.html"
 
 
+def _validate_presentation(run, run_id, repo_root=None):
+    seal = _load_json(run / "presentation-seal.json")
+    if seal.get("schema") != "benchmark-lab-x-v2-alpha-presentation-seal-1" or seal.get("run") != run_id:
+        raise ValueError("sceau de présentation invalide")
+    if set(seal.get("files", {})) != {"results.json", "index.html", "source.json"}:
+        raise ValueError("fichiers de présentation incomplets")
+    for name, digest in seal["files"].items():
+        if not (run / name).is_file() or _sha(run / name) != digest:
+            raise ValueError(f"artefact de présentation altéré: {name}")
+    if seal.get("source_sha256") != _sha(run / "source.json"):
+        raise ValueError("source de présentation altérée")
+    source_record = _load_json(run / "source.json")
+    if source_record.get("schema") != "benchmark-lab-x-v2-alpha-presentation-source-1" or source_record.get("source_run") != seal.get("source_run"):
+        raise ValueError("source de présentation invalide")
+    source, source_id = _run_path(source_record["source_run"], repo_root)
+    _validate_final(source, source_id)
+    if source_record.get("source_final_seal_sha256") != _sha(source / "final-seal.json"):
+        raise ValueError("sceau source divergent")
+    if source_record.get("source_results_sha256") != _sha(source / "results.json") or (run / "results.json").read_bytes() != (source / "results.json").read_bytes():
+        raise ValueError("résultats source divergents")
+    return run / "index.html"
+
+
 def show(run_dir, repo_root=None, opener=None):
     run, run_id = _run_path(run_dir, repo_root)
-    page = _validate_final(run, run_id)
+    page = _validate_presentation(run, run_id, repo_root) if (run / "presentation-seal.json").is_file() else _validate_final(run, run_id)
     command = opener or "open"
     completed = subprocess.run([command, str(page)], check=False)
     if completed.returncode:
@@ -1340,6 +1575,9 @@ def main(argv=None):
     p.add_argument("--run-dir", required=True)
     p.add_argument("--decisions", required=True)
     p.add_argument("--authority", required=True)
+    p = commands.add_parser("present")
+    p.add_argument("--source-run", required=True)
+    p.add_argument("--run-dir", required=True)
     p = commands.add_parser("show")
     p.add_argument("--run-dir", required=True)
     args = parser.parse_args(argv)
@@ -1352,6 +1590,8 @@ def main(argv=None):
             result = review(args.run_dir)
         elif args.command == "build":
             result = build(args.run_dir, args.decisions, args.authority)
+        elif args.command == "present":
+            result = present(args.source_run, args.run_dir)
         else:
             result = {"page": str(show(args.run_dir))}
         print(json.dumps(result, ensure_ascii=False, sort_keys=True, allow_nan=False))

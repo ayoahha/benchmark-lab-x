@@ -431,10 +431,83 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
         self.assertEqual(page.count('data-step="'), 2)
         self.assertNotIn("<script>alert(1)</script>", page)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", page)
-        for forbidden in ["fetch(", "http://", "https://", "Atlas Direct", GOOD_OUTPUT]:
+        for forbidden in ["fetch(", "http://", "https://", "Atlas Direct", GOOD_OUTPUT, "responseModel", "{&quot;", "{&#x27;"]:
             self.assertNotIn(forbidden, page)
-        for required in ["@media", "focus-visible", "INCONNU", "route", "effort", "Empreintes", "limite"]:
+        for required in ["@media", "focus-visible", "non communiqué", "route", "effort", "Empreintes", "limite", "<meter"]:
             self.assertIn(required.lower(), page.lower())
+
+    def test_12b_human_ui_maps_models_states_costs_and_secondary_criteria(self):
+        run = self.built()
+        results = json.loads((run / "results.json").read_text())
+        failed = results["configurations"][1]
+        failed["verdict"] = "NE SATISFAIT PAS"
+        failed["secondary"] = None
+        results["economy"] = {
+            "status": "COMPLETE",
+            "known_costs": {
+                results["configurations"][0]["blind_id"]: results["configurations"][0]["cost"],
+                results["configurations"][2]["blind_id"]: results["configurations"][2]["cost"],
+            },
+            "least_expensive": [results["configurations"][0]["blind_id"]],
+            "benefits": {},
+        }
+        results["configurations"].reverse()
+        page = demo._render_html(results).decode()
+        self.assertLess(page.index('<p class="config-id">C1</p>'), page.index('<p class="config-id">C2</p>'))
+        self.assertIn("C1 · openai/gpt-5.6-sol", page)
+        self.assertIn("verdict--success", page)
+        self.assertIn("verdict--failure", page)
+        self.assertIn("Clarté des décisions et des statuts", page)
+        self.assertIn("Rigueur sur les montants et les échéances", page)
+        self.assertIn("Dépense totale observée", page)
+        self.assertIn("Dépense hors comparaison", page)
+        self.assertIn("Aucun incident constaté", page)
+        self.assertNotIn("D-8D6C6B58B0DA", page)
+        self.assertNotIn("AUCUN", page)
+        self.assertNotIn("sans objet", page)
+
+    def test_12c_presentation_run_preserves_the_sealed_source(self):
+        source = self.built()
+        before = {path.name: path.read_bytes() for path in source.iterdir() if path.is_file()}
+        target = self.root / "runs" / "ui-r1"
+        result = demo.present(source, target, self.root)
+        self.assertEqual(result["source_run"], f"runs/{source.name}")
+        self.assertEqual(result["run"], "runs/ui-r1")
+        self.assertEqual(before, {path.name: path.read_bytes() for path in source.iterdir() if path.is_file()})
+        self.assertEqual((target / "results.json").read_bytes(), (source / "results.json").read_bytes())
+        self.assertEqual(demo._validate_presentation(target, "runs/ui-r1", self.root), target / "index.html")
+        with mock.patch("subprocess.run") as opened:
+            opened.return_value.returncode = 0
+            demo.show(target, self.root)
+            opened.assert_called_once_with(["open", str(target / "index.html")], check=False)
+        with self.assertRaises(FileExistsError):
+            demo.present(source, target, self.root)
+
+    def test_12d_render_scales_without_special_case_for_fifteen_configurations(self):
+        run = self.built()
+        results = json.loads((run / "results.json").read_text())
+        prototype = results["configurations"][0]
+        configurations = []
+        panel = []
+        costs = {}
+        for index in range(1, 16):
+            item = json.loads(json.dumps(prototype))
+            item["blind_id"] = f"D-{index:012X}"
+            item["requested"]["id"] = f"C{index}"
+            item["requested"]["model"] = f"provider/model-{index}"
+            item["observed"]["model"] = f"provider/model-{index}"
+            item["cost"] = index / 1000
+            configurations.append(item)
+            panel.append(item["requested"])
+            costs[item["blind_id"]] = item["cost"]
+        results["configurations"] = configurations
+        results["contract"]["panel"] = panel
+        results["economy"] = {"status": "COMPLETE", "known_costs": costs, "least_expensive": [configurations[0]["blind_id"]], "benefits": {}}
+        page = demo._render_html(results).decode()
+        self.assertEqual(page.count('class="result-card '), 15)
+        self.assertIn("C15", page)
+        self.assertIn("provider/model-15", page)
+        self.assertEqual(page.count('data-step="'), 2)
 
     def test_13_key_barrier_is_reusable_and_leaves_no_s9_artifact(self):
         for missing in [None, ""]:
@@ -592,7 +665,7 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
     def test_19_help_and_offline_commands_never_launch_candidate(self):
         completed = subprocess.run([sys.executable, "-B", "-m", "v2_alpha_demo", "--help"], cwd=demo.PACKAGE_DIR.parent, capture_output=True, text=True)
         self.assertEqual(completed.returncode, 0)
-        for command in ["prepare", "collect", "review", "build", "show"]:
+        for command in ["prepare", "collect", "review", "build", "present", "show"]:
             self.assertIn(command, completed.stdout)
         run = self.reviewed()
         decisions, _ = self.decisions(run)
@@ -623,7 +696,7 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
         self.assertEqual(page.count('data-step="'), 2)
         for forbidden in ["fausse-cle-en-memoire", (run / "prompt.txt").read_text(), GOOD_OUTPUT, "stdout.jsonl", "review-map.json", "fetch(", "XMLHttpRequest", "WebSocket", "http://", "https://"]:
             self.assertNotIn(forbidden, page)
-        for required in ["Résultat attendu", "6 obligations", "3 erreurs éliminatoires", "0.50 USD", "min-width:0", "overflow-x:hidden", "focus-visible"]:
+        for required in ["Résultat attendu", "6 obligations", "3 erreurs éliminatoires", "0,50 USD", "min-width:0", "overflow-x:hidden", "focus-visible"]:
             self.assertIn(required, page)
 
 
