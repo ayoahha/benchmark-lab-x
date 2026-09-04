@@ -95,7 +95,7 @@ Le coût ne compense jamais une non-admissibilité. Ces six opérations internes
 
 **Bénéfice prévu.** L'intérêt d'une configuration `SATISFAIT` plus chère se limite aux critères secondaires déclarés avant l'exécution. Un critère ne départage que s'il est comparable, avec une unité et un sens favorable fixés avant l'exécution ; sinon il reste descriptif.
 
-**Dépense visible.** Le coût consommé par une configuration non admissible peut rester visible comme dépense ; il est exclu de la recommandation économique.
+**Dépense visible.** Le coût consommé par une configuration non admissible reste visible comme dépense ; il est exclu de la recommandation économique.
 
 **Aucun score global.** Admissibilité, coût et bénéfices ne sont ni moyennés, ni pondérés, ni fusionnés, ni réduits en note unique. Aucun meilleur modèle absolu, podium général ou classement universel n'est produit.
 
@@ -109,9 +109,9 @@ Le coût ne compense jamais une non-admissibilité. Ces six opérations internes
 
 ## 10. Restitution
 
-**Deux étapes publiques.** La restitution comporte exactement deux étapes visibles : admissibilité de toutes les configurations avec verdict et motif synthétique, puis coût observé et bénéfices prévus parmi les seules configurations `SATISFAIT`. Lorsque la conclusion économique est `INCOMPLETE`, les coûts connus restent visibles sans option déclarée globalement moins chère. Critères, preuves, incidents, inconnues et conditions communes s'ouvrent sur demande ; leur ouverture n'est pas une troisième étape.
+**Deux étapes publiques.** La restitution comporte exactement deux étapes visibles : admissibilité de toutes les configurations avec verdict et motif synthétique, puis coût observé de toutes les configurations avec leur statut économique. La recommandation économique et les bénéfices prévus restent limités aux seules configurations `SATISFAIT`. Lorsque la conclusion économique est `INCOMPLETE`, les coûts connus restent visibles sans option déclarée globalement moins chère. Critères, preuves, incidents, inconnues et conditions communes s'ouvrent sur demande ; leur ouverture n'est pas une troisième étape.
 
-**Minimum accessible.** La restitution contient la tâche, le contrat, les configurations, les conditions de test communes, les verdicts et leurs motifs, les coûts admissibles, les bénéfices prévus, les incidents, les inconnues, les limites et les preuves nécessaires. Contenu présent ne signifie pas contenu affiché d'emblée.
+**Minimum accessible.** La restitution contient la tâche, le contrat, les configurations, les conditions de test communes, les verdicts et leurs motifs, les coûts observés de toutes les configurations avec leur statut économique, les bénéfices prévus, les incidents, les inconnues, les limites et les preuves nécessaires. Contenu présent ne signifie pas contenu affiché d'emblée.
 
 **Aucun visuel trompeur.** Aucun podium général, score global ou graphique n'implique un classement, une échelle ou une précision absents du contrat.
 

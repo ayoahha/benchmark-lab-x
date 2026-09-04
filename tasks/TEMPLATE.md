@@ -16,6 +16,7 @@ Toute extension suit la [règle KISS](../docs/RULES.md#11-kiss-et-évolution).
 |---|---|
 | Identifiant de la carte | `<slug non canonique>` |
 | Tâche | `<travail précis>` |
+| Titre public | `<titre lisible de la tâche, repris tel quel par la restitution>` |
 | Demandeur-lecteur | `<besoin exprimé par ce rôle>` |
 | Responsable de campagne | `<rôle tenu, sans identité codée>` |
 | Date de préparation | `<date>` |
@@ -178,11 +179,11 @@ Appliquer l'ordre suivant :
 1. erreurs éliminatoires ;
 2. obligations et preuve ;
 3. verdict ;
-4. exclusion de `NE SATISFAIT PAS` et `INDETERMINE` ;
+4. exclusion de `NE SATISFAIT PAS` et `INDETERMINE` de la recommandation économique ;
 5. coût connu et comparable parmi les seuls `SATISFAIT` ;
 6. bénéfices prévus des `SATISFAIT` plus chers.
 
-Ces six opérations restent internes. La restitution publique en montre deux étapes : les verdicts et leurs motifs, puis les coûts connus et comparables, la conclusion économique et les bénéfices prévus ; le reste s'ouvre sur demande.
+Ces six opérations restent internes. La restitution publique en montre deux étapes : les verdicts et leurs motifs, puis le coût observé de chaque configuration avec son statut économique. La recommandation économique et les bénéfices prévus restent limités aux seules configurations `SATISFAIT` ; le reste s'ouvre sur demande.
 
 ### Conclusion économique
 
@@ -215,7 +216,7 @@ La restitution contient cette formulation ou son équivalent :
 - [ ] chaque configuration distingue sa route demandée de sa route observée ; toute valeur non prouvée reste `INCONNU`
 - [ ] la base de coût fixe le périmètre d'attribution, les tentatives comptées, l'unité commune et la conversion éventuelle avant exécution
 - [ ] chaque verdict porte un motif, ses preuves et son responsable
-- [ ] les non-`SATISFAIT` sont exclus de la comparaison économique et la conclusion est `INCOMPLETE` si un coût `SATISFAIT` est inconnu ou non comparable
+- [ ] le coût observé de chaque configuration reste visible ; les non-`SATISFAIT` sont exclus de la recommandation économique et la conclusion est `INCOMPLETE` si un coût `SATISFAIT` est inconnu ou non comparable
 - [ ] aucun score global, podium général, classement universel ou graphique trompeur n'est produit
 - [ ] la limite d'attribution est visible
 - [ ] les éléments différés restent absents
