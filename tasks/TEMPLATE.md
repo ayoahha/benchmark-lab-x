@@ -4,9 +4,11 @@ style_gate: pass
 
 # Carte de tâche : `<nom lisible>`
 
-Statut de campagne : `<porté par l'Issue et le champ Status du Project>`
+Suivi de livraison : `<Issue ; Status dans le Project>`
 
-Ce gabarit prépare le contrat minimal d'une tâche du premier prototype. Une carte approuvée n'autorise ni acquisition, ni campagne, ni publication.
+L'état d'exécution de chaque campagne appartient à ses reçus ; il n'est pas déduit du suivi de livraison.
+
+Ce gabarit prépare une version de tâche. Les sections 1 à 4 définissent le contrat ; les suivantes décrivent les informations à référencer depuis chaque manifeste de campagne et restitution, sans les dupliquer dans une version gelée. Une nouvelle campagne ne modifie pas le contrat. Une carte approuvée n'autorise ni acquisition, ni dépense, ni publication.
 
 Toute extension suit la [règle KISS](../docs/RULES.md#11-kiss-et-évolution).
 
@@ -14,16 +16,14 @@ Toute extension suit la [règle KISS](../docs/RULES.md#11-kiss-et-évolution).
 
 | Champ | Valeur |
 |---|---|
-| Identifiant de la carte | `<slug non canonique>` |
+| Identifiant stable de tâche | `<slug décidé>` |
+| Version de tâche | `<identité et empreinte du contrat et des cas>` |
 | Tâche | `<travail précis>` |
 | Titre public | `<titre lisible de la tâche, repris tel quel par la restitution>` |
 | Demandeur-lecteur | `<besoin exprimé par ce rôle>` |
 | Responsable de campagne | `<rôle tenu, sans identité codée>` |
 | Date de préparation | `<date>` |
 | Approbation du responsable de campagne avant exécution | `EN_ATTENTE` / `<preuve et date>` |
-| Appels candidats autorisés | `aucun` / `<autorité exacte>` |
-| Retries autorisés | `aucun` / `<autorité exacte>` |
-| Dépense maximale | `zéro` / `<montant, devise et périmètre>` |
 
 Une valeur `EN_ATTENTE` interdit l'exécution. Le demandeur-lecteur fournit son besoin ; le responsable de campagne prépare et approuve le contrat. Les deux rôles peuvent être tenus par la même personne.
 
@@ -43,7 +43,7 @@ Une valeur `EN_ATTENTE` interdit l'exécution. Le demandeur-lecteur fournit son 
 
 ### Conclusion permise
 
-`<conclusion bornée à la tâche, au contrat, aux configurations, aux conditions de test communes et à la date>`
+`<conclusion bornée à la version, aux cas et tentatives couverts, à la campagne, aux configurations, aux conditions communes et à la date>`
 
 ### Conclusions interdites
 
@@ -52,13 +52,19 @@ Une valeur `EN_ATTENTE` interdit l'exécution. Le demandeur-lecteur fournit son 
 - podium général ou graphique trompeur
 - effet causal du modèle isolé, ou effet attribué au seul modèle alors que le fournisseur, l'effort, Pi ou ses réglages peuvent l'influencer
 - conclusion hors de la tâche ou du contrat
-- requalification de V0 ou V1
+- requalification des campagnes historiques
 
 ## 3. Entrées et sortie brute
 
-### Stimulus
+### Cas d'essai
 
-`<texte exact ou chemin versionné>`
+| Cas | Entrée exacte | Identité ou empreinte | Difficulté couverte | Preuves attendues |
+|---|---|---|---|---|
+| `<id>` | `<texte ou référence>` | `<identité>` | `<motif du choix>` | `<références>` |
+
+Couverture et limites : `<cas retenus et portée réellement recherchée>`.
+
+Règle d'agrégation des verdicts : `<règle fixée avant exécution, ou AUCUNE : verdicts par cas seulement>`.
 
 ### Entrées et outils autorisés
 
@@ -105,24 +111,36 @@ Conserver au maximum deux lignes. Un critère est défini avant l'exécution et 
 
 Aucun autre verdict, score global ou seuil ajouté après résultat n'est permis.
 
-## 5. Configurations modèle plus accès direct ou API
+## 5. Références de campagne et de panel
 
-| Champ | Configuration A | Configuration B |
-|---|---|---|
-| Fournisseur | `<valeur>` | `<valeur>` |
-| Modèle | `<valeur>` | `<valeur>` |
-| Accès direct ou API | `<valeur>` | `<valeur>` |
-| Route demandée | `<valeur ou INCONNU>` | `<valeur ou INCONNU>` |
-| Route observée | `<valeur ou INCONNU>` | `<valeur ou INCONNU>` |
-| Paramètres | `<valeurs>` | `<valeurs>` |
-| Effort de raisonnement | `<valeur effective ou INCONNU>` | `<valeur effective ou INCONNU>` |
-| Identité observée requise | `<preuve>` | `<preuve>` |
+Ces informations appartiennent au manifeste de chaque campagne, référencé par le catalogue ; elles ne réécrivent pas la version de tâche.
 
-Ajouter seulement les colonnes nécessaires au panel autorisé. Les conditions de test communes ne sont pas répétées ici : elles vivent en section 6. Les abonnements et produits agentiques ne sont pas des configurations actives de ce gabarit.
+| Champ | Valeur |
+|---|---|
+| Campagne | `<identité>` |
+| Version de tâche et cas retenus | `<références et empreintes>` |
+| Panel figé | `<référence et empreinte>` |
+| Autorité d'exécution produit | `<référence ou ABSENTE>` |
+| Autorité des appels candidats et budget | `<référence ou ABSENTE>` |
+| Autorité de publication | `<référence ou ABSENTE>` |
+
+Pour chaque configuration du panel, conserver :
+
+| Champ | Valeur |
+|---|---|
+| Identifiant de configuration | `<identité>` |
+| Modèle et révision imposée | `<nom, version exacte et preuve attendue>` |
+| Fournisseur et accès direct ou API | `<valeurs>` |
+| Identifiant utilisable sur le canal | `<identifiant vérifié, ou INCONNU>` |
+| Route demandée et route observée | `<valeurs distinctes, ou INCONNU>` |
+| Paramètres et effort demandés puis observés | `<valeurs distinctes, ou INCONNU>` |
+| Identité observée | `<valeur et preuve, ou INCONNU>` |
+
+La sélection d'un nom ne prouve pas sa disponibilité. Une révision imposée ne peut pas être remplacée silencieusement. Pour un modèle local autorisé, relever aussi poids, quantification, serveur d'inférence et matériel. Les conditions communes sont référencées une fois en section 6.
 
 ## 6. Conditions de test communes
 
-Déclarées une fois, avant le premier candidat, et référencées par toutes les configurations de la section 5.
+Déclarées et figées dans le manifeste de campagne avant le premier candidat, puis référencées par toutes les configurations de son panel.
 
 | Champ | Valeur commune figée | Statut |
 |---|---|---|
@@ -136,9 +154,20 @@ Déclarées une fois, avant le premier candidat, et référencées par toutes le
 | Environnement | `<valeur>` | `<statut>` |
 | Date de gel | `<date>` | observée |
 
-Tout changement d'un de ces champs ouvre une nouvelle comparaison. Pi est obligatoire ; la carte ne propose ni harnais alternatif, ni comparaison de harnais.
+Tout changement d'un de ces champs ouvre une nouvelle comparaison. Pi reste le harnais commun. L'environnement identifié doit rester disponible pendant la campagne malgré les mises à jour du poste ou du site.
 
 ## 7. Acquisition et incidents
+
+### Autorisation propre à la campagne
+
+| Champ | Valeur |
+|---|---|
+| Tentatives autorisées par cas et configuration | `<règle et autorité, ou aucune>` |
+| Retries autorisés | `<règle et autorité, ou aucun>` |
+| Dépense maximale | `<montant, devise, périmètre et autorité, ou zéro>` |
+| Durée et arrêt | `<limites décidées ou mesurées, sans valeur inventée>` |
+
+Une autorité absente interdit l'opération correspondante. Ces valeurs appartiennent au manifeste de campagne.
 
 ### Base de coût fixée avant exécution
 
@@ -151,7 +180,7 @@ Tout changement d'un de ces champs ouvre une nouvelle comparaison. Pi est obliga
 
 | Champ | Valeur |
 |---|---|
-| Une acquisition par configuration suffit-elle à la conclusion permise ? | `<oui justifié / non et besoin observé>` |
+| Les cas et tentatives prévus suffisent-ils à la conclusion permise ? | `<justification et limites ; aucune fiabilité générale déduite d'un seul cas>` |
 | Politique de retry | `<règle autorisée ou aucun>` |
 | Règle d'arrêt | `<condition>` |
 | Source du coût observé | `<reçu, ou INCONNU>` |
@@ -163,14 +192,17 @@ Tout changement d'un de ces champs ouvre une nouvelle comparaison. Pi est obliga
 | `HARNESS_ERROR` | défaut du dispositif | réduire la couverture, sans produire `NE SATISFAIT PAS` |
 | Preuve manquante | champ requis absent | `INDETERMINE` ou `INCONNU` |
 
-Répétitions et statistiques restent absentes tant que la règle KISS n'autorise pas leur ajout.
+Répétitions et statistiques exigent une justification et une règle préalable. Prévision, réservation, coût observé et limite fournisseur restent distincts. Une tentative aux effets inconnus ne doit pas être rejouée ; les observations d'une campagne partielle restent conservées.
 
 ## 8. Verdicts et décision économique
 
-| Configuration | Erreurs éliminatoires | Obligations | Verdict | Motif court | Critères ou constats concernés | Preuves | Coût observé | Bénéfices sur S1 ou S2 |
-|---|---|---|---|---|---|---|---|---|
-| A | `<résultat>` | `<résultat>` | `<verdict>` | `<phrase intelligible expliquant le verdict>` | `<identifiants O, E ou S concernés>` | `<références>` | `<valeur et unité, ou INCONNU>` | `<faits>` |
-| B | `<résultat>` | `<résultat>` | `<verdict>` | `<phrase intelligible expliquant le verdict>` | `<identifiants O, E ou S concernés>` | `<références>` | `<valeur et unité, ou INCONNU>` | `<faits>` |
+La restitution référence les verdicts par cas, les tentatives et les reçus de la campagne, sans les recopier dans le contrat gelé.
+
+| Cas et tentative | Configuration | Erreurs et obligations | Verdict | Motif et critères concernés | Preuves | Coût observé | Bénéfices prévus |
+|---|---|---|---|---|---|---|---|
+| `<identités>` | `<identité>` | `<constats>` | `<verdict>` | `<motif et références>` | `<pièces et passages>` | `<valeur et unité, ou INCONNU>` | `<faits ou AUCUN>` |
+
+Une synthèse multi-cas applique uniquement la règle d'agrégation du contrat et affiche sa couverture.
 
 Responsable des verdicts : `<rôle>`.
 
@@ -183,7 +215,7 @@ Appliquer l'ordre suivant :
 5. coût connu et comparable parmi les seuls `SATISFAIT` ;
 6. bénéfices prévus des `SATISFAIT` plus chers.
 
-Ces six opérations restent internes. La restitution publique en montre deux étapes : les verdicts et leurs motifs, puis le coût observé de chaque configuration avec son statut économique. La recommandation économique et les bénéfices prévus restent limités aux seules configurations `SATISFAIT` ; le reste s'ouvre sur demande.
+La page campagne expose la conclusion contextualisée, un tableau commun des configurations puis les preuves sur demande. Cet ordre de lecture ne modifie pas l'ordre de calcul. La recommandation économique reste limitée aux configurations `SATISFAIT`.
 
 ### Conclusion économique
 
@@ -197,9 +229,15 @@ Un coût inconnu ou non comparable peut conserver l'admissibilité sur les crit�
 
 ### Bénéfices prévus des options `SATISFAIT` plus chères
 
-`<liens aux seuls critères S1 et S2 déclarés, ou AUCUN>`
+`<liens aux seuls critères secondaires déclarés, ou AUCUN>`
 
-## 9. Limite d'attribution
+## 9. Publication et limite d'attribution
+
+Pièces publiables : `<entrées, sorties et passages approuvés>`.
+
+Pièces privées et limites de vérification publique : `<références et motifs>`.
+
+La publication référence son autorité et sa version de restitution. Aucun contenu candidat n'est interprété comme code actif dans le site.
 
 La restitution contient cette formulation ou son équivalent :
 
@@ -207,7 +245,10 @@ La restitution contient cette formulation ou son équivalent :
 
 ## 10. Qualification documentaire
 
+- [ ] version, cas et preuves attendues sont identifiés ; la couverture est justifiée
 - [ ] résultat attendu, obligations et erreurs éliminatoires sont définis avant exécution
+- [ ] toute agrégation des cas est définie avant exécution, sinon seuls les verdicts par cas sont permis
+- [ ] chaque campagne référence le contrat sans le réécrire ; ses autorités et états restent distincts
 - [ ] les trois verdicts sont présents
 - [ ] zéro à deux critères secondaires sont prévus, avec unité et sens favorable s'ils départagent
 - [ ] le responsable de campagne a approuvé le contrat ou l'exécution reste interdite
@@ -220,6 +261,7 @@ La restitution contient cette formulation ou son équivalent :
 - [ ] aucun score global, podium général, classement universel ou graphique trompeur n'est produit
 - [ ] la limite d'attribution est visible
 - [ ] les éléments différés restent absents
-- [ ] la conclusion est bornée au contrat, aux conditions communes et à la date
+- [ ] la conclusion est bornée au contrat, aux cas et tentatives couverts, à la campagne, aux conditions communes et à la date
+- [ ] les pièces publiables sont autorisées et les restrictions sont visibles
 
-Le scénario `quote-thread-summary`, s'il est utilisé dans une maquette, reste un choix local réversible et ne devient pas une tâche canonique.
+Un scénario de maquette ne devient pas implicitement une tâche du catalogue.
