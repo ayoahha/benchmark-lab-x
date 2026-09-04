@@ -18,6 +18,13 @@ python3 -B -m v2_alpha_demo show --run-dir runs/ma-campagne
 
 `show` vérifie le sceau final et ouvre la page existante sans la régénérer. L’alternative directe est `open runs/ma-campagne/index.html`.
 
+Après une évolution du rendu, `present` construit une nouvelle présentation locale depuis un run final scellé, sans modifier ses résultats ni relancer de candidat :
+
+```bash
+python3 -B -m v2_alpha_demo present --source-run runs/ma-campagne --run-dir runs/ma-presentation
+python3 -B -m v2_alpha_demo show --run-dir runs/ma-presentation
+```
+
 ## Témoins d’autorité
 
 Les schémas S9 et S10 sont vérifiés strictement. Les autorités restent externes à `prepare` et doivent utiliser les empreintes du run concerné.
