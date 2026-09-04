@@ -35,6 +35,7 @@ COMMON_ARGS = [
     "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
 ]
 ALLOWED_EVIDENCE = {"blind-copy", "receipt", "incident"}
+OBSERVED_KEYS = ("provider", "model", "responseModel", "stopReason")
 
 
 def _now():
@@ -162,7 +163,9 @@ def _run_path(run_dir, repo_root=None, create=False):
 
 
 def _campaign():
-    return _load_json(PACKAGE_DIR / "campaign.json")
+    campaign = _load_json(PACKAGE_DIR / "campaign.json")
+    _validate_brief(campaign)
+    return campaign
 
 
 def _panel_models(panel):
@@ -429,19 +432,26 @@ def _attempt_result(raw, expected):
             if line.strip():
                 events.append(_strict_json_bytes(line.encode(), f"JSONL ligne {number}"))
     except (UnicodeDecodeError, ValueError) as exc:
-        return {"incident": f"JSONL_INVALIDE: {exc}", "cost": "INCONNU", "output": "INCONNU", "observed": {}, "retry": False, "final_text_sha256": None}
+        return {"incident": f"JSONL_INVALIDE: {exc}", "cost": "INCONNU", "output": "INCONNU", "observed": {key: "INCONNU" for key in OBSERVED_KEYS}, "retry": False, "final_text_sha256": None}
     retry = any("retry" in str(event.get("type", "")).lower() for event in events if isinstance(event, dict))
     finals = []
     for event in events:
         if not isinstance(event, dict) or event.get("type") != "message_end":
             continue
         message = event.get("message", event)
-        if message.get("role", "assistant") == "assistant":
+        # un message non objet ne porte aucun tour assistant attribuable
+        if isinstance(message, dict) and message.get("role", "assistant") == "assistant":
             finals.append(message)
     if len(finals) != 1:
-        return {"incident": "TOURS_ASSISTANT_INVALIDES", "cost": "INCONNU", "output": "INCONNU", "observed": {}, "retry": retry, "final_text_sha256": None}
+        return {"incident": "TOURS_ASSISTANT_INVALIDES", "cost": "INCONNU", "output": "INCONNU", "observed": {key: "INCONNU" for key in OBSERVED_KEYS}, "retry": retry, "final_text_sha256": None}
     final = finals[0]
-    observed = {key: final.get(key, "INCONNU") for key in ["provider", "model", "responseModel", "stopReason"]}
+    observed, structured = {}, False
+    for key in OBSERVED_KEYS:
+        value = final.get(key, "INCONNU")
+        if not isinstance(value, str) or not value.strip():
+            # une observation structurée ou vide devient une absence lisible, jamais une représentation brute
+            structured, value = True, "INCONNU"
+        observed[key] = value
     try:
         cost = _number(final["usage"]["cost"]["total"], "usage.cost.total")
     except (KeyError, TypeError, ValueError):
@@ -473,6 +483,8 @@ def _attempt_result(raw, expected):
         incidents.append("SORTIE_NON_TEXTUELLE")
     if cost is None:
         incidents.append("COUT_INCONNU_OU_INVALIDE")
+    if structured:
+        incidents.append("OBSERVATION_NON_TEXTUELLE")
     return {
         "incident": ";".join(incidents) if incidents else "AUCUN",
         "cost": float(cost) if cost is not None else "INCONNU",
@@ -863,9 +875,11 @@ def _validate_s10(auth, run_id, seal_sha, review_sha, decisions_sha, s9_id):
 
 
 def _safe_satisfied(receipt):
+    # Le coût inconnu n'est pas un défaut d'intégrité de la sortie : il rend seulement la conclusion économique INCOMPLETE
+    incidents = set(receipt["incident"].split(";")) - {"AUCUN", "COUT_INCONNU_OU_INVALIDE"}
     return (
-        isinstance(receipt["output"], str) and bool(receipt["output"].strip()) and receipt["output"] != "INCONNU" and receipt["incident"] == "AUCUN" and not receipt["retry"]
-        and receipt["returncode"] == 0 and receipt["cost"] != "INCONNU"
+        isinstance(receipt["output"], str) and bool(receipt["output"].strip()) and receipt["output"] != "INCONNU" and not incidents and not receipt["retry"]
+        and receipt["returncode"] == 0
         and receipt["observed"].get("provider") == receipt["requested"]["provider"]
         and receipt["observed"].get("model") == receipt["requested"]["model"]
         and receipt["observed"].get("responseModel", "INCONNU") in {"INCONNU", receipt["requested"]["model"]}
@@ -932,55 +946,76 @@ def _public_label(item):
     return f"{requested['id']} · {requested['model']}"
 
 
+VERDICT_CLASS = {"SATISFAIT": "success", "NE SATISFAIT PAS": "failure", "INDETERMINE": "unknown"}
+BRIEF_FIELDS = ("title", "context", "objective", "decision")
+MONTHS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+
+# Brief de présentation propre au scénario historique, rédigé après la campagne et relié à aucune empreinte de source
+# Il ne fait pas partie du contrat scellé ; une future campagne fige son brief dans campaign.json avant exécution
+PRESENTATION_BRIEFS = {
+    "quote-thread-summary": {
+        "title": "Synthèse d’un fil de courriels de devis",
+        "context": "Douze courriels synthétiques entre un atelier et un studio, présentés hors ordre chronologique, autour d’un devis de refonte de site vitrine. Le montant, la date des maquettes et une question restée sans réponse évoluent au fil des messages.",
+        "objective": "Produire une synthèse fidèle qui distingue les décisions confirmées des demandes ou annonces, restitue les montants et les échéances, signale les révisions résolues et les points encore ouverts, sans inventer de fait.",
+        "decision": "Quelles configurations testées produisent cette synthèse sans erreur éliminatoire, et parmi elles laquelle coûte le moins.",
+    },
+}
+
+
+def _validate_brief(campaign):
+    brief = campaign.get("brief")
+    if brief is None:
+        return None
+    if not isinstance(brief, dict) or set(brief) != set(BRIEF_FIELDS) or any(not isinstance(brief[key], str) or not brief[key].strip() for key in BRIEF_FIELDS):
+        raise ValueError("brief de campagne invalide: exactement title, context, objective et decision, chacun chaîne non vide ; le résultat attendu reste expected_result")
+    return brief
+
+
+def _task_brief(campaign):
+    frozen = _validate_brief(campaign)
+    if frozen:
+        return {**frozen, "source": "contract"}
+    fallback = PRESENTATION_BRIEFS.get(campaign["task_id"])
+    if fallback:
+        return {**fallback, "source": "presentation"}
+    return {"title": campaign["task_id"], "context": None, "objective": None, "decision": None, "source": "none"}
+
+
+def _human_date(raw, with_time=False):
+    try:
+        value = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return str(raw)
+    day = f"{value.day} {MONTHS[value.month - 1]} {value.year}"
+    if not with_time:
+        return day
+    offset = value.strftime("%z")
+    zone = "UTC" if offset == "+0000" else f"UTC{offset[:3]}:{offset[3:]}"
+    return f"{day} à {value:%H:%M} {zone}"
+
+
 def _render_dates(dates):
     labels = {"prepared": "Campagne préparée", "reviewed": "Revue réalisée", "built": "Restitution initiale"}
-    months = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
-    items = []
-    for key, label in labels.items():
-        raw = dates[key]
-        try:
-            value = datetime.fromisoformat(raw)
-            offset = value.strftime("%z")
-            zone = "UTC" if offset == "+0000" else f"UTC{offset[:3]}:{offset[3:]}"
-            display = f"{value.day} {months[value.month - 1]} {value.year} à {value:%H:%M} {zone}"
-        except (TypeError, ValueError):
-            display = str(raw)
-        items.append(f"<li><span>{label}</span><time datetime=\"{_e(raw)}\">{_e(display)}</time></li>")
-    return "<ul class=\"dates\">" + "".join(items) + "</ul>"
+    items = "".join(f"<li><span>{label}</span><time datetime=\"{_e(dates[key])}\">{_e(_human_date(dates[key], with_time=True))}</time></li>" for key, label in labels.items())
+    return f"<ul class=\"dates\">{items}</ul>"
 
 
-def _render_conditions(conditions):
-    requested, applied, observed = conditions["requested"], conditions["applied"], conditions["observed"]
-    output = {"text-only": "Texte uniquement"}.get(requested["output"], requested["output"])
-    thinking = {"high": "Élevé", "medium": "Moyen", "low": "Faible"}.get(requested["thinking"], requested["thinking"])
-    session = {"ephemeral": "Éphémère"}.get(requested["session"], requested["session"])
-    requested_rows = [
-        ("Version de Pi", requested["pi_version"]), ("Sortie", output),
-        ("Limite de sortie", f"{requested['max_tokens']:,}".replace(",", " ") + " tokens"),
-        ("Durée maximale", f"{requested['timeout_seconds']} secondes"),
-        ("Effort demandé", thinking), ("Session", session),
-    ]
-    disabled_labels = {
-        "tools": "outils", "extensions": "extensions", "skills": "compétences",
-        "prompt_templates": "modèles de prompt", "themes": "thèmes",
-        "project_context": "contexte projet", "compaction": "compaction",
-        "retry": "nouvelle tentative",
+def _render_brief(campaign):
+    brief = _task_brief(campaign)
+    undocumented = "Non documenté : aucun brief figé avant exécution."
+    rows = [("Contexte", brief["context"] or undocumented), ("Objectif", brief["objective"] or undocumented), ("Résultat attendu", campaign["expected_result"]), ("Décision éclairée", brief["decision"] or undocumented)]
+    items = lambda entries: "".join(f"<li><b>{_e(item['id'])}</b> {_e(item['text'])}</li>" for item in entries)
+    secondary = "".join(f"<li><b>{_e(item['id'])}</b> {_e(item['text'])} (valeur favorable : {_e(item['favorable'])})</li>" for item in campaign["secondary"])
+    notes = {
+        "contract": "",
+        "presentation": "<p class=\"note\">Ce brief de présentation a été rédigé après la campagne pour rendre la restitution lisible. Il ne fait pas partie du contrat scellé et n’est relié à aucune empreinte de source : il n’est pas prouvé par les artefacts de la campagne.</p>",
+        "none": "<p class=\"note\">Cette tâche n’a pas de brief figé avant exécution : seul l’identifiant et le résultat attendu du contrat sont disponibles.</p>",
     }
-    disabled = [label for key, label in disabled_labels.items() if requested.get(key) is False]
-    observed_rows = [
-        ("Pi observé", observed["pi_version"]), ("Système", observed["system"]),
-        ("Architecture", observed["architecture"]), ("Python", observed["python"]),
-    ]
-    rows = lambda values: "".join(f"<dt>{_e(label)}</dt><dd>{_e(value)}</dd>" for label, value in values)
     return (
-        "<div class=\"condition-grid\"><section><h3>Demandé</h3><dl>" + rows(requested_rows) +
-        f"</dl><p class=\"meta\"><strong>Désactivés :</strong> {_e(', '.join(disabled))}.</p></section>"
-        "<section><h3>Observé</h3><dl>" + rows(observed_rows) +
-        f"</dl><p class=\"meta\"><strong>Version du moteur :</strong> <code>{_e(observed['git_head'])}</code></p></section></div>"
-        "<details class=\"technical\"><summary>Empreintes de configuration et détails système</summary>"
-        f"<dl><dt>Réglages</dt><dd><code>{_e(applied['settings_sha256'])}</code></dd>"
-        f"<dt>Modèles</dt><dd><code>{_e(applied['models_sha256'])}</code></dd>"
-        f"<dt>Système complet</dt><dd>{_e(observed['system_version'])}</dd></dl></details>"
+        "<dl>" + "".join(f"<dt>{_e(label)}</dt><dd>{_e(value)}</dd>" for label, value in rows) + "</dl>" + notes[brief["source"]]
+        + f"<details><summary>Contrat de réussite : {len(campaign['obligations'])} obligations, {len(campaign['fatal_errors'])} erreurs éliminatoires, {len(campaign['secondary'])} critères secondaires</summary>"
+        f"<h3>Obligations</h3><ul>{items(campaign['obligations'])}</ul><h3>Erreurs éliminatoires</h3><ul>{items(campaign['fatal_errors'])}</ul>"
+        f"<h3>Critères secondaires</h3><ul>{secondary}</ul><p class=\"meta\">Verdicts permis : {_e(', '.join(campaign['verdicts']))}. Un critère secondaire décrit seulement une configuration déjà SATISFAIT.</p></details>"
     )
 
 
@@ -999,9 +1034,37 @@ def _render_fingerprints(fingerprints):
     return "<ul class=\"fingerprints\">" + "".join(items) + "</ul>"
 
 
-def _render_card(item, secondary_definitions):
+def _rows(values):
+    return "".join(f"<dt>{_e(label)}</dt><dd>{_e(value)}</dd>" for label, value in values)
+
+
+INCIDENT_LABELS = {
+    "COUT_INCONNU_OU_INVALIDE": "coût non communiqué par le canal observé",
+    "OBSERVATION_NON_TEXTUELLE": "une observation reçue n’était pas un texte et a été remplacée par une absence",
+    "RETRY_DETECTE": "nouvelle tentative détectée",
+    "IDENTITE_DIVERGENTE": "identité observée divergente de la demande",
+    "RESPONSE_MODEL_DIVERGENT": "modèle de réponse divergent",
+    "ARRET_NON_FINAL": "arrêt non final de la réponse",
+    "SORTIE_NON_TEXTUELLE": "sortie non textuelle",
+    "JSONL_INVALIDE": "flux de réponse illisible",
+    "TOURS_ASSISTANT_INVALIDES": "nombre de tours de réponse invalide",
+    "TIMEOUT_GROUPE_TUE": "durée maximale dépassée, exécution arrêtée",
+    "SIGTERM_GROUPE_TUE": "campagne interrompue par le superviseur pendant l’exécution",
+    "INTERRUPTION_GROUPE_TUE": "exécution interrompue par le dispositif",
+    "ERREUR_FOURNISSE": "erreur du fournisseur",
+    "PROCESS_START_ERROR": "démarrage du harnais impossible",
+}
+
+
+def _incident_label(token):
+    # le jeton peut porter un message technique après un deux-points ; seul le libellé humain atteint la page
+    return INCIDENT_LABELS.get(token.split(":", 1)[0].strip(), "incident technique non répertorié")
+
+
+def _render_row(item, secondary_definitions):
     requested, observed = item["requested"], item["observed"]
-    verdict_class = {"SATISFAIT": "success", "NE SATISFAIT PAS": "failure", "INDETERMINE": "unknown"}[item["verdict"]]
+    config_id = requested["id"]
+    verdict_class = VERDICT_CLASS[item["verdict"]]
     evidence_labels = {"blind-copy": "copie aveugle", "receipt": "reçu d’exécution", "incident": "reçu d’incident"}
     findings = "".join(
         f"<li><b>{_e(key)}</b><span>{_e(value['finding'])}</span><small>Preuve : {_e(evidence_labels.get(value['evidence'], value['evidence']))}</small></li>"
@@ -1016,65 +1079,118 @@ def _render_card(item, secondary_definitions):
     else:
         criteria = "<li class=\"not-evaluated\">Critères secondaires non évalués pour cette configuration.</li>"
     unknown_labels = {
+        "provider": "Fournisseur non communiqué par le canal observé",
+        "model": "Modèle non communiqué par le canal observé",
         "responseModel": "Modèle de réponse non communiqué par le canal observé",
+        "stopReason": "Motif d’arrêt non communiqué par le canal observé",
         "route": "Route observée non communiquée",
         "effort": "Effort observé non communiqué",
     }
-    unknowns = "".join(f"<li>{_e(unknown_labels.get(key, key))}</li>" for key in item["unknowns"])
-    observed_rows = [("Fournisseur", observed.get("provider")), ("Modèle", observed.get("model"))]
+    unknowns = "".join(f"<li>{_e(unknown_labels.get(key, 'Valeur non communiquée'))}</li>" for key in item["unknowns"])
+    shown = lambda value: "Non communiqué" if value == "INCONNU" else value
+    observed_rows = [("Fournisseur", shown(observed.get("provider"))), ("Modèle", shown(observed.get("model")))]
     if observed.get("responseModel") != "INCONNU":
         observed_rows.append(("Modèle déclaré dans la réponse", observed.get("responseModel")))
     if observed.get("route") != "INCONNU":
         observed_rows.append(("Route", observed.get("route")))
     if observed.get("effort") != "INCONNU":
         observed_rows.append(("Effort", observed.get("effort")))
-    rows = lambda values: "".join(f"<dt>{_e(label)}</dt><dd>{_e(value)}</dd>" for label, value in values)
-    incident = "Aucun incident constaté." if item["incident"] == "AUCUN" else f"Incident constaté : {_e(item['incident'])}."
+    if item["incident"] == "AUCUN":
+        incident = "Aucun incident constaté."
+    else:
+        incident = "Incident constaté : " + _e(", ".join(_incident_label(token) for token in item["incident"].split(";"))) + "."
     return (
-        f"<article class=\"result-card result-card--{verdict_class}\">"
-        f"<div class=\"result-head\"><div><p class=\"config-id\">{_e(requested['id'])}</p><h3>{_e(requested['model'])}</h3></div>"
-        f"<p class=\"verdict verdict--{verdict_class}\">{_e(item['verdict'])}</p>"
-        f"<p class=\"card-cost\"><span>Coût observé</span><strong>{_e(_money(item['cost']))}</strong></p></div>"
-        f"<p class=\"reason\">{_e(item['reason'])}</p><ul class=\"criteria\">{criteria}</ul>"
-        "<details class=\"result-details\"><summary>Conditions, preuves et traçabilité</summary><div class=\"detail-grid\">"
-        f"<section><h4>Configuration demandée</h4><dl>{rows([('Fournisseur', requested['provider']), ('Modèle', requested['model']), ('Route amont', requested['upstream']), ('Effort demandé', requested['thinking'])])}</dl></section>"
-        f"<section><h4>Configuration observée</h4><dl>{rows(observed_rows)}</dl><ul class=\"unknowns\">{unknowns}</ul><p>{incident}</p><p class=\"meta\">Décision portée par {_e(item['role'])}.</p></section></div>"
-        f"<details class=\"technical\"><summary>Constats de la revue</summary><ul class=\"findings\">{findings}</ul></details>"
-        f"<details class=\"technical\"><summary>Empreintes de cette configuration</summary>{_render_fingerprints(item['fingerprints'])}</details>"
-        "</details></article>"
+        f"<li><article class=\"result result--{verdict_class}\" id=\"config-{_e(config_id)}\" aria-labelledby=\"config-{_e(config_id)}-title\">"
+        f"<div class=\"result-head\"><h3 id=\"config-{_e(config_id)}-title\"><span class=\"config-id\">{_e(config_id)}</span>{_e(requested['model'])}</h3>"
+        f"<p class=\"verdict verdict--{verdict_class}\">{_e(item['verdict'])}</p></div>"
+        f"<p class=\"reason\">{_e(item['reason'])}</p>"
+        f"<details><summary>Examiner le résultat {_e(config_id)}</summary><div class=\"detail-grid\">"
+        f"<section><h4>Configuration demandée</h4><dl>{_rows([('Fournisseur', requested['provider']), ('Modèle', requested['model']), ('Route amont', requested['upstream']), ('Effort demandé', requested['thinking'])])}</dl></section>"
+        f"<section><h4>Configuration observée</h4><dl>{_rows(observed_rows)}</dl><ul class=\"unknowns\">{unknowns}</ul><p>{incident}</p></section></div>"
+        f"<h4>Critères secondaires</h4><ul class=\"criteria\">{criteria}</ul>"
+        f"<h4>Constats de la revue</h4><ul class=\"findings\">{findings}</ul>"
+        f"<p class=\"meta\">Décision portée par {_e(item['role'])}. Les empreintes de cette configuration figurent dans « Vérifier cette restitution ».</p>"
+        "</details></article></li>"
     )
+
+
+def _economic_status(item, economy):
+    satisfied, known = item["verdict"] == "SATISFAIT", item["cost"] != "INCONNU"
+    if satisfied and known and economy["status"] == "COMPLETE":
+        return "in", "Prise en compte dans la recommandation"
+    if satisfied and known:
+        return "in", "Coût connu ; recommandation suspendue (conclusion INCOMPLETE)"
+    if satisfied:
+        return "unknown", "Coût non communiqué : la recommandation reste incomplète"
+    if known:
+        return "out", "Dépense observée, exclue de la recommandation"
+    return "out", "Coût non communiqué, exclue de la recommandation"
+
+
+def _spend_tile(label, items):
+    known = [Decimal(str(item["cost"])) for item in items if item["cost"] != "INCONNU"]
+    unknown = len(items) - len(known)
+    if not items:
+        return f"<p><span>{_e(label)}</span><strong>Aucune configuration</strong></p>"
+    if unknown == 0:
+        return f"<p><span>{_e(label)} : dépense observée</span><strong>{_e(_money(sum(known, Decimal(0))))}</strong></p>"
+    if not known:
+        return f"<p><span>{_e(label)} : dépense connue</span><strong>Aucun coût communiqué</strong><span>{unknown} coût{'s' if unknown > 1 else ''} non communiqué{'s' if unknown > 1 else ''} sur {len(items)}</span></p>"
+    return f"<p><span>{_e(label)} : dépense connue</span><strong>{_e(_money(sum(known, Decimal(0))))}</strong><span>{unknown} coût{'s' if unknown > 1 else ''} non communiqué{'s' if unknown > 1 else ''} sur {len(items)}</span></p>"
 
 
 def _render_economy(results):
     economy, configurations, campaign = results["economy"], results["configurations"], results["contract"]
     by_blind_id = {item["blind_id"]: item for item in configurations}
-    costs = [(by_blind_id[key], Decimal(str(value))) for key, value in economy["known_costs"].items() if key in by_blind_id]
-    costs.sort(key=lambda pair: (pair[1], pair[0]["requested"]["id"]))
-    maximum = max((value for _, value in costs), default=Decimal(1))
-    bars = "".join(
-        f"<li><div><strong>{_e(_public_label(item))}</strong><span>{_e(_money(value))}</span></div>"
-        f"<meter min=\"0\" max=\"{_e(maximum)}\" value=\"{_e(value)}\" aria-label=\"Coût observé de {_e(_public_label(item))}\">{_e(_money(value))}</meter>"
-        f"<small>Valeur enregistrée : {_e(_money(value, None))}</small></li>"
-        for item, value in costs
-    )
     least = [by_blind_id[key] for key in economy["least_expensive"] if key in by_blind_id]
     if economy["status"] == "INCOMPLETE":
-        conclusion = "Comparaison économique incomplète : les coûts connus restent visibles, sans option déclarée globalement moins chère."
+        conclusion = "Conclusion économique INCOMPLETE : le coût d’au moins une configuration admissible est inconnu ou non comparable. Les coûts connus restent visibles, sans option déclarée globalement moins chère."
     elif len(least) == 1:
         conclusion = f"La configuration la moins chère parmi celles qui satisfont le contrat est {_public_label(least[0])}, à {_money(least[0]['cost'])}."
     elif least:
-        conclusion = "Les configurations co-moins-chères sont " + ", ".join(_public_label(item) for item in least) + "."
+        conclusion = "Les configurations co-moins-chères parmi celles qui satisfont le contrat sont " + ", ".join(_public_label(item) for item in least) + "."
     else:
-        conclusion = "Aucune configuration ne peut être comparée économiquement."
-    known_costs = [Decimal(str(item["cost"])) for item in configurations if item["cost"] != "INCONNU"]
-    unknown_costs = sum(item["cost"] == "INCONNU" for item in configurations)
-    excluded = [item for item in configurations if item["verdict"] != "SATISFAIT"]
-    excluded_known = [Decimal(str(item["cost"])) for item in excluded if item["cost"] != "INCONNU"]
-    total_label = "Dépense totale observée" if not unknown_costs else "Dépense connue"
+        conclusion = "Aucune configuration ne satisfait le contrat : aucune recommandation économique n’est possible."
+    known = [Decimal(str(item["cost"])) for item in configurations if item["cost"] != "INCONNU"]
+    maximum = max(known) if known else None
+    rows = []
+    for item in configurations:
+        kind, status = _economic_status(item, economy)
+        excluded = item["verdict"] != "SATISFAIT"
+        if item["cost"] != "INCONNU" and maximum is not None:
+            # un coût nul est un coût communiqué : barre vide, sans division par zéro
+            width = (Decimal(str(item["cost"])) / maximum * 100).quantize(Decimal("0.1")) if maximum > 0 else Decimal("0.0")
+            bar = f"<div class=\"bar\" style=\"--w:{_e(width)}%\" aria-hidden=\"true\"></div>"
+        elif maximum is not None:
+            bar = "<div class=\"bar bar--none\" aria-hidden=\"true\"></div>"
+        else:
+            bar = ""
+        rows.append(
+            f"<li class=\"{'excluded' if excluded else 'included'}\">"
+            f"<p class=\"name\"><span class=\"cell-label\">Configuration</span>{_e(_public_label(item))}</p>"
+            f"<p><span class=\"cell-label\">Verdict</span><span class=\"verdict verdict--{VERDICT_CLASS[item['verdict']]}\">{_e(item['verdict'])}</span></p>"
+            f"<p class=\"cost\"><span class=\"cell-label\">Coût observé</span>{_e(_money(item['cost']))}</p>"
+            f"<p class=\"status status--{kind}\"><span class=\"cell-label\">Statut économique</span><span class=\"status-text\">{_e(status)}</span></p>{bar}</li>"
+        )
+    unknown_total = len(configurations) - len(known)
+    unknown_note = f" ; {unknown_total} coût{'s' if unknown_total > 1 else ''} non communiqué{'s' if unknown_total > 1 else ''} sans barre." if unknown_total else "."
+    if maximum is None:
+        scale = "Aucun coût communiqué : pas d’échelle commune ni de barre."
+    elif maximum == 0:
+        scale = "Tous les coûts communiqués sont nuls : barres vides, sans échelle" + unknown_note
+    else:
+        scale = f"Barres à l’échelle commune du coût connu le plus élevé ({_e(_money(maximum))}) ; les configurations non admissibles sont hachurées" + unknown_note
+    ledger = (
+        f"<p class=\"scale\">{scale}</p>"
+        "<ol class=\"ledger\" aria-label=\"Registre des coûts observés\"><li class=\"ledger-head\" aria-hidden=\"true\"><span>Configuration</span><span>Verdict</span><span>Coût observé</span><span>Statut économique</span></li>"
+        + "".join(rows) + "</ol>"
+    )
+    admissible = [item for item in configurations if item["verdict"] == "SATISFAIT"]
+    excluded_items = [item for item in configurations if item["verdict"] != "SATISFAIT"]
     totals = (
-        f"<div class=\"spend-summary\"><p><span>{total_label}</span><strong>{_e(_money(sum(known_costs, Decimal(0))))}</strong></p>"
-        f"<p><span>Plafond de campagne</span><strong>{_e(_money(campaign['cost_basis']['cap'], 2))}</strong></p>"
-        f"<p><span>Dépense hors comparaison</span><strong>{_e(_money(sum(excluded_known, Decimal(0))))}</strong></p></div>"
+        "<div class=\"spend-summary\">" + _spend_tile("Toutes configurations", configurations)
+        + f"<p><span>Plafond de campagne</span><strong>{_e(_money(campaign['cost_basis']['cap'], 2))}</strong></p>"
+        + _spend_tile("Configurations admissibles", admissible) + _spend_tile("Hors recommandation", excluded_items) + "</div>"
     )
     if economy["benefits"]:
         definitions = {item["id"]: item["text"] for item in campaign["secondary"]}
@@ -1082,16 +1198,44 @@ def _render_economy(results):
             f"<li><strong>{_e(_public_label(by_blind_id[key]))}</strong> : {_e(', '.join(definitions[item] for item in value))}</li>"
             for key, value in economy["benefits"].items() if key in by_blind_id
         )
-        benefits = f"<div class=\"benefits\"><h3>Bénéfices prévus</h3><ul>{benefit_items}</ul></div>"
+        benefits = f"<div class=\"benefits\"><h3>Bénéfices prévus des options admissibles plus chères</h3><ul>{benefit_items}</ul></div>"
     else:
         benefits = "<p class=\"benefits\"><strong>Bénéfices prévus :</strong> aucun critère secondaire ne justifie ici le surcoût d’une autre option admissible.</p>"
-    if excluded:
-        excluded_items = "".join(f"<li><strong>{_e(_public_label(item))}</strong><span>{_e(item['reason'])}</span></li>" for item in excluded)
-        exclusions = f"<details><summary>{len(excluded)} configuration{'s' if len(excluded) > 1 else ''} exclue{'s' if len(excluded) > 1 else ''} de cette comparaison</summary><ul class=\"exclusions\">{excluded_items}</ul></details>"
-    else:
-        exclusions = ""
-    chart = f"<ol class=\"cost-bars\">{bars}</ol>" if bars else ""
-    return f"<div class=\"economy-callout\"><p>{_e(conclusion)}</p></div>{chart}{totals}{benefits}{exclusions}"
+    return f"<div class=\"economy-callout\"><p>{_e(conclusion)}</p></div>{ledger}{totals}{benefits}"
+
+
+def _render_verify(results):
+    requested, observed, applied = results["conditions"]["requested"], results["conditions"]["observed"], results["conditions"]["applied"]
+    campaign = results["contract"]
+    thinking = {"high": "élevé", "medium": "moyen", "low": "faible"}.get(requested["thinking"], requested["thinking"])
+    disabled_labels = {"tools": "outils", "extensions": "extensions", "skills": "compétences", "prompt_templates": "modèles de prompt", "themes": "thèmes", "project_context": "contexte projet", "compaction": "compaction", "retry": "nouvelle tentative"}
+    disabled = [label for key, label in disabled_labels.items() if requested.get(key) is False]
+    protocol = [
+        ("Harnais", f"Pi {requested['pi_version']}, identique pour toutes les configurations"),
+        ("Sortie", {"text-only": "texte uniquement"}.get(requested["output"], requested["output"])),
+        ("Limite de sortie", f"{requested['max_tokens']:,}".replace(",", " ") + " tokens"),
+        ("Durée maximale", f"{requested['timeout_seconds']} secondes"),
+        ("Effort de raisonnement demandé", thinking),
+        ("Session", {"ephemeral": "éphémère"}.get(requested["session"], requested["session"])),
+        ("Tentatives comptées", f"{campaign['cost_basis']['attempts_per_configuration']} par configuration, sans nouvelle tentative"),
+        ("Unité de coût", campaign["cost_basis"]["currency"]),
+        ("Options désactivées", ", ".join(disabled)),
+    ]
+    environment = [
+        ("Pi observé", observed["pi_version"]), ("Système", observed["system"]), ("Architecture", observed["architecture"]),
+        ("Python", observed["python"]), ("Système complet", observed["system_version"]),
+    ]
+    per_config = "".join(f"<h4>{_e(_public_label(item))}</h4>{_render_fingerprints(item['fingerprints'])}" for item in results["configurations"])
+    return (
+        "<p class=\"meta\">Ce bloc rassemble le protocole commun, l’environnement, les dates et les empreintes SHA-256 qui permettent de recouper cette page avec les artefacts scellés du run. Il n’ajoute aucune étape à la restitution.</p>"
+        f"<h3>Protocole commun</h3><dl>{_rows(protocol)}</dl>"
+        f"<h3>Environnement observé</h3><dl>{_rows(environment)}</dl>"
+        f"<p class=\"meta\"><strong>Commit du moteur :</strong> <code>{_e(observed['git_head'])}</code></p>"
+        f"<h3>Empreintes de configuration appliquée</h3><dl><dt>Réglages</dt><dd><code>{_e(applied['settings_sha256'])}</code></dd><dt>Modèles</dt><dd><code>{_e(applied['models_sha256'])}</code></dd></dl>"
+        f"<h3>Dates</h3>{_render_dates(results['dates'])}"
+        f"<h3>Empreintes de la campagne</h3>{_render_fingerprints(results['fingerprints'])}"
+        f"<h3>Empreintes par configuration</h3>{per_config}"
+    )
 
 
 def _render_html(results):
@@ -1099,13 +1243,13 @@ def _render_html(results):
     configurations = sorted(results["configurations"], key=lambda item: panel_order.get(item["requested"]["id"], len(panel_order)))
     view = {**results, "configurations": configurations}
     data = {
-        "task": _e(results["task"]),
-        "contract": _contract_summary(results["contract"]),
-        "dates": _render_dates(results["dates"]),
-        "conditions": _render_conditions(results["conditions"]),
-        "cards": "".join(_render_card(item, results["contract"]["secondary"]) for item in configurations),
+        "title": _e(_task_brief(results["contract"])["title"]),
+        "campaign_date": _e(f"Campagne préparée le {_human_date(results['dates']['prepared'])}, restitution construite le {_human_date(results['dates']['built'])}."),
+        "brief": _render_brief(results["contract"]),
+        "count": _e(len(configurations)),
+        "rows": "".join(_render_row(item, results["contract"]["secondary"]) for item in configurations),
         "economy": _render_economy(view),
-        "fingerprints": _render_fingerprints(results["fingerprints"]),
+        "verify": _render_verify(view),
         "limit": _e(results["attribution_limit"]),
     }
     template = (PACKAGE_DIR / "page.html").read_text()
@@ -1114,12 +1258,6 @@ def _render_html(results):
     if "{{" in template:
         raise ValueError("gabarit incomplet")
     return template.encode()
-
-
-def _contract_summary(campaign):
-    obligations = "".join(f"<li><b>{html.escape(item['id'])}</b> {html.escape(item['text'])}</li>" for item in campaign["obligations"])
-    errors = "".join(f"<li><b>{html.escape(item['id'])}</b> {html.escape(item['text'])}</li>" for item in campaign["fatal_errors"])
-    return f"<p><b>Résultat attendu :</b> {html.escape(campaign['expected_result'])}</p><p><b>Panel :</b> {len(campaign['panel'])} configurations · <b>plafond :</b> {_money(campaign['cost_basis']['cap'], 2)}</p><details><summary>{len(campaign['obligations'])} obligations</summary><ul>{obligations}</ul></details><details><summary>{len(campaign['fatal_errors'])} erreurs éliminatoires</summary><ul>{errors}</ul></details>"
 
 
 def build(run_dir, decisions, authority, repo_root=None):
