@@ -38,13 +38,13 @@ def _start_supervisor(case, fixture, variant="good", inherited_ignore=False, ext
     env = {
         **os.environ,
         "TMPDIR": str(temporary),
-        "V2_ALPHA_DEMO_TEST_SOCKET_FD": str(child.fileno()),
-        "V2_ALPHA_DEMO_TEST_REPO_ROOT": str(fixture.root),
-        **({"V2_ALPHA_DEMO_TEST_WORKER_IGNORES_SIGTERM": "1"} if variant == "ignore-term" else {}),
+        "BENCHMARK_LAB_X_TEST_SOCKET_FD": str(child.fileno()),
+        "BENCHMARK_LAB_X_TEST_REPO_ROOT": str(fixture.root),
+        **({"BENCHMARK_LAB_X_TEST_WORKER_IGNORES_SIGTERM": "1"} if variant == "ignore-term" else {}),
         **(extra_env or {}),
     }
     process = subprocess.Popen(
-        [sys.executable, "-B", "-m", "v2_alpha_demo", "collect", "--run-dir", str(run), "--authority", str(authority)],
+        [sys.executable, "-B", "-m", "benchmark_lab_x", "collect", "--run-dir", str(run), "--authority", str(authority)],
         cwd=demo.PACKAGE_DIR.parent, env=env, pass_fds=(child.fileno(),),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         preexec_fn=(lambda: signal.signal(signal.SIGTERM, signal.SIG_IGN)) if inherited_ignore else None,
@@ -131,7 +131,7 @@ class DemoTest(unittest.TestCase):
         code = f'''#!/usr/bin/env python3
 import json, os, signal, subprocess, sys, time
 def event(message):
-    fd = os.environ.get("V2_ALPHA_DEMO_TEST_SOCKET_FD")
+    fd = os.environ.get("BENCHMARK_LAB_X_TEST_SOCKET_FD")
     if fd is not None: os.write(int(fd), (message + "\\n").encode())
 if sys.argv[1:] == ["--version"]:
     print({version!r})
@@ -193,7 +193,7 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
     def s9(self, run, forecasts=None):
         seal = json.loads((run / "seal.json").read_text())
         value = {
-            "schema": "benchmark-lab-x-v2-alpha-s9-authorization-1",
+            "schema": "benchmark-lab-x-s9-authorization-1",
             "effect": "candidate_calls_and_spend_s9",
             "authority_id": "TEMOIN-TEMPORAIRE-S9",
             "run": f"runs/{run.name}",
@@ -220,7 +220,7 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
         dossier = json.loads((run / "review.json").read_text())
         findings = {key: {"finding": f"constat {key} {unsafe}", "evidence": "blind-copy"} for key in ["O1", "O2", "O3", "O4", "O5", "O6", "E1", "E2", "E3"]}
         value = {
-            "schema": "benchmark-lab-x-v2-alpha-decisions-1",
+            "schema": "benchmark-lab-x-decisions-1",
             "review_sha256": demo._sha(run / "review.json"),
             "accepted": True,
             "decisions": [
@@ -233,7 +233,7 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
 
     def s10(self, run, decisions_path):
         value = {
-            "schema": "benchmark-lab-x-v2-alpha-s10-authorization-1",
+            "schema": "benchmark-lab-x-s10-authorization-1",
             "effect": "product_execution_and_acceptance_s10",
             "authority_id": "TEMOIN-TEMPORAIRE-S10-DISTINCT",
             "run": f"runs/{run.name}",
@@ -470,6 +470,26 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
         self.assertNotIn("D-8D6C6B58B0DA", page)
         self.assertNotIn("AUCUN", page)
         self.assertNotIn("sans objet", page)
+
+    def test_12o_duration_units_preserve_the_exact_limit(self):
+        cases = [
+            (0, "0 s"), (1, "1 s"), (59, "59 s"), (60, "1 min"),
+            (61, "1 min 1 s"), (300, "5 min"), (3599, "59 min 59 s"),
+            (3600, "1 h"), (3661, "1 h 1 min 1 s"), (7200, "2 h"),
+            (None, "Non communiqué"), ("INCONNU", "Non communiqué"),
+            (-1, "Non communiqué"), (True, "Non communiqué"),
+        ]
+        for seconds, expected in cases:
+            with self.subTest(seconds=seconds):
+                self.assertEqual(demo._human_duration(seconds), expected)
+        run = self.built()
+        raw = (run / "results.json").read_bytes()
+        results = json.loads(raw)
+        page = demo._render_html(results).decode()
+        self.assertIn("<dt>Durée maximale</dt><dd>5 min</dd>", page)
+        self.assertNotIn("<dd>300 secondes</dd>", page)
+        self.assertEqual(results["conditions"]["requested"]["timeout_seconds"], 300)
+        self.assertEqual((run / "results.json").read_bytes(), raw)
 
     def test_12c_presentation_run_preserves_the_sealed_source(self):
         source = self.built()
@@ -996,7 +1016,7 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
         self.assertFalse(receipt["retry"])
         self.assertFalse((run / "C2.started.json").exists())
         _assert_dead(self, pids)
-        self.assertFalse(list(temporary.glob("v2-alpha-collect-*")))
+        self.assertFalse(list(temporary.glob("benchmark-lab-x-collect-*")))
         self.assertFalse(list(run.glob(".collection-*.tmp")))
         with self.assertRaises(FileExistsError):
             demo.collect(run, self.root / "unused", self.root)
@@ -1009,7 +1029,7 @@ raise SystemExit(7 if {variant!r} == "nonzero" else 0)
         self.assertIs(signal.getsignal(signal.SIGTERM), previous)
 
     def test_19_help_and_offline_commands_never_launch_candidate(self):
-        completed = subprocess.run([sys.executable, "-B", "-m", "v2_alpha_demo", "--help"], cwd=demo.PACKAGE_DIR.parent, capture_output=True, text=True)
+        completed = subprocess.run([sys.executable, "-B", "-m", "benchmark_lab_x", "--help"], cwd=demo.PACKAGE_DIR.parent, capture_output=True, text=True)
         self.assertEqual(completed.returncode, 0)
         for command in ["prepare", "collect", "review", "build", "present", "show"]:
             self.assertIn(command, completed.stdout)
@@ -1064,11 +1084,11 @@ class IsolatedSupervisorSigtermTests(unittest.TestCase):
         env = {
             **os.environ,
             "TMPDIR": str(temporary),
-            "V2_ALPHA_DEMO_TEST_SOCKET_FD": str(child.fileno()),
-            "V2_ALPHA_DEMO_TEST_REPO_ROOT": str(self.fixture.root),
+            "BENCHMARK_LAB_X_TEST_SOCKET_FD": str(child.fileno()),
+            "BENCHMARK_LAB_X_TEST_REPO_ROOT": str(self.fixture.root),
         }
         process = subprocess.Popen(
-            [sys.executable, "-B", "-m", "v2_alpha_demo", "collect", "--run-dir", str(run), "--authority", str(authority)],
+            [sys.executable, "-B", "-m", "benchmark_lab_x", "collect", "--run-dir", str(run), "--authority", str(authority)],
             cwd=demo.PACKAGE_DIR.parent, env=env, pass_fds=(child.fileno(),),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
@@ -1109,7 +1129,7 @@ class IsolatedSupervisorSigtermTests(unittest.TestCase):
         collection = json.loads((run / "collection.json").read_text())
         self.assertEqual(collection["stop_reason"], "INTERRUPTION_SIGTERM")
         self.assertNotIn("COMPLETE", stdout)
-        self.assertFalse(list(temporary.glob("v2-alpha-collect-*")))
+        self.assertFalse(list(temporary.glob("benchmark-lab-x-collect-*")))
         self.assertFalse(list(run.glob(".collection-*.tmp")))
 
     def test_sigterm_stops_active_worker_group_without_retry(self):
@@ -1132,7 +1152,7 @@ class IsolatedSupervisorSigtermTests(unittest.TestCase):
         self.assertFalse(json.loads((run / "C1.receipt.json").read_text())["retry"])
         self.assertFalse(any(run.glob("C[23].*")))
         self._assert_dead(pids)
-        self.assertFalse(list(temporary.glob("v2-alpha-collect-*")))
+        self.assertFalse(list(temporary.glob("benchmark-lab-x-collect-*")))
 
     def test_normal_supervisor_publishes_one_complete_collection(self):
         run, temporary, process, sock, stream = self._start()
@@ -1149,7 +1169,7 @@ class IsolatedSupervisorSigtermTests(unittest.TestCase):
         self.assertEqual(events[0], "OWNED")
         self.assertEqual(len(list(run.glob("collection.json"))), 1)
         self.assertEqual(json.loads((run / "collection.json").read_text())["stop_reason"], "COMPLETE")
-        self.assertFalse(list(temporary.glob("v2-alpha-collect-*")))
+        self.assertFalse(list(temporary.glob("benchmark-lab-x-collect-*")))
 
 
 class FailClosedSupervisorSigtermTests(unittest.TestCase):
@@ -1180,7 +1200,7 @@ class FailClosedSupervisorSigtermTests(unittest.TestCase):
         self.assertEqual(json.loads(stderr)["error"], "collect interrompu par SIGTERM")
         self.assertEqual(json.loads((run / "collection.json").read_text())["stop_reason"], "INTERRUPTION_SIGTERM")
         _assert_dead(self, pids)
-        self.assertFalse(list(temporary.glob("v2-alpha-collect-*")))
+        self.assertFalse(list(temporary.glob("benchmark-lab-x-collect-*")))
 
     def test_sigterm_after_owned_is_arbitrated_before_worker_start(self):
         run, temporary, process, sock, stream = self._start()
@@ -1199,7 +1219,7 @@ class FailClosedSupervisorSigtermTests(unittest.TestCase):
         self.assertEqual(collection["stop_reason"], "INTERRUPTION_SIGTERM")
         self.assertEqual([item["executed"] for item in collection["matrix"]], [False, False, False])
         self.assertFalse(list(run.glob("*.started.json")))
-        self.assertFalse(list(temporary.glob("v2-alpha-collect-*")))
+        self.assertFalse(list(temporary.glob("benchmark-lab-x-collect-*")))
 
     def test_sigterm_before_complete_link_cannot_commit_complete(self):
         run, _, process, sock, stream = self._start()
@@ -1267,7 +1287,7 @@ class FailClosedSupervisorSigtermTests(unittest.TestCase):
         sock.sendall(b"G")
         process.communicate(timeout=5)
         _assert_dead(self, pids)
-        self.assertFalse(list(temporary.glob("v2-alpha-collect-*")))
+        self.assertFalse(list(temporary.glob("benchmark-lab-x-collect-*")))
         self.assertFalse(list(run.glob(".collection-*.tmp")))
         self.assertEqual([path.name for path in run.glob("collection.json")], ["collection.json"])
 
@@ -1279,7 +1299,7 @@ class FailClosedSupervisorSigtermTests(unittest.TestCase):
         self.assertEqual(json.loads(stderr)["error"], "SIGTERM hérité en SIG_IGN")
         self.assertFalse((run / "authorization-s9.json").exists())
         self.assertFalse((run / "collection.json").exists())
-        self.assertFalse(list(temporary.glob("v2-alpha-collect-*")))
+        self.assertFalse(list(temporary.glob("benchmark-lab-x-collect-*")))
 
 
 class SigtermRaceTests(unittest.TestCase):
@@ -1293,7 +1313,7 @@ class SigtermRaceTests(unittest.TestCase):
 
     def test_after_c1_stops_before_c2(self):
         run, _, process, sock, stream = _start_supervisor(
-            self, self.fixture, extra_env={"V2_ALPHA_DEMO_TEST_C2_REQUEST_GATE": "1"}
+            self, self.fixture, extra_env={"BENCHMARK_LAB_X_TEST_C2_REQUEST_GATE": "1"}
         )
         _until(self, stream, "OWNED")
         sock.sendall(b"G")
@@ -1423,7 +1443,7 @@ class SignalQuiescenceSinglePgidTests(unittest.TestCase):
         return collection
 
     def test_after_c1_before_c2_revokes_launch_permit(self):
-        run, _, process, sock, stream = self._start(V2_ALPHA_DEMO_TEST_C2_REQUEST_GATE="1")
+        run, _, process, sock, stream = self._start(BENCHMARK_LAB_X_TEST_C2_REQUEST_GATE="1")
         events = _until(self, stream, "OWNED")
         sock.sendall(b"G")
         events += _until(self, stream, "C1_DONE")
@@ -1439,7 +1459,7 @@ class SignalQuiescenceSinglePgidTests(unittest.TestCase):
         self.assertEqual([item["executed"] for item in collection["matrix"]], [True, False, False])
 
     def test_between_popen_and_identity_uses_worker_pgid(self):
-        run, temporary, process, sock, stream = self._start("timeout", V2_ALPHA_DEMO_TEST_POPEN_GATE="C1")
+        run, temporary, process, sock, stream = self._start("timeout", BENCHMARK_LAB_X_TEST_POPEN_GATE="C1")
         events = _until(self, stream, "OWNED")
         sock.sendall(b"G")
         events += _until(self, stream, "CANDIDATE_POPENED_BEFORE_ACTIVE_PID C1")
@@ -1450,7 +1470,7 @@ class SignalQuiescenceSinglePgidTests(unittest.TestCase):
         pids = [worker_pid, candidate_pid, candidate_pids[1]]
         self.assertEqual(candidate_pid, candidate_pids[0])
         self.assertTrue(all(os.getpgid(pid) == worker_pid for pid in pids))
-        private_dirs = list(temporary.glob("v2-alpha-collect-*"))
+        private_dirs = list(temporary.glob("benchmark-lab-x-collect-*"))
         self.assertEqual(len(private_dirs), 1)
         self.assertFalse((private_dirs[0] / "active.pid").exists())
         exits = _watch_exits(self, pids)
@@ -1461,7 +1481,7 @@ class SignalQuiescenceSinglePgidTests(unittest.TestCase):
         self._finish_interruption(run, process, sock, stream)
 
     def test_partial_private_receipt_is_ignored_and_rebuilt(self):
-        run, _, process, sock, stream = self._start(V2_ALPHA_DEMO_TEST_PRIVATE_RECEIPT_GATE="C1.receipt.json")
+        run, _, process, sock, stream = self._start(BENCHMARK_LAB_X_TEST_PRIVATE_RECEIPT_GATE="C1.receipt.json")
         events = _until(self, stream, "OWNED")
         sock.sendall(b"G")
         events += _until(self, stream, "PRIVATE_JSON_HALF_WRITTEN C1.receipt.json")
@@ -1585,7 +1605,7 @@ class R11PgidRetentionAtomicIoTests(unittest.TestCase):
 
     def test_supervisor_owns_candidate_timeout_and_kills_single_pgid(self):
         run, _, process, sock, stream = self._start(
-            "ignore-term", V2_ALPHA_DEMO_TEST_POPEN_GATE="C1", V2_ALPHA_DEMO_TEST_TIMEOUT_SECONDS="0.1"
+            "ignore-term", BENCHMARK_LAB_X_TEST_POPEN_GATE="C1", BENCHMARK_LAB_X_TEST_TIMEOUT_SECONDS="0.1"
         )
         events = _until(self, stream, "OWNED")
         sock.sendall(b"G")
@@ -1606,7 +1626,7 @@ class R11PgidRetentionAtomicIoTests(unittest.TestCase):
 
     def test_supervisor_owns_candidate_exception_and_reconstructs_fail_closed(self):
         run, _, process, sock, stream = self._start(
-            "ignore-term", V2_ALPHA_DEMO_TEST_POPEN_GATE="C1", V2_ALPHA_DEMO_TEST_CANDIDATE_EXCEPTION="C1"
+            "ignore-term", BENCHMARK_LAB_X_TEST_POPEN_GATE="C1", BENCHMARK_LAB_X_TEST_CANDIDATE_EXCEPTION="C1"
         )
         events = _until(self, stream, "OWNED")
         sock.sendall(b"G")
@@ -1652,7 +1672,7 @@ class R11PgidRetentionAtomicIoTests(unittest.TestCase):
                 publication.unlink()
 
     def test_sigterm_mid_private_json_waits_for_io_quiescence_and_rebuilds(self):
-        run, _, process, sock, stream = self._start(V2_ALPHA_DEMO_TEST_PRIVATE_COLLECTION_GATE="1")
+        run, _, process, sock, stream = self._start(BENCHMARK_LAB_X_TEST_PRIVATE_COLLECTION_GATE="1")
         _until(self, stream, "OWNED")
         sock.sendall(b"G")
         events = _until(self, stream, "PRIVATE_COLLECTION_HALF_WRITTEN")
@@ -1736,16 +1756,16 @@ class IsolatedSupervisorFailureTests(unittest.TestCase):
         parent, child = socket.socketpair()
         temporary = self.root / "tmp"
         temporary.mkdir()
-        env = {**os.environ, "TMPDIR": str(temporary), "V2_ALPHA_DEMO_TEST_SOCKET_FD": str(child.fileno()), "V2_ALPHA_DEMO_TEST_REPO_ROOT": str(self.root)}
+        env = {**os.environ, "TMPDIR": str(temporary), "BENCHMARK_LAB_X_TEST_SOCKET_FD": str(child.fileno()), "BENCHMARK_LAB_X_TEST_REPO_ROOT": str(self.root)}
         process = subprocess.run(
-            [sys.executable, "-B", "-m", "v2_alpha_demo", "collect", "--run-dir", str(run), "--authority", str(authority)],
+            [sys.executable, "-B", "-m", "benchmark_lab_x", "collect", "--run-dir", str(run), "--authority", str(authority)],
             cwd=demo.PACKAGE_DIR.parent, env=env, pass_fds=(child.fileno(),), capture_output=True, text=True, timeout=5,
         )
         parent.close()
         child.close()
         self.assertNotEqual(process.returncode, 0)
         self.assertFalse((run / "collection.json").exists())
-        self.assertFalse(list(temporary.glob("v2-alpha-collect-*")))
+        self.assertFalse(list(temporary.glob("benchmark-lab-x-collect-*")))
 
 
 class R13UnsupervisedKeyboardInterruptCleanupTests(unittest.TestCase):
@@ -1766,13 +1786,13 @@ class R13UnsupervisedKeyboardInterruptCleanupTests(unittest.TestCase):
         env = {
             **os.environ,
             "TMPDIR": str(temporary),
-            "V2_ALPHA_DEMO_TEST_SOCKET_FD": str(child.fileno()),
+            "BENCHMARK_LAB_X_TEST_SOCKET_FD": str(child.fileno()),
         }
-        env.pop("V2_ALPHA_DEMO_LAUNCH_SOCKET_FD", None)
+        env.pop("BENCHMARK_LAB_X_LAUNCH_SOCKET_FD", None)
         process = subprocess.Popen(
             [
                 sys.executable, "-B", "-c",
-                "from v2_alpha_demo import __main__ as d; import sys; d.collect(*sys.argv[1:])",
+                "from benchmark_lab_x import __main__ as d; import sys; d.collect(*sys.argv[1:])",
                 str(run), str(authority), str(self.fixture.root),
             ],
             cwd=demo.PACKAGE_DIR.parent, env=env, pass_fds=(child.fileno(),),
@@ -1811,7 +1831,7 @@ class R13UnsupervisedKeyboardInterruptCleanupTests(unittest.TestCase):
         self.assertEqual([item["executed"] for item in collection["matrix"]], [True, False, False])
         self.assertIn("INTERRUPTION_GROUPE_TUE", collection["matrix"][0]["reason"])
         self.assertFalse(any(run.glob("C[23].*")))
-        self.assertFalse(list(temporary.glob("v2-alpha-collect-*")))
+        self.assertFalse(list(temporary.glob("benchmark-lab-x-collect-*")))
         self.assertFalse(list(run.glob(".private-json-*.tmp")))
         self.assertFalse(list(run.glob(".collection-*.tmp")))
 
@@ -1834,7 +1854,7 @@ if sys.argv[1:] == ["--version"]:
     print("0.84.4")
     raise SystemExit(0)
 
-sock = socket.socket(fileno=int(os.environ["V2_ALPHA_DEMO_TEST_SOCKET_FD"]))
+sock = socket.socket(fileno=int(os.environ["BENCHMARK_LAB_X_TEST_SOCKET_FD"]))
 ready_read, ready_write = os.pipe()
 reaper = os.fork()
 if reaper == 0:
@@ -1876,17 +1896,17 @@ signal.pause()
         env = {
             **os.environ,
             "TMPDIR": str(temporary),
-            "V2_ALPHA_DEMO_TEST_SOCKET_FD": str(child.fileno()),
+            "BENCHMARK_LAB_X_TEST_SOCKET_FD": str(child.fileno()),
         }
-        env.pop("V2_ALPHA_DEMO_LAUNCH_SOCKET_FD", None)
+        env.pop("BENCHMARK_LAB_X_LAUNCH_SOCKET_FD", None)
         program = '''
-from v2_alpha_demo import __main__ as d
+from benchmark_lab_x import __main__ as d
 import os, sys
 original = d._wait_pgid_gone
 def observed(*args):
-    os.write(int(os.environ["V2_ALPHA_DEMO_TEST_SOCKET_FD"]), b"WAIT_PGID_ENTER\\n")
+    os.write(int(os.environ["BENCHMARK_LAB_X_TEST_SOCKET_FD"]), b"WAIT_PGID_ENTER\\n")
     result = original(*args)
-    os.write(int(os.environ["V2_ALPHA_DEMO_TEST_SOCKET_FD"]), f"WAIT_PGID_RETURN {int(result)}\\n".encode())
+    os.write(int(os.environ["BENCHMARK_LAB_X_TEST_SOCKET_FD"]), f"WAIT_PGID_RETURN {int(result)}\\n".encode())
     return result
 d._wait_pgid_gone = observed
 d.collect(*sys.argv[1:])
@@ -2005,7 +2025,7 @@ d.collect(*sys.argv[1:])
         self.assertIn("INTERRUPTION_GROUPE_TUE", collection["matrix"][0]["reason"])
         self.assertFalse(json.loads((run / "C1.receipt.json").read_text())["retry"])
         self.assertFalse(any(run.glob("C[23].*")))
-        self.assertFalse(list(temporary.glob("v2-alpha-collect-*")))
+        self.assertFalse(list(temporary.glob("benchmark-lab-x-collect-*")))
         self.assertFalse(list(run.glob(".private-json-*.tmp")))
         self.assertFalse(list(run.glob(".collection-*.tmp")))
 
@@ -2023,9 +2043,9 @@ class IsolatedSupervisorImmutabilityTests(unittest.TestCase):
         auth, _ = self.s9(run)
         demo.collect(run, auth, self.root)
         parent, child = socket.socketpair()
-        env = {**os.environ, "V2_ALPHA_DEMO_TEST_SOCKET_FD": str(child.fileno()), "V2_ALPHA_DEMO_TEST_REPO_ROOT": str(self.root)}
+        env = {**os.environ, "BENCHMARK_LAB_X_TEST_SOCKET_FD": str(child.fileno()), "BENCHMARK_LAB_X_TEST_REPO_ROOT": str(self.root)}
         process = subprocess.run(
-            [sys.executable, "-B", "-m", "v2_alpha_demo", "collect", "--run-dir", str(run), "--authority", str(auth)],
+            [sys.executable, "-B", "-m", "benchmark_lab_x", "collect", "--run-dir", str(run), "--authority", str(auth)],
             cwd=demo.PACKAGE_DIR.parent, env=env, pass_fds=(child.fileno(),), capture_output=True, text=True, timeout=5,
         )
         parent.close()

@@ -10,19 +10,11 @@ Cet ARD fixe les objets, frontières, flux et contraintes de l'architecture rete
 
 Le [PRD](PRD.md) gouverne le besoin et le périmètre. Les [règles](RULES.md) portent les invariants. Le [glossaire](../CONTEXT.md) fixe le sens des termes. Le [gabarit de carte](../tasks/TEMPLATE.md) prépare le contrat d'une tâche.
 
+Le produit du monorepo partage une version ; les contrats de compatibilité et les versions de schéma suivent les [règles de versionnement](RULES.md#14-versionnement-du-produit).
+
 ## 2. Principes
 
-1. Le modèle est l'objet produit mis en avant.
-2. La configuration observée, reliée aux conditions de test communes, est l'unité de preuve.
-3. Les configurations comparables utilisent des accès directs ou API sous le même Pi.
-4. Pi est obligatoire ; son état appartient aux conditions de test communes déclarées avant le premier candidat.
-5. Chaque version de tâche possède des cas identifiés et un contrat approuvé avant toute sortie.
-6. Une sortie brute précède son contrôle et son verdict.
-7. L'admissibilité précède le coût.
-8. Une conclusion est située et n'isole pas causalement le modèle.
-9. Les campagnes historiques restent immuables.
-10. La complexité entre seulement après preuve d'un besoin antérieur.
-11. La consultation publique est séparée des opérations protégées ; le lot V2 bêta n'expose aucune contribution publique.
+L’architecture relie des contrats figés, des observations attribuables et des vues vérifiables. Les invariants de décision, de coût et d’histoire appartiennent aux [règles](RULES.md) ; le parcours et les exclusions appartiennent au [PRD](PRD.md#10-restitution-publique).
 
 ## 3. Pi comme frontière constante
 
@@ -34,15 +26,17 @@ Chaque campagne doit figer le paquet ou fork Pi, sa version exécutée, les empr
 
 `déclaré` vient d'une source documentaire, `configuré` d'un réglage, `actif` d'une preuve de chargement et `observé` d'une exécution. Une valeur absente reste `INCONNU`. Un réglage du poste ou un numéro de changelog ne prouve pas la version exécutée.
 
-La campagne doit conserver son environnement identifié indépendamment des mises à jour du poste et du site. Une nouvelle version de présentation ne doit ni réécrire les preuves ni imposer une nouvelle acquisition.
+La campagne doit conserver son environnement identifié indépendamment des mises à jour du poste et du site. Une nouvelle version de présentation ne doit ni réécrire les preuves ni imposer une nouvelle acquisition. Cette traçabilité permet de contrôler les conditions et de réappliquer les évaluations déterministes ; elle ne garantit pas une sortie candidate identique, notamment si le fournisseur change une révision non observable.
 
 ## 4. Objets et responsabilités
 
 ### 4.1 Tâche, version et cas d'essai
 
-Responsabilité : relier un besoin précis à un résultat attendu, des obligations, des erreurs éliminatoires, trois verdicts permis et au maximum deux critères secondaires, puis fixer la base de coût avant exécution : périmètre d'attribution, tentatives comptées, unité commune et règle de conversion éventuelle.
+Responsabilité : relier le besoin au contrat de réussite et à sa base de coût, définis par les [règles du contrat](RULES.md#4-contrat-avant-exécution).
 
-La tâche possède un identifiant stable ; chaque version relie un contrat approuvé aux cas d'essai et à leurs entrées identifiées. Une modification après observation crée une nouvelle version. Le catalogue référence ces tâches sans confondre leurs versions.
+La tâche possède un identifiant stable ; chaque version relie un contrat approuvé aux cas d'essai et à leurs entrées identifiées. Le contrat approuvé est immuable ; une modification crée une nouvelle version, sans remplacer les références des campagnes existantes. Le catalogue référence ces tâches sans confondre leurs versions. Le métier ou domaine et la famille de tâche sont des repères descriptifs du contexte ; ils ne constituent ni des clés de comparabilité ni des intégrations techniques par profession.
+
+Chaque version identifie aussi la référence de jugement et la méthode. Les preuves de qualification lui sont liées hors de son empreinte, selon les [règles de qualification](RULES.md#4-contrat-avant-exécution). Les pièces accessibles au candidat et celles réservées à l’évaluation sont identifiées séparément. Une tâche de recherche décrit son corpus, les outils et droits d’accès : textes fournis, bibliothèque figée ou source externe autorisée. Les requêtes, résultats et pièces effectivement consultés sont conservés lorsqu’une recherche intervient ; leur identité distingue les ressources annoncées des ressources réellement vues.
 
 Une campagne référence une version de tâche, les cas retenus, le panel, les conditions communes et les autorisations. Plusieurs campagnes peuvent référencer une même version. Une éventuelle agrégation des cas exige une règle préalable ; les verdicts par cas restent accessibles.
 
@@ -52,16 +46,18 @@ Responsabilité : déclarer une fois, avant le premier candidat, ce que toutes l
 
 Toute configuration comparée référence ces conditions. Une condition commune modifiée ouvre une nouvelle comparaison ; elle ne requalifie pas les sorties déjà obtenues.
 
-### 4.3 Configuration observée
+### 4.3 Configuration demandée et configuration observée
 
-Responsabilité : conserver, pour un candidat, tout ce qui borne l'attribution de sa sortie :
+La configuration demandée est la cible figée du manifeste : elle existe avant l’appel. Chaque tentative lui associe une configuration observée, avec la source de chaque observation. Plusieurs tentatives visant la même cible peuvent observer des valeurs différentes ; elles ne réécrivent pas la demande initiale.
+
+Responsabilité : conserver tout ce qui borne l’attribution de la sortie :
 
 - fournisseur
 - modèle et révision exacte exigée par le contrat
 - accès direct ou API
 - route demandée et route observée
 - paramètres demandés et observés
-- effort de raisonnement
+- effort de raisonnement demandé et observé
 - identité demandée et identité observée
 - référence aux conditions de test communes
 
@@ -69,9 +65,13 @@ Une demande et une observation restent distinctes. Une identité, une route ou u
 
 Pour une configuration locale, l'identité inclut les poids, leur révision, la quantification, le serveur d'inférence et le matériel nécessaires à l'attribution.
 
-### 4.4 Acquisition
+### 4.4 Acquisition, tentative et exécution
 
-Responsabilité : exécuter une unité autorisée et conserver :
+Une exécution identifie une opération du produit sur une campagne : préparation, acquisition, évaluation ou construction de restitution. Elle référence la version du moteur, ses entrées, son autorité, sa chronologie et sa terminaison. Une campagne peut avoir plusieurs exécutions ; une exécution d’acquisition peut contenir plusieurs tentatives.
+
+La tentative est l’unité d’intention d’appel pour un cas et une configuration demandée. Son identifiant précède l’émission ; le reçu distingue intention enregistrée, émission établie ou inconnue et résultat reçu. Une tentative locale n’atteste pas que le fournisseur a reçu la requête. Une cellule prévue mais jamais lancée n’est pas une tentative.
+
+L’acquisition conserve :
 
 - campagne, version de tâche, cas, contrat et identifiant de tentative
 - configuration demandée et observée
@@ -82,7 +82,7 @@ Responsabilité : exécuter une unité autorisée et conserver :
 - incident, retry et intervention
 - reçu relié aux autres preuves
 
-Une acquisition ne décide pas de son propre verdict. L'exécuteur doit enregistrer l'intention avant l'appel puis conserver le reçu ou l'ambiguïté. Après interruption, une tentative aux effets inconnus ne doit pas être rejouée ; une cellule jamais lancée reste distincte d'un échec.
+Une tentative ne décide pas de son propre verdict. L'exécuteur doit enregistrer l'intention avant l'appel puis conserver le reçu ou l'ambiguïté. Après interruption, une tentative aux effets inconnus ne doit pas être rejouée ; une cellule jamais lancée reste distincte d'un échec.
 
 ### 4.5 Évaluation
 
@@ -92,27 +92,23 @@ Responsabilité : appliquer les erreurs éliminatoires et obligations du contrat
 - `NE SATISFAIT PAS`
 - `INDETERMINE`
 
-L'évaluation s'applique à un cas et une tentative identifiés. Le verdict porte les éléments exigés par la règle « Verdict explicable » des [règles](RULES.md#6-erreurs-et-verdict) : valeur, motif court, critères ou constats concernés, références de preuve et responsable. Les critères secondaires décrivent uniquement les résultats déjà `SATISFAIT`. Ils ne compensent jamais une erreur éliminatoire.
+L'évaluation s'applique à un cas et une tentative identifiés. Le verdict porte les éléments exigés par la règle « Verdict explicable » des [règles](RULES.md#6-erreurs-et-verdict) : valeur, motif court, critères ou constats concernés, références de preuve et responsable. L’évaluation référence la version de la méthode et de la référence de jugement ainsi que les preuves de leur qualification. Lorsqu’elle est assistée par un modèle, elle conserve sa configuration demandée et observée, les consignes, les pièces vues et l’arbitrage humain ; ces éléments se distinguent de la configuration candidate et suivent les [règles de provenance](RULES.md#5-sortie-et-provenance). L’éventuelle revue professionnelle est une preuve attribuée à son auteur et à son périmètre, sans nouveau rôle produit obligatoire. Les critères secondaires décrivent uniquement les résultats déjà `SATISFAIT`. Ils ne compensent jamais une erreur éliminatoire.
 
 ### 4.6 Vue de décision
 
-Responsabilité : exclure `NE SATISFAIT PAS` et `INDETERMINE` de la recommandation économique tout en laissant leur dépense observée visible, comparer seulement les coûts connus et comparables des configurations `SATISFAIT`, puis exposer les bénéfices prévus sur les seuls critères secondaires déclarés, selon les règles de [coût et bénéfices](RULES.md#8-coût-et-bénéfices). Si le coût d'au moins une configuration `SATISFAIT` est inconnu ou non comparable, elle conserve son admissibilité, les coûts connus restent visibles, mais la vue ne déclare aucune option globalement moins chère et marque la conclusion économique `INCOMPLETE`.
-
-Elle ne calcule aucun score global, ne fusionne jamais coût et bénéfice, et ne modifie ni sortie, ni reçu, ni verdict source.
+Responsabilité : dériver une conclusion depuis des évaluations compatibles et la base de coût du contrat, selon les [règles de coût et bénéfices](RULES.md#8-coût-et-bénéfices). La vue conserve la couverture, les coûts exclus et les inconnues, sans modifier les sorties, reçus ou verdicts sources.
 
 ### 4.7 Restitution
 
-Responsabilité : rendre accessibles le catalogue, la tâche et ses campagnes, puis la conclusion contextualisée, le tableau commun des configurations et leurs preuves. L'admissibilité gouverne le calcul économique sans imposer deux sections successives.
+La restitution relie les identités du catalogue, de la tâche et de la campagne au parcours du [PRD](PRD.md#10-restitution-publique). La publication est une projection approuvée et identifiée de cette restitution et de ses pièces autorisées, séparée des données privées et de l’état d’exécution.
 
-Une publication doit identifier la restitution et les preuves approuvées, indépendamment de l'état d'exécution. Une campagne partielle doit conserver ses observations exploitables et signaler sa couverture. Une conclusion économique `INCOMPLETE` interdit une option déclarée globalement moins chère.
-
-La restitution affiche la limite d'attribution : le verdict porte sur la configuration observée sous les conditions communes, pas sur le modèle isolé. Elle ne produit ni podium général, ni score global, ni graphique trompeur.
+La projection référence les versions de schéma, de présentation, de conclusion et de pièces utilisées. Sa mise à disposition doit être cohérente : une consultation ne mélange pas une conclusion nouvelle avec les pièces d’une publication précédente. Une nouvelle présentation ne relance aucune acquisition et ne modifie aucun verdict ; son exposition exige l’autorité de publication correspondante.
 
 ## 5. Flux minimal
 
 ```text
 Besoin précis du demandeur-lecteur
-  -> Version de tâche, contrat et cas approuvés par le responsable de campagne
+  -> Version de tâche, cas, référence et méthode qualifiés, contrat approuvé
      -> Campagne, panel, conditions communes et autorisations figés
         -> Configurations modèle + accès direct/API sous ces conditions
            -> Acquisition autorisée
@@ -129,20 +125,20 @@ Cette représentation décrit les dépendances métier ; les composants doivent 
 
 ## 6. Identités, jointures et immutabilité
 
-Chaque tâche, version, cas, campagne, contrat, conditions communes, configuration, acquisition, sortie, verdict et publication possède une identité vérifiable. Les jointures relient explicitement :
+Chaque tâche, version, cas, campagne, contrat, conditions communes, configuration demandée, observation de configuration, exécution, tentative, sortie, verdict et publication possède une identité vérifiable. Les jointures relient explicitement :
 
 - la tâche à ses versions, contrats et cas
 - la campagne à sa version de tâche, ses cas, son panel et ses autorisations
 - la configuration à ses conditions de test communes
-- l'acquisition à sa configuration demandée et observée
+- la tentative à l’exécution, au cas, à sa configuration demandée et à ses observations
 - la sortie au reçu d'acquisition
-- le verdict à la sortie, au contrat utilisés et à ses preuves
+- le verdict à la sortie, au contrat, à la référence et à la méthode utilisés, ainsi qu’à ses preuves
 - la vue de décision aux seuls verdicts compatibles
 - la publication à la vue et aux preuves explicitement approuvées
 
 Un libellé public n'est pas une clé de jointure. La sortie brute et les preuves historiques ne sont pas corrigées silencieusement.
 
-Une vue de décision refuse au minimum :
+La conclusion refuse de combiner comme comparables les éléments suivants ; les observations conservées et leur couverture restent consultables :
 
 - contrats différents ou modifiés après résultat
 - conditions de test communes différentes entre candidats présentés comme comparables
@@ -153,16 +149,7 @@ Une vue de décision refuse au minimum :
 
 ## 7. Verdict, coût et bénéfices
 
-L'ordre interne est celui des six opérations des [règles](RULES.md#7-ordre-de-décision) :
-
-1. erreurs éliminatoires ;
-2. obligations et preuve ;
-3. verdict d'admissibilité ;
-4. exclusion de `NE SATISFAIT PAS` et `INDETERMINE` de la recommandation économique ;
-5. coût connu et comparable entre les seuls `SATISFAIT` ;
-6. bénéfices prévus des options `SATISFAIT` plus chères.
-
-Une valeur absente reste `INCONNU`. Un résultat `INDETERMINE` n'est ni un succès par défaut ni un échec inventé. Le coût n'est jamais agrégé à l'admissibilité ni au bénéfice dans une note unique. Une conclusion économique `INCOMPLETE` n'est pas un quatrième verdict.
+L’évaluation applique l’[ordre de décision](RULES.md#7-ordre-de-décision), puis la vue applique les [règles économiques](RULES.md#8-coût-et-bénéfices). La conclusion économique et le verdict sont des champs distincts : `INCOMPLETE` n’est pas un quatrième verdict. Les versions de l’évaluateur, de sa méthode et du calcul de conclusion restent reliées aux preuves.
 
 ## 8. Incidents et attribution
 
@@ -195,23 +182,72 @@ Les campagnes historiques restent dans leurs questions, panels, schémas et verd
 - intégration Git, exécution produit, appels candidats et budget, provisionnement et publication soumis à des autorités distinctes
 - champs, filtres, chemins, contenus et sorties considérés comme non fiables : validation côté serveur, requêtes paramétrées et rendu échappé
 - aucune donnée candidate rendue comme code actif dans le site ; aucune opération protégée autorisée par un simple libellé ou identifiant public
+- les instructions contenues dans une entrée ou une sortie candidate ne créent aucun droit, changement de contrat ou instruction d’exploitation ; l’évaluateur les traite comme données
+- si une tâche ou les outils qu’elle autorise peuvent exécuter du code candidat, son confinement doit être vérifié avant l’appel : séparation du serveur public et des secrets, accès fichiers et réseau limités au contrat, ressources et arrêt contrôlés ; un compte de service distinct ne suffit pas à prouver ce confinement
 
-## 11. Éléments différés
+## 11. Extensions de périmètre
 
 Les extensions de périmètre suivent le PRD et les règles KISS. Aucun microservice, Kubernetes, bus de messages, système de plugins ou moteur d'inférence supplémentaire n'est requis par cette architecture.
 
 ## 12. Composants et exploitation
 
-Le front-end et le back-end appartiennent au même dépôt produit et doivent être servis depuis une même VM Linux, sous une même origine. Le moteur commun doit être vérifiable sous Linux et macOS ; les dépendances propres à l'exploitation Linux restent dans cette couche.
+### 12.1 Frontières du produit
 
-L'application doit exposer la consultation publique et protéger les commandes d'exploitation. Un processus supervisé, issu du même produit et indépendant des requêtes HTTP, doit exécuter les campagnes. Une interface opérateur web n'est pas exigée.
+Le frontend et le backend appartiennent au même dépôt produit et sont servis depuis une même VM Linux, sous une même origine. Le moteur commun et ses formats doivent être vérifiables sous Linux et macOS ; la supervision et les comptes de service Linux appartiennent à la couche d’exploitation. Une preuve acquise sur un système ne vaut pas preuve sur l’autre.
 
-SQLite sur disque local doit conserver les métadonnées transactionnelles. Les pièces privées doivent vivre hors du dépôt et des répertoires de release. Les références et empreintes relient état et pièces ; sauvegarde et restauration doivent couvrir les deux. L'état d'exécution, le verdict et la publication sont distincts.
+| Composant | Responsabilité et accès |
+|---|---|
+| Serveur public | servir seulement la projection approuvée et ses pièces publiables ; aucun accès aux secrets candidats ou aux pièces et métadonnées privées |
+| Exécuteur de travaux longs | opérer les campagnes indépendamment des requêtes HTTP, sous identité et autorité propres ; conserver observations, incidents et évaluations privées |
+| Opérateur autorisé | préparer, admettre, arrêter, reprendre et approuver selon l’opération ; une interface opérateur web n’est pas exigée |
+| Contrôleur de livraison | installer une source ou un artefact approuvé, vérifier son identité et consigner le résultat ; aucun droit d’appel candidat déduit du droit de déployer |
 
-Les secrets candidats doivent être accessibles au seul exécuteur autorisé et absents du navigateur, des journaux publics et des artefacts de release. Les identités de déploiement restent séparées. Le code éventuellement produit par une tâche doit être exécuté dans un environnement séparé du serveur web et des secrets.
+Les comptes du web, de l’exécuteur et de la livraison limitent chacun l’accès à leur responsabilité. Une projection contrôlée est remise au serveur public sous autorité de publication ; exposer directement un dossier privé n’est pas une interface de publication. Les secrets sont injectés séparément du code et de la projection. Les journaux d’exploitation doivent permettre le diagnostic sans exposer secrets, entrées privées ou sorties brutes.
 
-GitHub porte le produit et le backlog ; Forgejo doit piloter la release et le déploiement. Le contrôleur appartient à cybrel-infrastructure et doit consommer une identité de source ou d'artefact approuvée, vérifier son empreinte et produire un reçu de déploiement. Ses accès au runner, au réseau et aux secrets doivent être définis avant son installation. Aucun miroir bidirectionnel ni deuxième backlog produit n'est requis.
+### 12.2 Persistance et intégrité
 
-Le provisionnement doit utiliser les primitives Terraform, l'orchestrateur Bash et Ansible de Cybrel. L'exposition doit respecter la chaîne Consul, consul-template et HAProxy, notamment la déclaration initiale du backend avant son référencement dynamique. Une release produit ne doit pas relancer implicitement le provisionnement.
+SQLite sur disque local conserve les métadonnées transactionnelles. Les pièces privées restent hors du dépôt et des répertoires de release. Les enregistrements lient les pièces par identité, emplacement contrôlé et empreinte. Une référence cassée ou une empreinte divergente empêche d’utiliser la pièce comme preuve.
 
-Graph Engineering Tool reste un outil indépendant d'exécution agentique des Stories. Il ne remplace ni le moteur des campagnes ni leurs autorisations. Son identité doit être épinglée dans le contrat de chaque run ; aucun numéro de version de cet outil n'est fixé ici.
+La version du schéma de stockage et les versions des contrats et formats historiques sont distinctes. Le runtime vérifie leur compatibilité avant d’écrire ; une version inconnue ou une migration non autorisée bloque l’opération sans réinterpréter les preuves. Les contraintes de référence, l’unicité des tentatives et la réservation budgétaire doivent tenir aussi lorsque plusieurs opérations se présentent simultanément, sans imposer ici une politique de sérialisation.
+
+L’écriture d’une pièce et celle de sa référence doivent laisser un état détectable après interruption. Une pièce incomplète ne peut pas devenir une preuve valide. Initialisation, migration, sauvegarde et restauration couvrent ensemble SQLite, les pièces et leurs liens ; une sauvegarde réussie n’atteste pas une restauration réussie.
+
+### 12.3 Interfaces et cycle de vie
+
+Les lignes suivantes fixent des effets et des preuves, pas des noms de commandes ni un format de protocole.
+
+| Opération | Entrée et effet autorisé | Preuve ou refus attendu |
+|---|---|---|
+| Initialiser | emplacement de données et runtime identifiés | schéma et répertoires privés cohérents ; aucune base existante écrasée |
+| Préparer | version de tâche, cas, panel et conditions communes | manifeste gelé, références et champs non décidés visibles ; aucun appel |
+| Admettre et lancer | manifeste et autorités d’exécution, d’appels et de budget | contrôles des [règles d’admission](RULES.md#9-incidents-et-inconnues), réservation et intention persistante avant émission |
+| Interrompre | exécution identifiée et motif d’arrêt | admission de nouveaux appels arrêtée, travaux actifs suivis, reçus acquis conservés ; effets inconnus signalés |
+| Reprendre | état conservé et autorité explicite | rapprochement des tentatives et du budget, cellules encore autorisées identifiées ; aucun rejeu d’une tentative ambiguë |
+| Évaluer et restituer | observations intègres, méthode et décisions requises | verdicts et conclusion traçables ; couverture partielle visible sans nouvel appel |
+| Publier | projection et pièces explicitement approuvées | identité de publication et cohérence des références visibles ; aucune ouverture implicite des données privées |
+
+L’état de campagne décrit préparation, admission, activité, interruption ou clôture à partir des reçus. Une clôture peut être partielle ; elle ne prouve ni satisfaction ni publication. Les tentatives conservent leur état propre et les cellules non lancées restent distinguées. Une correction d’évaluation autorisée crée une nouvelle évaluation reliée à la précédente ; elle ne remplace pas silencieusement le verdict déjà publié.
+
+### 12.4 Exploitation vérifiable
+
+Avant usage opérationnel, le produit doit fournir à l’infrastructure les interfaces suivantes avec leur preuve de validation.
+
+| Besoin | Contrat à vérifier |
+|---|---|
+| Démarrage et santé | disponibilité du web et de sa projection, disponibilité distincte de l’exécuteur et du stockage ; aucun appel candidat utilisé comme test de santé |
+| Arrêt et maintenance | inhibition des nouveaux appels, arrêt contrôlé et état des travaux actifs ou ambigus, y compris après arrêt forcé ; aucun redémarrage ne reprend implicitement une campagne |
+| Livraison | provenance reliant l’artefact au commit produit approuvé, empreinte des octets installés, compatibilité des données et reçu ; un identifiant déclaratif de commit ne prouve pas la construction |
+| Sauvegarde | point cohérent de SQLite et des pièces associées, manifeste d’intégrité, accès privé et résultat observable |
+| Restauration | cible autorisée et données existantes à préserver identifiées, intégrité et compatibilité, lisibilité des pièces et validité des liens métier, puis autorité distincte avant reprise ; restaurer un état antérieur ne prouve pas qu’un appel ultérieur n’a jamais eu lieu |
+
+Une reprise après restauration doit rapprocher les preuves de tentatives potentiellement postérieures à la sauvegarde ; si leurs effets ou leur coût restent inconnus, les opérations dépendantes restent bloquées. Une bascule inverse de code ne vaut pas rollback de données.
+
+Les noms de commandes, le format d’artefact, le lieu de build, le transport de livraison, la politique de concurrence, les fenêtres de sauvegarde, le maintien du web pendant celles-ci et les modalités concrètes de reprise restent à décider. Le candidat local de cybrel-infrastructure n’accorde aucune valeur normative à ses choix sur ces points. Les affectations VM, réseau, domaine, ressources, sauvegarde et supervision doivent être fixées dans un contrat d’exploitation à approuver dans ce dépôt indépendant.
+
+### 12.5 Dépôts et infrastructure
+
+GitHub porte le produit et le backlog ; Forgejo pilote la livraison et le déploiement contrôlés. Le contrôleur appartient à cybrel-infrastructure. Ses accès au runner, au réseau et aux secrets doivent être définis avant son installation. Aucun miroir bidirectionnel ni deuxième backlog produit n’est requis.
+
+Le provisionnement utilise les primitives Terraform, l’orchestrateur Bash et Ansible de Cybrel. L’exposition respecte la chaîne Consul, consul-template et HAProxy, notamment la déclaration initiale du backend avant son référencement dynamique. Une release produit ne relance pas implicitement le provisionnement.
+
+Graph Engineering Tool reste dans son dépôt indépendant pour l’exécution agentique des Stories. Il ne remplace ni le moteur des campagnes ni leurs autorisations. Son identité est épinglée dans chaque contrat de run ; aucun numéro de version de cet outil n’est fixé ici. La piste d’une VM macOS Graph est exclue.

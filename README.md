@@ -4,75 +4,62 @@ style_gate: pass
 
 # Benchmark Lab-X
 
-Benchmark Lab-X aide à choisir un modèle pour une tâche précise à partir de preuves lisibles. Le modèle est mis en avant, mais chaque verdict reste borné à la configuration réellement observée et aux conditions communes du test.
+Benchmark Lab-X aide à choisir une configuration de modèle d’IA pour une tâche précise. Il rapproche le travail demandé, les résultats obtenus, leur évaluation et leur coût pour permettre une décision fondée sur des preuves consultables.
 
-## État actuel
+La question est simple : **quelles configurations accomplissent ce travail, à quel coût et avec quelles limites ?** Une conclusion vaut pour la tâche et les conditions testées. Le projet ne cherche pas à désigner un meilleur modèle universel.
 
-- La V2-alpha est publiée sur [GitHub Pages](https://ayoahha.github.io/benchmark-lab-x/) : une tâche, une campagne et une restitution statique de trois configurations.
-- Publication de référence : [commit 8f121a3c97d0997590edafd6e980e0cb29314a56](https://github.com/ayoahha/benchmark-lab-x/commit/8f121a3c97d0997590edafd6e980e0cb29314a56), [déploiement réussi](https://github.com/ayoahha/benchmark-lab-x/actions/runs/33898902009).
-- Les canons décrivent le produit et son contrat d'architecture ; leur approbation ne prouve pas une implémentation ni une publication.
+## Découvrir les résultats
 
-## Décisions pour V2 bêta
+[Ouvrir la comparaison publique](https://ayoahha.github.io/benchmark-lab-x/).
 
-Ayo retient un monorepo front-end et back-end, une même VM et une même origine publique, l'architecture minimale de l'ARD, GitHub pour le produit et le backlog, et Forgejo pour la release et le déploiement. Les besoins du contrôleur dans cybrel-infrastructure doivent être précisés avant son installation. Les contributions publiques sont hors de ce lot.
+Le site présente une restitution statique sur un scénario et trois configurations. Pour l’utiliser :
 
-Le panel sélectionné comprend dix modèles :
+1. Lisez le besoin, l’entrée et le résultat attendu pour vérifier que la tâche ressemble à votre usage.
+2. Examinez le verdict de chaque configuration et les constats qui le justifient.
+3. Comparez les coûts des configurations qui satisfont les critères, puis les bénéfices prévus d’une option plus chère.
+4. Consultez les sorties, incidents et limites avant de transposer la conclusion à votre situation.
 
-- GLM5.3
-- Deepseek V4 Flash-0731
-- Muse spark 1.3
-- Hy4 Preview
-- Minimax M3
-- Qwen3.8-Max-0902
-- Mimo-V2.5-Pro
-- Gemini 3.8 Flash
-- Kimi k3
-- Grok 4.6
+Un verdict indéterminé signifie que les preuves ne permettent pas de conclure. Un coût manquant limite la comparaison économique ; les dépenses des configurations non admissibles restent visibles. Les [règles de décision](docs/RULES.md#7-ordre-de-décision) expliquent ces distinctions.
 
-Les révisions `0731` et `0902` sont exigées. Ces noms sont une sélection propriétaire, pas une preuve de disponibilité. Identifiants des canaux, fournisseurs, routes, paramètres et identités observables doivent être résolus dans les manifestes approuvés, sans alias mobile substitué silencieusement.
+## Utiliser l’outil local
 
-Le contenu du catalogue, les cas, les règles d'agrégation, les budgets et les autorisations d'appel restent à définir. Aucune Story de tâche, campagne ou candidat n'est créée avant décision de son contenu, de son panel et de son budget.
+L’outillage Python prépare un scénario figé, recueille les sorties après autorisation, prépare une revue et construit une page à partir de décisions approuvées. Il peut aussi produire une nouvelle présentation d’un résultat scellé sans relancer de candidat.
 
-## Repères historiques
-
-V0 a obtenu une sortie sur deux configurations API, sans répétition. Grok a échoué à `G-001` ; Kimi a fini en `HARNESS_ERROR`. Aucun verdict humain, coût total connu, front à trois axes calculable, gagnant ou recommandation n'en découle.
-
-V1 a obtenu six sorties sur sept produits d'abonnement. Les six ont échoué à `G-001`, sans `PASS` ni revue humaine officielle. Quotas et effort humain restent inconnus dans la restitution consolidée. Le coût d'abonnement par sortie acceptable est `NON_DEFINI` par décision propriétaire V1.
-
-Ces campagnes restent sous leurs contrats d'origine, sans classement qualitatif, baseline ou requalification.
-
-## Question produit
-
-> Pour une tâche et un contrat fixés avant l'exécution, quelles configurations associant un modèle à un accès direct ou API accomplissent le travail sous le même Pi ? Parmi les configurations `SATISFAIT`, lesquelles coûtent le moins et quels bénéfices prévus justifient une option plus chère ?
-
-## Principes
-
-- le contrat de réussite précède toute exécution
-- Pi reste le harnais commun
-- les erreurs éliminatoires précèdent le verdict
-- le coût ne départage que les configurations `SATISFAIT`
-- toute conclusion reste située, traçable et sans classement universel
-- le public consulte les restitutions approuvées ; les opérations et la publication restent protégées
-
-## Documents faisant autorité
-
-- [PRD](docs/PRD.md) : besoin et périmètre produit
-- [ARD](docs/ARD.md) : objets, frontières et flux
-- [Règles](docs/RULES.md) : invariants de décision et de preuve
-- [Glossaire](CONTEXT.md) : vocabulaire du domaine
-- [Gabarit de tâche](tasks/TEMPLATE.md) : contrat minimal d'une future tâche
-- [Instructions agents](AGENTS.md) : méthode de travail dans le dépôt
-
-Il n'existe aucune copie parallèle de ces documents. Leur historique appartient à Git.
-
-## Validation
-
-La CI configurée exécute :
+Depuis la racine du dépôt, avec Python 3 :
 
 ```bash
-uv run --with requests --with mpmath==1.3.0 python -m unittest discover -s tests
+python3 -B -m benchmark_lab_x --help
 ```
 
-Cette découverte ne couvre pas `v2_alpha_demo/test_demo.py`. Plusieurs preuves d'interruption de cette suite exigent macOS. Leur couverture en CI et leur équivalent Linux doivent être traités avant de revendiquer une validation complète du moteur.
+Pour consulter une campagne locale déjà construite et scellée, remplacez le chemin d’exemple par le sien :
 
-Les tâches de livraison et leur état vivent dans les [GitHub Issues](https://github.com/ayoahha/benchmark-lab-x/issues) et le [Project #5](https://github.com/users/ayoahha/projects/5), sans backlog local. Parent issue porte la hiérarchie ; Sub-issues progress sa progression. Les états des campagnes appartiennent au produit.
+```bash
+python3 -B -m benchmark_lab_x show --run-dir runs/ma-campagne
+```
+
+Cette commande vérifie l’intégrité puis ouvre la page sur macOS. Le [guide local](benchmark_lab_x/README.md) détaille les étapes, les prérequis et les autorisations nécessaires. Les [tests hors ligne](benchmark_lab_x/verify.md) utilisent un faux Pi et n’appellent aucun modèle.
+
+L’outil actuel reste attaché à un scénario et à son panel figés. Il ne fournit pas encore le catalogue de tâches, la navigation entre plusieurs campagnes, le serveur Linux et la persistance décrits dans les spécifications. Le [périmètre produit](docs/PRD.md#5-périmètre-produit) définit ces capacités attendues.
+
+## Préparer une tâche de benchmark
+
+Une tâche part d’un travail concret : comparer des salles pour une association, transformer des notes de réunion en suivi ou rechercher une information dans un dossier professionnel. Le projet vise des métiers variés ; le catalogue prévu distingue le contexte métier du type de travail demandé. Le [gabarit de tâche](tasks/TEMPLATE.md) aide à décrire :
+
+- le besoin, le résultat utilisable, ce que l’utilisateur doit encore faire et la décision à éclairer ;
+- les cas d’essai, leurs données et les conditions communes ;
+- les obligations, les variations acceptables, les erreurs éliminatoires et la référence permettant de juger ;
+- le périmètre des coûts et les limites de la conclusion.
+
+La préparation vérifie aussi que la référence est étayée et que les contrôles acceptent une solution valable et repèrent les défauts visés. Des modèles peuvent aider à la relire ; leur accord ne suffit pas à établir sa justesse. Le responsable de campagne prépare et approuve ce contrat avant l’exécution, selon les [règles de qualification](docs/RULES.md#4-contrat-avant-exécution). Le choix des configurations et du budget nécessite ses propres décisions.
+
+Remplir cette carte ne l’enregistre pas automatiquement dans un catalogue et ne la rend pas exécutable par l’outillage actuel. L’intégration d’une nouvelle tâche doit relier la carte à ses données, à ses contrôles et à une campagne autorisée. Le site public ne propose ni formulaire de contribution, ni téléversement, ni commentaire.
+
+## Comprendre le projet et suivre son évolution
+
+- [PRD](docs/PRD.md) : utilisateurs, parcours, périmètre et critères produit
+- [ARD](docs/ARD.md) : architecture, données, interfaces et exploitation
+- [Règles](docs/RULES.md) : évaluation, coûts, autorités et [versionnement](docs/RULES.md#14-versionnement-du-produit)
+- [Glossaire](CONTEXT.md) : vocabulaire partagé
+- [Instructions agents](AGENTS.md) : travail et validation dans le dépôt
+
+Les [Issues GitHub](https://github.com/ayoahha/benchmark-lab-x/issues) et le [Project](https://github.com/users/ayoahha/projects/5) portent le travail de livraison et son avancement.
