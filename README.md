@@ -6,20 +6,20 @@ style_gate: pass
 
 Benchmark Lab-X aide à choisir une configuration de modèle d’IA pour une tâche précise. Il rapproche le travail demandé, les résultats obtenus, leur évaluation et leur coût pour permettre une décision fondée sur des preuves consultables.
 
-La question est simple : **quelles configurations accomplissent ce travail, à quel coût et avec quelles limites ?** Une conclusion vaut pour la tâche et les conditions testées. Le projet ne cherche pas à désigner un meilleur modèle universel.
+Le cap de 0.1.0 est un parcours public : décrire un besoin, le préciser avec une assistance IA, examiner et modifier un dossier entièrement fictif, puis autoriser une comparaison. Les classements par critère et les filtres aideront l’utilisateur à choisir à partir des résultats, des erreurs et des coûts observés. Une conclusion vaut pour la tâche et les conditions testées, sans meilleur modèle universel. Le score pondéré personnalisé appartient à la vision ultérieure, hors 0.1.0.
 
 ## Découvrir les résultats
 
 [Ouvrir la comparaison publique](https://ayoahha.github.io/benchmark-lab-x/).
 
-Le site présente une restitution statique sur un scénario et trois configurations. Pour l’utiliser :
+Le site actuel présente une restitution statique sur un scénario et trois configurations, sous son contrat historique. Son parcours reste :
 
 1. Lisez le besoin, l’entrée et le résultat attendu pour vérifier que la tâche ressemble à votre usage.
 2. Examinez le verdict de chaque configuration et les constats qui le justifient.
 3. Comparez les coûts des configurations qui satisfont les critères, puis les bénéfices prévus d’une option plus chère.
 4. Consultez les sorties, incidents et limites avant de transposer la conclusion à votre situation.
 
-Un verdict indéterminé signifie que les preuves ne permettent pas de conclure. Un coût manquant limite la comparaison économique ; les dépenses des configurations non admissibles restent visibles. Les [règles de décision](docs/RULES.md#7-ordre-de-décision) expliquent ces distinctions.
+Un verdict indéterminé signifie que les preuves ne permettent pas de conclure. Un coût manquant limite la comparaison économique ; les dépenses des configurations non admissibles restent visibles. Cette présentation historique reste inchangée ; les [règles de décision courantes](docs/RULES.md#7-ordre-de-décision) définissent les futurs classements par critère sans requalifier ces résultats.
 
 ## Utiliser l’outil local
 
@@ -39,20 +39,22 @@ python3 -B -m benchmark_lab_x show --run-dir runs/ma-campagne
 
 Cette commande vérifie l’intégrité puis ouvre la page sur macOS. Le [guide local](benchmark_lab_x/README.md) détaille les étapes, les prérequis et les autorisations nécessaires. Les [tests hors ligne](benchmark_lab_x/verify.md) utilisent un faux Pi et n’appellent aucun modèle.
 
-L’outil actuel reste attaché à un scénario et à son panel figés. Il ne fournit pas encore le catalogue de tâches, la navigation entre plusieurs campagnes, le serveur Linux et la persistance décrits dans les spécifications. Le [périmètre produit](docs/PRD.md#5-périmètre-produit) définit ces capacités attendues.
+L’outil actuel reste attaché à un scénario et à son panel figés. Il ne fournit pas encore le parcours public de préparation assistée, les aperçus modifiables, les classements et filtres prévus, le catalogue de tâches, la navigation entre plusieurs campagnes, le serveur Linux et la persistance décrits dans les spécifications. Le [périmètre produit](docs/PRD.md#5-périmètre-produit) définit ces capacités attendues.
 
 ## Préparer une tâche de benchmark
 
-Une tâche part d’un travail concret : comparer des salles pour une association, transformer des notes de réunion en suivi ou rechercher une information dans un dossier professionnel. Le projet vise des métiers variés ; le catalogue prévu distingue le contexte métier du type de travail demandé. Le [gabarit de tâche](tasks/TEMPLATE.md) aide à décrire :
+Le parcours prévu part d’une description générale, sans donnée personnelle ni information confidentielle. L’assistance pose les questions utiles, construit les pièces fictives puis présente un exemple consultable et modifiable. Une demande non évaluable est expliquée et reformulée avec accord, ou arrêtée. Valider l’exemple ne lance aucune campagne et ne publie rien. Aucun dossier réel, accès à l’ordinateur ou action sur téléphone n’entre dans ce parcours 0.1.0.
+
+Comparer des salles, préparer le suivi d’une réunion et organiser les pièces de l’entreprise fictive Orme & Signal sont des exemples pédagogiques, sans corpus obligatoire ni preuve de couverture métier. Le [PRD](docs/PRD.md#10-restitution-publique) décrit le parcours et l’illustration ; ses fichiers ne sont pas construits par la seule spécification. Le [gabarit de tâche](tasks/TEMPLATE.md) aide à relier :
 
 - le besoin, le résultat utilisable, ce que l’utilisateur doit encore faire et la décision à éclairer ;
 - les cas d’essai, leurs données et les conditions communes ;
 - les obligations, les variations acceptables, les erreurs éliminatoires et la référence permettant de juger ;
 - le périmètre des coûts et les limites de la conclusion.
 
-La préparation vérifie aussi que la référence est étayée et que les contrôles acceptent une solution valable et repèrent les défauts visés. Des modèles peuvent aider à la relire ; leur accord ne suffit pas à établir sa justesse. Le responsable de campagne prépare et approuve ce contrat avant l’exécution, selon les [règles de qualification](docs/RULES.md#4-contrat-avant-exécution). Le choix des configurations et du budget nécessite ses propres décisions.
+La préparation vérifie aussi que la référence est étayée et que les contrôles acceptent une solution valable et repèrent les défauts visés. Des modèles peuvent aider à la relire ; leur accord ne suffit pas à établir sa justesse. Le responsable de campagne prépare et approuve ce contrat avant les appels candidats, selon les [règles de qualification](docs/RULES.md#4-contrat-avant-exécution). La préparation assistée, le choix des configurations, le budget et la publication nécessitent leurs propres autorités. Les résultats de benchmark doivent être réellement acquis ; une réponse simulée ne les remplace pas.
 
-Remplir cette carte ne l’enregistre pas automatiquement dans un catalogue et ne la rend pas exécutable par l’outillage actuel. L’intégration d’une nouvelle tâche doit relier la carte à ses données, à ses contrôles et à une campagne autorisée. Le site public ne propose ni formulaire de contribution, ni téléversement, ni commentaire.
+Remplir cette carte ne l’enregistre pas automatiquement dans un catalogue et ne la rend pas exécutable par l’outillage actuel. L’intégration d’une nouvelle tâche doit relier la carte à ses données, à ses contrôles et à une campagne autorisée. Le site actuel ne propose ni formulaire de contribution, ni téléversement, ni commentaire. Cette limite décrit l’outil disponible ; l’ouverture du parcours public relève du [périmètre 0.1.0](docs/PRD.md#51-périmètre-010), avec les décisions d’accès, de financement et de données encore à prendre.
 
 ## Comprendre le projet et suivre son évolution
 

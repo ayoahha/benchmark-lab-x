@@ -33,6 +33,12 @@ Description datée du paquet ou fork, de la version, des paquets ou extensions, 
 ### Tâche
 Travail précis que le benchmark cherche à faire accomplir, avec un résultat attendu et une décision à éclairer.
 
+### Demande et reformulation
+Expression initiale du besoin et précisions de l’utilisateur, puis description du travail comprise par l’assistance. La reformulation distingue besoins, hypothèses validées et paramètres fictifs ; elle ne réduit pas silencieusement le travail. Saisie et conservation suivent la politique approuvée.
+
+### Dossier fictif et aperçu
+Ensemble de pièces inventées pour un cas, avec consigne et livrables attendus. L’aperçu résume les informations utiles et ouvre les pièces réellement construites du paquet prévu pour les candidats ; il expose critères, incertitudes acceptables et limites. La référence réservée au jugement reste distincte, sauf exposition décidée et déclarée.
+
 ### Version de tâche
 Identité immuable reliant un contrat approuvé, ses cas, sa référence de jugement et sa méthode d’évaluation. Son évolution suit les [règles de gel](docs/RULES.md#4-contrat-avant-exécution).
 
@@ -45,11 +51,17 @@ Ensemble identifié de tâches, de cas ou de ressources, dont le périmètre est
 ### Cas d'essai
 Entrée identifiée utilisée pour éprouver une tâche, avec les preuves attendues. Un cas n'est pas toute la tâche ; les conclusions indiquent la couverture effectivement observée.
 
+### Variante et répétition
+Une variante change des caractéristiques définies d’un cas et en identifie les différences. Une répétition est une nouvelle tentative sur le même cas sous les conditions prévues ; elle ne crée pas une variante. Ni leur nombre ni une généralisation statistique ne sont déduits de leur présence.
+
+### Volume, difficulté et charge
+Le volume décrit la quantité d’information ; la difficulté, les contraintes de résolution ; la charge, une quantité de travail dans une unité déclarée. Ces dimensions ne sont pas interchangeables et n’imposent aucun nombre de niveaux.
+
 ### Catalogue
 Ensemble navigable des tâches, de leurs versions et des campagnes associées.
 
 ### Panel
-Le panel nominal est la sélection de modèles du [PRD](docs/PRD.md#51-périmètre-010). Le panel d’une campagne est la liste figée des configurations demandées, avec les révisions exigées. Le second exige des identités et conditions précises que le premier ne prouve pas.
+Le panel nominal est la sélection de modèles du [PRD](docs/PRD.md#51-périmètre-010). Le panel d’une campagne est la liste figée des configurations demandées, avec les révisions exigées. Le second exige des identités et conditions précises que le premier ne prouve pas. La liste de modèles à essayer pour l’accueil et la préparation est distincte de ces panels ; elle ne constitue ni un panel candidat de campagne ni une sélection d’assistants déjà qualifiés.
 
 ### Campagne
 Ensemble organisé sur une version de tâche, des cas, un panel, des conditions communes et des autorisations identifiés. Elle relie plusieurs opérations et leurs preuves. Son état reste distinct de celui d’une Issue, des verdicts et de sa publication.
@@ -57,18 +69,24 @@ Ensemble organisé sur une version de tâche, des cas, un panel, des conditions 
 ### Scénario de maquette
 Tâche choisie seulement pour rendre un mécanisme compréhensible dans une maquette réversible. Elle n'acquiert aucune autorité sur le benchmark futur.
 
+### Exemple pédagogique
+Illustration destinée à expliquer le parcours et les tâches possibles, éventuellement à partir de pièces fictives consultables. Elle n’est pas une preuve de couverture métier. Elle ne devient lançable qu’avec un dossier construit, une qualification, un contrat et les autorisations nécessaires. Ses éventuels résultats simulés ne sont pas des résultats de benchmark et son exposition publique n’est pas réputée inédite.
+
 ## Rôles
 
 ### Demandeur-lecteur
-Personne qui exprime le besoin d'une tâche et lit la restitution pour décider. Elle n'invente ni seuil, ni métrique, ni méthode de jugement.
+Personne qui exprime le besoin, valide l’exemple qui le représente et lit la restitution pour décider. Elle n’invente ni seuil, ni métrique, ni méthode de jugement.
 
 ### Responsable de campagne
-Rôle qui prépare et approuve le contrat de réussite avant exécution, déclare les conditions de test communes, répond de chaque verdict et de la restitution. Les deux rôles peuvent être tenus par la même personne si le besoin le permet. Aucun rôle n'est lié à une personne, un compte, une organisation ou un pseudonyme.
+Rôle qui prépare et approuve le contrat de réussite avant les appels candidats, déclare les conditions de test communes, répond de chaque verdict et de la restitution. Les deux rôles peuvent être tenus par la même personne si le besoin le permet. Aucun rôle n’est lié à une personne, un compte, une organisation ou un pseudonyme ; l’affectation publique reste à décider. L’assistance peut aider ce rôle sans s’attribuer son autorité.
 
 ## Contrat et verdict
 
+### Validation du besoin, qualification et approbation
+La validation confirme que le dossier présenté représente le besoin de l’utilisateur. La qualification vérifie la consigne, les cas, la référence et les contrôles. L’approbation du responsable lie le contrat exact aux preuves de qualification. Ces actes ne se remplacent pas et n’accordent ni autorisation d’appel ou de dépense ni publication.
+
 ### Contrat de réussite
-Contrat préparé et approuvé avant l’exécution, reliant le besoin aux critères vérifiables, aux cas, à l’évaluation et à la base de coût. Son contenu normatif est défini dans les [règles](docs/RULES.md#4-contrat-avant-exécution) et renseigné dans le [gabarit](tasks/TEMPLATE.md).
+Contrat préparé et approuvé avant les appels candidats, reliant le besoin aux critères vérifiables, aux cas, à l’évaluation et à la base de coût. Son contenu normatif est défini dans les [règles](docs/RULES.md#4-contrat-avant-exécution) et renseigné dans le [gabarit](tasks/TEMPLATE.md). La préparation assistée préalable exige son autorité et son budget propres.
 
 ### Résultat attendu
 Artefact ou état précis que la tâche doit produire pour servir le besoin déclaré.
@@ -83,7 +101,7 @@ Condition que la sortie doit respecter et dont la preuve est prévue avant l'ex�
 Défaut défini avant l'exécution qui interdit le verdict `SATISFAIT`, indépendamment du coût ou d'un autre bénéfice.
 
 ### Critère secondaire
-Propriété prévue au contrat qui explique l’intérêt d’une configuration admissible. Ses conditions d’usage sont définies par les [règles de coût et bénéfices](docs/RULES.md#8-coût-et-bénéfices).
+Propriété complémentaire aux obligations et au coût, prévue au contrat pour comparer les résultats. Une mesure valide peut porter sur une sortie non admissible sans modifier son verdict. Les conditions de mesure, de classement et le plafond de 0.1.0 appartiennent aux [règles](docs/RULES.md#4-contrat-avant-exécution).
 
 ### Verdict d'admissibilité
 Conclusion d'une configuration selon le contrat de réussite : `SATISFAIT`, `NE SATISFAIT PAS` ou `INDETERMINE`. Un verdict publiable porte sa valeur, un motif court intelligible, les critères ou constats concernés, les références de preuve et son responsable.
@@ -100,7 +118,7 @@ Verdict indiquant que la preuve disponible ne permet pas de conclure `SATISFAIT`
 ## Preuve et décision
 
 ### Exécution du produit
-Déroulement identifié d’une opération sur une campagne, avec version du moteur, entrées, autorité et reçu. Préparer, acquérir, évaluer et construire une restitution sont des opérations différentes ; toutes ne contiennent pas un appel candidat.
+Déroulement identifié d’une opération du produit, avec version du moteur, entrées, autorité et reçu. La préparation peut référencer un brouillon avant qu’une campagne existe ; acquisition, évaluation et restitution référencent leur campagne. Préparer, acquérir, évaluer et restituer sont distincts ; les appels assistés ne deviennent pas des tentatives candidates ni des résultats de benchmark.
 
 ### Tentative
 Intention d’appel identifiée pour un cas et une configuration demandée. Elle peut aboutir à une sortie, un incident ou des effets inconnus. Une tentative locale ne prouve pas un appel reçu par le fournisseur ; une cellule jamais lancée n’est pas une tentative.
@@ -127,7 +145,16 @@ Incident du dispositif de benchmark qui empêche une observation attribuable. Un
 Dépense établie par une source pour les tentatives imputables selon la base de coût du contrat. Elle est distincte du prix affiché, de la prévision, de la réservation et du plafond. Les [règles économiques](docs/RULES.md#8-coût-et-bénéfices) gouvernent les inconnues et la comparaison.
 
 ### Bénéfice prévu
-Avantage d'une configuration `SATISFAIT` plus chère sur un critère secondaire défini avant l'exécution. Il n'est jamais fusionné avec le coût.
+Avantage observé sur un critère secondaire défini avant exécution, lorsque les mesures sont comparables. Il ne compense pas une obligation non satisfaite. En 0.1.0, il n’est pas fusionné avec le coût en note unique ; la vision du score personnalisé reste différée.
+
+### Classement par critère et filtre
+Un classement ordonne les valeurs connues et comparables d’un critère prévu, sans rang pour les inconnues ou incompatibilités. Un filtre restreint la vue sans modifier le contrat, les verdicts ni la population des statistiques déjà calculées. Aucun de ces outils ne désigne automatiquement une option utilisable.
+
+### Conclusion économique et INCOMPLETE
+État de complétude de la comparaison des coûts sur un périmètre identifié : valeurs connues, inconnues et incompatibilités. `INCOMPLETE` indique que cette comparaison est incomplète, sans constituer un quatrième verdict ni désigner un gagnant.
+
+### Score pondéré personnalisé
+Capacité future de combinaison de critères selon des poids explicites, hors 0.1.0. Sa méthode reste à décider selon le [PRD](docs/PRD.md#52-extensions) ; elle conserve mesures, verdicts et erreurs et ne rend pas une sortie non admissible acceptable grâce au coût. Elle n’établit aucun classement universel.
 
 ### Restitution
 Présentation reliant tâche et campagne à la conclusion, à la comparaison et aux preuves. Elle peut être locale et privée ; son exposition publique passe par une publication approuvée.
@@ -145,7 +172,7 @@ Conclusion bornée à la version de tâche, aux cas et tentatives couverts, à l
 Campagne conservée sous son identité et son contrat d'origine, sans requalification par les règles actuelles.
 
 ### Élément différé
-Sujet hors du périmètre décidé, réexaminable sur preuve de besoin et décision explicite.
+Capacité hors du périmètre de réalisation courant. Elle peut appartenir à la vision durable décidée, comme le score pondéré personnalisé, sans autoriser son implémentation ; son entrée dans une version exige sa méthode, son périmètre et une décision explicites.
 
 ## Livraison et exécution agentique
 
