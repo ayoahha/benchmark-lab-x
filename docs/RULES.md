@@ -28,7 +28,7 @@ Ces règles préservent les contrats historiques et n'autorisent aucune exécuti
 
 **Accès direct ou API.** Le produit compare des modèles accessibles directement ou par API.
 
-**Pi obligatoire.** Pi est le harnais commun de chaque comparaison. Son choix n'est pas rouvert par une revue de configuration.
+**Pi obligatoire.** Pi est le harnais commun de chaque comparaison candidate. Son choix n'est pas rouvert par une revue de configuration. Cette contrainte ne choisit pas le transport de l’assistance de préparation ou de jugement.
 
 **Conditions de test communes.** L’objet défini par l’[ARD](ARD.md#42-conditions-de-test-communes) est gelé avant le premier candidat et référencé par toutes les configurations comparées. Une condition commune modifiée ouvre une nouvelle comparaison. Un paramètre propre au candidat ne doit pas être présenté comme une condition partagée.
 
@@ -36,11 +36,15 @@ Ces règles préservent les contrats historiques et n'autorisent aucune exécuti
 
 ## 4. Contrat avant exécution
 
-**Rôles génériques.** Le produit connaît deux rôles : le demandeur-lecteur, qui exprime son besoin et lit la restitution, et le responsable de campagne, qui prépare et approuve le contrat de réussite avant toute exécution, déclare les conditions communes et répond des verdicts. Les deux rôles peuvent être tenus par la même personne si le besoin le permet. Aucun rôle produit n'est lié à une personne ou à un compte nommé. Les décisions du propriétaire restent distinctes des rôles du produit.
+**Rôles génériques.** Le produit connaît deux rôles : le demandeur-lecteur, qui exprime son besoin, valide l’exemple qui le représente et lit la restitution, et le responsable de campagne, qui prépare et approuve le contrat avant les appels candidats, déclare les conditions communes et répond des verdicts. Les deux rôles peuvent être tenus par la même personne si le besoin le permet. Aucun rôle produit n'est lié à une personne ou à un compte nommé. Les décisions du propriétaire restent distinctes des rôles du produit.
 
-**Préparation et approbation.** Le demandeur-lecteur n'invente ni seuil ni méthode de jugement ; le responsable de campagne fixe le contrat avant toute exécution.
+**Préparation et approbation.** Le demandeur-lecteur n’invente ni seuil ni méthode de jugement. Sa validation du besoin reste distincte de la qualification de la référence, de l’approbation du contrat par le responsable, des autorisations d’appel et de dépense et de la publication. L’assistant ne s’attribue aucune de ces autorités. L’approbation de la tâche et celle du manifeste de campagne restent distinctes ; critères, panel et conditions effectivement exécutés doivent avoir été approuvés avant admission. La préparation assistée peut précéder cette approbation, sous ses propres autorités et budget. L’affectation de l’approbateur public reste à décider dans le PRD.
 
-**Contenu minimal.** Le contrat contient un résultat attendu, des obligations, des erreurs éliminatoires, une référence de jugement, une méthode d’évaluation, les trois verdicts permis et au maximum deux critères secondaires, chacun avec unité et sens favorable s'il doit départager. Il fixe aussi le périmètre d'attribution du coût, les tentatives comptées, l'unité commune et, si nécessaire, la règle de conversion.
+**Fidélité de la préparation.** Conserver la demande et ses précisions, la reformulation, les hypothèses validées et les paramètres fictifs inventés, dans le respect de la politique de saisie et de conservation approuvée. Les pièces du parcours 0.1.0 sont entièrement inventées. Comprendre la tâche permet de construire son protocole ; l’assistant ne réduit pas silencieusement le besoin pour faciliter le jugement. La même consigne et les mêmes ressources sont prévues pour les configurations comparées, sans solution intégrée au prompt candidat ni adaptation pour favoriser un modèle. Une limite d’outil ou de référence conduit à proposer un périmètre évaluable soumis à accord, ou à arrêter la préparation.
+
+**Aperçu et modification.** Le résumé validé référence la consigne, les livrables et les pièces effectivement construites du paquet prévu pour les candidats. Il expose critères, incertitudes acceptables, exclusions et intervention humaine restante. Les éléments réservés au jugement restent séparés. Une modification claire est appliquée sans questionnaire systématique ; une ambiguïté appelle une question ciblée. Préserver les accords non touchés, résumer les changements et revérifier les pièces, la référence et les contrôles affectés. Toute modification du paquet présenté exige une nouvelle validation. Un changement de critère après présentation des conditions de campagne entraîne les mêmes vérifications avant approbation ; après gel, les règles de versionnement s’appliquent.
+
+**Contenu minimal.** Le contrat contient un résultat attendu, des obligations, des erreurs éliminatoires, une référence de jugement, une méthode d’évaluation et les trois verdicts permis. En 0.1.0, il contient au maximum deux critères secondaires complémentaires aux obligations et au coût. Chaque colonne ordonnable possède une mesure, une preuve, une unité ou échelle justifiée, un sens favorable et, si nécessaire, une règle d’agrégation préalable ; sinon elle reste descriptive. Les constats par obligation sont consultables et filtrables ; créer une note ou un décompte pour les classer constitue un critère supplémentaire, sans contourner ce plafond. Le contrat fixe aussi le périmètre d’attribution du coût, les tentatives comptées, l’unité commune et la conversion éventuelle.
 
 **Usage et tolérances.** Chaque obligation justifie son utilité pour le résultat demandé. Le contrat décrit l’intervention humaine qui reste nécessaire et les variations recevables de forme, de contenu ou de méthode de calcul pour chaque critère concerné, dans le respect des exigences de la tâche. Une reformulation correcte ne devient pas une erreur parce qu’elle diffère d’un exemple ; une correction de fond ne devient pas une simple relecture. Aucun seuil de similarité ni tolérance numérique universelle n’est déduit de ces principes.
 
@@ -64,6 +68,8 @@ Ces règles préservent les contrats historiques et n'autorisent aucune exécuti
 
 ## 5. Sortie et provenance
 
+**Exposition et portée du fictif.** Préparateur, juge et candidats ont des contextes et ressources distincts ; les liens de modèle ou de fournisseur et les expositions connues restent déclarés. Un exemple pédagogique public n’est pas réputé inédit. La validation d’un cas fictif ne prouve ni sa représentativité ni la réussite sur les dossiers réels de l’utilisateur.
+
 **Sortie brute.** La sortie candidate obtenue est conservée telle quelle, avant correction, transformation ou jugement.
 
 **Demande et observation séparées.** L'identité demandée et l'identité observée restent distinctes. Une observation absente vaut `INCONNU`.
@@ -86,6 +92,8 @@ Ces règles préservent les contrats historiques et n'autorisent aucune exécuti
 
 **Erreur du harnais séparée.** `HARNESS_ERROR` empêche l'attribution et réduit la couverture. Il ne devient pas automatiquement `NE SATISFAIT PAS`.
 
+**Défaut correctement attribué.** Distinguer erreur candidate et problème de consigne, données, référence, évaluation ou exécution. Une ambiguïté de l’épreuve ne devient pas un échec du modèle ; sa réputation ne justifie pas non plus d’écarter une erreur démontrée. La qualification vérifie les passages, calculs et contrôles avec des preuves adaptées ; un même raisonnement généré ou un consensus IA ne constitue pas la preuve unique de la référence.
+
 **Verdict explicable.** Tout verdict publiable porte sa valeur, un motif court intelligible, les critères ou constats concernés, les références de preuve et son responsable. Les obligations prouvées expliquent `SATISFAIT` ; une erreur éliminatoire ou une obligation non remplie explique `NE SATISFAIT PAS` ; une preuve insuffisante explique `INDETERMINE`. Aucune taxonomie exhaustive de motifs ni entrepôt de preuves n'est requis.
 
 ## 7. Ordre de décision
@@ -95,33 +103,35 @@ L'ordre est obligatoire :
 1. erreurs éliminatoires ;
 2. obligations et preuve ;
 3. verdict d'admissibilité ;
-4. exclusion de `NE SATISFAIT PAS` et `INDETERMINE` de la recommandation économique ;
-5. coût connu et comparable entre les seuls `SATISFAIT` ;
-6. bénéfices prévus des options `SATISFAIT` plus chères.
+4. aucune configuration `NE SATISFAIT PAS` ou `INDETERMINE` désignée comme utilisable ;
+5. mesures et coûts observés, avec leurs limites de comparabilité ;
+6. classements par critère et filtres de consultation, sans désignation automatique d’une option.
 
-Le coût ne compense jamais une non-admissibilité. Cet ordre de décision n'impose pas une succession de deux sections à l'écran.
+Le coût ne compense jamais une non-admissibilité. Une mesure valide d’une sortie non admissible peut être consultée et classée sur son critère sans changer son verdict. Cet ordre logique n’impose pas la disposition des écrans ni un classement initial préféré par le produit.
+
+**Tris et filtres.** Un tri ordonne seulement les valeurs connues et comparables, selon le critère préalablement défini. Les autres restent dans un groupe non classable, avec motif et sans rang défavorable. Le périmètre filtré est visible ; les filtres ne modifient ni contrat, ni verdicts, ni population d’une statistique déjà calculée. Une nouvelle agrégation exige sa règle propre préalable. Sans cette règle, rester au cas et à la tentative. Aucune comparaison n’est déduite de couvertures ou conditions incompatibles.
 
 ## 8. Coût et bénéfices
 
 **Base de coût gelée.** Avant l’exécution, le contrat fixe le périmètre d’attribution, les tentatives comptées, l’unité commune et la conversion éventuelle. Les quantités de travail, cas et règles d’agrégation doivent être comparables : le total d’une couverture réduite ne démontre pas qu’une configuration est moins chère sur le travail complet.
 
-**Coût observable.** Le coût comprend les tentatives imputables selon cette base. Une valeur absente reste `INCONNU` : ni zéro, ni estimation, ni maximum. Seuls les coûts connus et comparables peuvent ordonner les configurations `SATISFAIT`.
+**Coût observable.** Le coût comprend les tentatives imputables selon cette base. Une valeur absente reste `INCONNU` : ni zéro, ni estimation, ni maximum. Seuls les coûts connus et comparables peuvent être ordonnés. Le tri s’annonce comme coût observé, jamais comme meilleur modèle ou meilleur rapport qualité-prix ; les erreurs et verdicts restent visibles.
 
-**Conclusion économique incomplète.** Si le coût d'au moins une configuration `SATISFAIT` est `INCONNU` ou non comparable, elle reste admissible sur les critères non économiques et les coûts connus restent visibles, mais aucune option n'est déclarée globalement moins chère. La conclusion économique porte la mention `INCOMPLETE`, qui n'est pas un quatrième verdict. Si le coût est une obligation figée avant exécution, un coût `INCONNU` interdit de la déclarer satisfaite.
+**Complétude économique.** La conclusion économique décrit le périmètre de comparaison des coûts, les valeurs connues, les inconnues et les incompatibilités, sans désigner d’option. Elle porte `INCOMPLETE` lorsque les données de ce périmètre ne permettent pas une comparaison complète. Les coûts connus restent visibles et un coût inconnu ne retire pas l’admissibilité sur les critères non économiques. `INCOMPLETE` n’est pas un quatrième verdict. Si le coût est une obligation figée avant exécution, un coût `INCONNU` interdit de la déclarer satisfaite.
 
-**Préparation et jugement.** Les dépenses observées de création du corpus et d’évaluation sont identifiées séparément des appels candidats, avec le périmètre du relevé. Le temps humain n’est pas monétisé sans méthode décidée et mesure correspondante. Leur inclusion éventuelle dans une base de coût est déclarée avant comparaison, avec une imputation commune ; elles ne sont ni dissimulées dans le coût du modèle ni réputées nulles. Une revue assistée exige sa propre autorité d’appel et de dépense.
+**Préparation et jugement.** Interview, génération du dossier, correction et jugement assisté exigent une autorité d’appel et une enveloppe identifiées avant consommation, éventuellement accordées par l’opérateur autorisé dans son périmètre. Leurs dépenses sont relevées séparément des appels candidats. Le temps humain n’est pas monétisé sans méthode décidée et mesure correspondante. Leur inclusion éventuelle dans une base de coût est déclarée avant comparaison, avec une imputation commune ; elles ne sont ni dissimulées dans le coût candidat ni réputées nulles. L’écran de lancement d’une campagne n’autorise pas rétroactivement les dépenses de préparation.
 
 **Contrôle de dépense.** L’autorisation nomme les tentatives et l’enveloppe. Prévision, réservation avant appel, coût observé et limite du fournisseur restent distincts. Les réservations et dépenses actives sont prises en compte ensemble ; aucune même enveloppe ne peut être allouée deux fois. Un coût manquant ne libère pas une réservation et ne reconstitue pas un solde connu. Un contrôle d’admission ne prouve pas un plafond absolu de facturation. Un coût local n’est pas nul par défaut.
 
-**Ensemble admissible.** Sans configuration `SATISFAIT`, la comparaison économique est sans objet et la restitution le dit explicitement. Avec une seule configuration admissible et un coût complet, elle peut être décrite comme seule admissible du périmètre, sans gain comparatif inventé.
+**Ensemble admissible.** Sans configuration `SATISFAIT`, aucune option n’est désignée comme utilisable ; dépenses et mesures valides restent consultables et triables sur une base comparable. Une seule configuration admissible peut être décrite comme telle dans le périmètre observé, sans gain comparatif inventé.
 
-**Co-moins-chères.** Des coûts observés égaux restent une égalité et donnent plusieurs options co-moins-chères ; aucune heuristique ne les départage. Un arrondi d’affichage ne crée pas une égalité de calcul.
+**Égalités.** Des valeurs observées égales sur un critère restent une égalité ; aucune heuristique ne les départage. Un arrondi d’affichage ne crée pas une égalité de calcul. Le tri des coûts ne crée pas un objet de recommandation « co-moins-chères ».
 
-**Bénéfice prévu.** L'intérêt d'une configuration `SATISFAIT` plus chère se limite aux critères secondaires déclarés avant l'exécution. Un critère ne départage que s'il est comparable, avec une unité et un sens favorable fixés avant l'exécution ; sinon il reste descriptif.
+**Bénéfice prévu.** Un avantage sur un critère secondaire n’est établi que par une mesure comparable prévue au contrat, avec unité ou échelle justifiée et sens favorable. Sinon l’observation reste descriptive. Une mesure peut porter sur une sortie non admissible ; elle ne compense aucune obligation non satisfaite.
 
-**Dépense visible.** Le coût consommé par une configuration non admissible reste visible comme dépense ; il est exclu de la recommandation économique. Un total auquel manque une dépense nécessaire reste inconnu ; la somme des montants connus est identifiée comme sous-total. Un coût manquant hors de l’ensemble admissible ne devient pas un critère de classement, mais peut bloquer l’admission du prochain appel si le budget restant n’est plus établi.
+**Dépense visible.** Le coût consommé par une configuration non admissible reste visible comme dépense, sans rendre cette configuration utilisable. Un total auquel manque une dépense nécessaire reste inconnu ; la somme des montants connus est identifiée comme sous-total. Toute dépense manquante peut bloquer l’admission du prochain appel si le budget restant n’est plus établi, y compris pendant la préparation ou le jugement.
 
-**Aucun score global.** Admissibilité, coût et bénéfices ne sont ni moyennés, ni pondérés, ni fusionnés, ni réduits en note unique. Aucun meilleur modèle absolu, podium général ou classement universel n'est produit.
+**Score différé.** En 0.1.0, admissibilité, coût et critères secondaires ne sont ni moyennés, ni pondérés, ni fusionnés en note unique. Le score pondéré personnalisé appartient à la vision du [PRD](PRD.md#52-extensions) ; sa méthode exige une décision avant réalisation. Il conserve les mesures d’origine, verdicts et erreurs et ne permet pas au coût de rendre acceptable une sortie non admissible. Aucun meilleur modèle absolu, podium général ou classement universel n’est produit, y compris à terme.
 
 ## 9. Incidents et inconnues
 
@@ -135,13 +145,15 @@ Le coût ne compense jamais une non-admissibilité. Cet ordre de décision n'imp
 
 **Reprise sans replay implicite.** Une intention d’appel doit être enregistrée avant émission. Après interruption, l’exécuteur rapproche intentions, reçus et dépenses avant d’admettre une cellule encore autorisée. Une tentative partie aux effets inconnus reste ambiguë ; ni redémarrage, restauration ni déploiement n’autorise son rejeu. Une nouvelle tentative exige une identité propre et l’autorité correspondante, sans effacer la précédente. Le détail de la procédure de reprise est à décider dans le contrat d’exploitation.
 
+**Appels assistés.** Les règles d’admission, de réservation, d’interruption et de reprise s’appliquent aussi aux appels de préparation et de jugement. Une enveloppe épuisée ou un effet d’appel ambigu bloque les nouveaux appels dépendants ; l’état et les coûts connus sont conservés. Ni une nouvelle question ni une correction de dossier ne créent une autorité de dépense.
+
 ## 10. Restitution
 
 **Lecture publique.** Le parcours et ses critères d’accessibilité sont définis par le [PRD](PRD.md#10-restitution-publique). L’ordre de calcul reste celui de la section 7, quel que soit l’agencement des écrans.
 
-**Minimum accessible.** La restitution contient la tâche, le contrat, les configurations, les conditions de test communes, les verdicts et leurs motifs, les coûts observés de toutes les configurations avec leur statut économique, les bénéfices prévus, les incidents, les inconnues, les limites et les preuves nécessaires. Contenu présent ne signifie pas contenu affiché d'emblée.
+**Minimum accessible.** La restitution contient la tâche, le contrat, les configurations, les conditions de test communes, les verdicts et leurs motifs, les mesures prévues, les coûts observés et la complétude de leur comparaison, les incidents, les inconnues, les limites et les preuves nécessaires. Contenu présent ne signifie pas contenu affiché d'emblée.
 
-**Aucun visuel trompeur.** Aucun podium général, score global ou graphique n'implique un classement, une échelle ou une précision absents du contrat.
+**Aucun visuel trompeur.** Aucun graphique ou classement n’implique une échelle ou une précision absentes du contrat. Aucun score combiné n’est produit en 0.1.0. L’interdiction de podium général ou de classement universel reste durable.
 
 **Preuves accessibles.** Une pièce publiée relie l’entrée, la sortie et les passages justifiant le verdict. La sortie exacte reste privée tant que sa publication n’est pas autorisée ; un extrait, masquage ou résumé publié est identifié comme dérivé, avec son lien à la source. Une empreinte ne remplace pas une pièce accessible. La restriction et son effet sur la vérification publique sont signalés. Un scénario de maquette ne devient pas implicitement une tâche du catalogue.
 
@@ -153,7 +165,7 @@ Le coût ne compense jamais une non-admissibilité. Cet ordre de décision n'imp
 
 **Résultat suffisant.** Livrer les capacités nécessaires au catalogue et aux campagnes décidés. Une démonstration du moteur ne remplace pas les résultats réels attendus.
 
-**Pas d'anticipation.** Réutiliser les primitives retenues dans l'ARD. Aucun microservice, Kubernetes, bus de messages, système de plugins, moteur multicritère ou abstraction spéculative n'est ajouté sans besoin démontré. Les contributions publiques et leur gestion de comptes ne sont pas construites par anticipation.
+**Pas d'anticipation.** Réutiliser les primitives retenues dans l’ARD. Aucun microservice, Kubernetes, bus de messages, système de plugins, moteur de score pondéré ou abstraction spéculative n’est ajouté sans besoin démontré. Le parcours public et les tris et filtres de 0.1.0 sont décidés ; ils n’autorisent pas une gestion de comptes, une politique de publication ou une formule de score encore non choisies.
 
 **Évolution traçable.** Lorsqu'un besoin est observé, l'itération suivante nomme la preuve, la complexité ajoutée et la condition de retrait ou de révision.
 

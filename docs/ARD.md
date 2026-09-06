@@ -20,6 +20,8 @@ L’architecture relie des contrats figés, des observations attribuables et des
 
 Pi est le harnais commun des comparaisons. Sa constance réduit une source de variation entre configurations ; elle ne prouve pas que Pi est neutre ou que le modèle seul cause le résultat. Pi, ses paquets et l'environnement sont présentés une fois comme conditions de test communes, jamais comme propriétés répétées de chaque modèle.
 
+Cette frontière concerne les comparaisons candidates. Elle ne choisit ni le modèle ni le transport de l’assistance de préparation ou de jugement.
+
 ### 3.1 Identité de l'environnement d'exécution
 
 Chaque campagne doit figer le paquet ou fork Pi, sa version exécutée, les empreintes nécessaires, les paquets, outils, skills, contexte, réglages, environnement et date de gel. Les paramètres demandés et observés restent distincts.
@@ -33,6 +35,10 @@ La campagne doit conserver son environnement identifié indépendamment des mise
 ### 4.1 Tâche, version et cas d'essai
 
 Responsabilité : relier le besoin au contrat de réussite et à sa base de coût, définis par les [règles du contrat](RULES.md#4-contrat-avant-exécution).
+
+Avant approbation, le brouillon conserve la demande et ses précisions, la reformulation, les hypothèses validées et les paramètres fictifs du dossier, sous la politique de données approuvée. Il réutilise l’état `EN_ATTENTE` du gabarit. L’aperçu lie sa présentation à la consigne, aux livrables et aux pièces réellement construites du paquet candidat. La validation du besoin référence ce paquet ; elle n’approuve ni le contrat ni une dépense. Les preuves de validation et d’approbation restent hors de l’empreinte qu’elles référencent.
+
+Les modifications conservent les accords non touchés et entraînent les vérifications concernées puis une nouvelle validation du paquet présenté. Qualification et approbation portent sur les octets finalement retenus. Si la référence ou les outils ne permettent pas de juger le travail, la préparation explique la limite et propose un périmètre soumis à accord ou s’arrête.
 
 La tâche possède un identifiant stable ; chaque version relie un contrat approuvé aux cas d'essai et à leurs entrées identifiées. Le contrat approuvé est immuable ; une modification crée une nouvelle version, sans remplacer les références des campagnes existantes. Le catalogue référence ces tâches sans confondre leurs versions. Le métier ou domaine et la famille de tâche sont des repères descriptifs du contexte ; ils ne constituent ni des clés de comparabilité ni des intégrations techniques par profession.
 
@@ -67,7 +73,9 @@ Pour une configuration locale, l'identité inclut les poids, leur révision, la 
 
 ### 4.4 Acquisition, tentative et exécution
 
-Une exécution identifie une opération du produit sur une campagne : préparation, acquisition, évaluation ou construction de restitution. Elle référence la version du moteur, ses entrées, son autorité, sa chronologie et sa terminaison. Une campagne peut avoir plusieurs exécutions ; une exécution d’acquisition peut contenir plusieurs tentatives.
+Une exécution identifie une opération du produit : préparation, acquisition, évaluation ou construction de restitution. Elle référence la version du moteur, ses entrées, son autorité, sa chronologie et sa terminaison. Une préparation référence le brouillon avant qu’une campagne existe ; les exécutions suivantes référencent leur campagne. Une campagne peut avoir plusieurs exécutions ; une exécution d’acquisition peut contenir plusieurs tentatives.
+
+Les appels assistés de préparation, correction et jugement conservent leur intention avant émission, la configuration demandée et observée, les ressources vues, le reçu, les coûts et les effets inconnus. Ils sont attribués à leur opération, séparément des tentatives candidates, sans créer de résultat de benchmark. Leur budget et leur autorité précèdent leur consommation ; arrêt et reprise suivent les mêmes règles d’absence de rejeu implicite.
 
 La tentative est l’unité d’intention d’appel pour un cas et une configuration demandée. Son identifiant précède l’émission ; le reçu distingue intention enregistrée, émission établie ou inconnue et résultat reçu. Une tentative locale n’atteste pas que le fournisseur a reçu la requête. Une cellule prévue mais jamais lancée n’est pas une tentative.
 
@@ -92,11 +100,11 @@ Responsabilité : appliquer les erreurs éliminatoires et obligations du contrat
 - `NE SATISFAIT PAS`
 - `INDETERMINE`
 
-L'évaluation s'applique à un cas et une tentative identifiés. Le verdict porte les éléments exigés par la règle « Verdict explicable » des [règles](RULES.md#6-erreurs-et-verdict) : valeur, motif court, critères ou constats concernés, références de preuve et responsable. L’évaluation référence la version de la méthode et de la référence de jugement ainsi que les preuves de leur qualification. Lorsqu’elle est assistée par un modèle, elle conserve sa configuration demandée et observée, les consignes, les pièces vues et l’arbitrage humain ; ces éléments se distinguent de la configuration candidate et suivent les [règles de provenance](RULES.md#5-sortie-et-provenance). L’éventuelle revue professionnelle est une preuve attribuée à son auteur et à son périmètre, sans nouveau rôle produit obligatoire. Les critères secondaires décrivent uniquement les résultats déjà `SATISFAIT`. Ils ne compensent jamais une erreur éliminatoire.
+L'évaluation s'applique à un cas et une tentative identifiés. Le verdict porte les éléments exigés par la règle « Verdict explicable » des [règles](RULES.md#6-erreurs-et-verdict) : valeur, motif court, critères ou constats concernés, références de preuve et responsable. L’évaluation référence la version de la méthode et de la référence de jugement ainsi que les preuves de leur qualification. Lorsqu’elle est assistée par un modèle, elle conserve sa configuration demandée et observée, les consignes, les pièces vues et l’arbitrage humain ; ces éléments se distinguent de la configuration candidate et suivent les [règles de provenance](RULES.md#5-sortie-et-provenance). L’éventuelle revue professionnelle est une preuve attribuée à son auteur et à son périmètre, sans nouveau rôle produit obligatoire. Une mesure valide d’un critère secondaire peut décrire une sortie non admissible ; elle ne change pas le verdict ni ne compense une erreur éliminatoire. Un défaut de consigne, de données, de référence, de contrôle ou d’exécution ne devient pas artificiellement une erreur candidate.
 
 ### 4.6 Vue de décision
 
-Responsabilité : dériver une conclusion depuis des évaluations compatibles et la base de coût du contrat, selon les [règles de coût et bénéfices](RULES.md#8-coût-et-bénéfices). La vue conserve la couverture, les coûts exclus et les inconnues, sans modifier les sorties, reçus ou verdicts sources.
+Responsabilité : présenter les évaluations, les classements par critère, les filtres et la complétude de la comparaison des coûts, selon les [règles](RULES.md#7-ordre-de-décision). Chaque colonne ordonnable référence sa définition contractuelle et ses preuves ; les valeurs inconnues ou incompatibles sont sans rang, les égalités conservées. La vue expose le périmètre filtré sans modifier les sorties, reçus, verdicts ou populations des statistiques déjà calculées. Elle ne fusionne pas des couvertures incompatibles et ne désigne aucune option automatiquement. Le score pondéré personnalisé reste différé selon le PRD ; aucun moteur ni formule n’est ajouté à 0.1.0.
 
 ### 4.7 Restitution
 
@@ -107,21 +115,21 @@ La projection référence les versions de schéma, de présentation, de conclusi
 ## 5. Flux minimal
 
 ```text
-Besoin précis du demandeur-lecteur
-  -> Version de tâche, cas, référence et méthode qualifiés, contrat approuvé
-     -> Campagne, panel, conditions communes et autorisations figés
-        -> Configurations modèle + accès direct/API sous ces conditions
-           -> Acquisition autorisée
-              -> Sortie brute ou incident
-                 -> Erreurs éliminatoires et obligations
-                    -> SATISFAIT / NE SATISFAIT PAS / INDETERMINE, avec motif et preuves
-                       -> Coût observé de toutes les configurations
-                          -> Recommandation parmi les seuls SATISFAIT
-                             -> Bénéfices prévus des SATISFAIT plus chers
-                                -> Publication approuvée : conclusion, comparaison et preuves
+Demande, éventuellement vague
+  -> Clarification et reformulation, assistance sous autorité et budget propres
+  -> Dossier fictif construit, consigne, référence et contrôles
+  -> Aperçu consultable, modifications et validation du besoin
+  -> Qualification de la référence et de l’épreuve
+  -> Présentation des critères, du panel, des conditions et des coûts de campagne
+  -> Contrat de tâche qualifié et approuvé ; manifeste et autorités approuvés
+  -> Admission et acquisition candidate sous Pi constant
+  -> Sortie brute ou incident, conservé avec sa provenance
+  -> Évaluation : SATISFAIT / NE SATISFAIT PAS / INDETERMINE et preuves
+  -> Mesures et coûts observés, classements par critère et filtres
+  -> Choix de l’utilisateur ; publication uniquement sous autorité distincte
 ```
 
-Cette représentation décrit les dépendances métier ; les composants doivent respecter les frontières de la section 12.
+Cette représentation décrit les dépendances métier ; les composants doivent respecter les frontières de la section 12. Le contrat de tâche et le manifeste de campagne restent distincts. Modifier un critère à l’examen des conditions fait revenir à la qualification et aux validations affectées. Une limite de référence, d’outil, d’autorité ou de budget peut arrêter la préparation. Les résultats restent privés avant publication.
 
 ## 6. Identités, jointures et immutabilité
 
@@ -144,12 +152,14 @@ La conclusion refuse de combiner comme comparables les éléments suivants ; les
 - conditions de test communes différentes entre candidats présentés comme comparables
 - identité incomplète au regard du contrat
 - sortie modifiée après acquisition
-- bénéfice absent des critères prévus
-- recommandation économique fondée sur une configuration non `SATISFAIT` ou sur un coût `INCONNU`
+- mesure de classement absente des critères prévus
+- coût `INCONNU`, base de coût incompatible ou couverture insuffisante pour le classement proposé
+
+Une mesure valide d’une configuration non admissible peut être classée sur son critère ; elle ne permet pas de la désigner comme utilisable. La vue conserve le verdict et son motif pendant les tris.
 
 ## 7. Verdict, coût et bénéfices
 
-L’évaluation applique l’[ordre de décision](RULES.md#7-ordre-de-décision), puis la vue applique les [règles économiques](RULES.md#8-coût-et-bénéfices). La conclusion économique et le verdict sont des champs distincts : `INCOMPLETE` n’est pas un quatrième verdict. Les versions de l’évaluateur, de sa méthode et du calcul de conclusion restent reliées aux preuves.
+L’évaluation applique l’[ordre de décision](RULES.md#7-ordre-de-décision), puis la vue applique les [règles économiques](RULES.md#8-coût-et-bénéfices). La conclusion économique décrit le périmètre et la complétude de la comparaison des coûts, avec inconnues et incompatibilités, sans objet de recommandation « co-moins-chères ». Elle reste distincte du verdict : `INCOMPLETE` n’est pas un quatrième verdict. Les versions de l’évaluateur, de sa méthode et du calcul de conclusion restent reliées aux preuves. Le coût ne compense aucune non-admissibilité, y compris dans la vision future du score personnalisé.
 
 ## 8. Incidents et attribution
 
@@ -175,14 +185,16 @@ Les campagnes historiques restent dans leurs questions, panels, schémas et verd
 
 ## 10. Sécurité et autorité
 
-- données réelles ou sensibles exclues sans autorité explicite
+- dossiers du parcours 0.1.0 entièrement inventés ; aucun téléversement de dossier réel ni accès aux données de l’ordinateur ou du téléphone
+- description générale sans donnée personnelle ou confidentielle ; la consigne ne garantit pas leur absence, la politique de traitement et de conservation d’une saisie sensible doit être approuvée avant ouverture
 - secrets absents des tâches, sorties publiées et reçus publics
 - permissions minimales et outils déclarés
 - sorties brutes privées par défaut avant décision de publication
 - intégration Git, exécution produit, appels candidats et budget, provisionnement et publication soumis à des autorités distinctes
 - champs, filtres, chemins, contenus et sorties considérés comme non fiables : validation côté serveur, requêtes paramétrées et rendu échappé
 - aucune donnée candidate rendue comme code actif dans le site ; aucune opération protégée autorisée par un simple libellé ou identifiant public
-- les instructions contenues dans une entrée ou une sortie candidate ne créent aucun droit, changement de contrat ou instruction d’exploitation ; l’évaluateur les traite comme données
+- les instructions contenues dans une demande, une pièce ou une sortie ne créent aucun droit, changement de règles d’évaluation, budget ou instruction d’exploitation ; elles restent des données à traiter sous les autorités établies
+- contextes et ressources de préparation, jugement et candidats séparés ; références réservées au jugement non transmises aux candidats sauf exposition explicitement décidée et déclarée
 - si une tâche ou les outils qu’elle autorise peuvent exécuter du code candidat, son confinement doit être vérifié avant l’appel : séparation du serveur public et des secrets, accès fichiers et réseau limités au contrat, ressources et arrêt contrôlés ; un compte de service distinct ne suffit pas à prouver ce confinement
 
 ## 11. Extensions de périmètre
@@ -197,12 +209,14 @@ Le frontend et le backend appartiennent au même dépôt produit et sont servis 
 
 | Composant | Responsabilité et accès |
 |---|---|
-| Serveur public | servir seulement la projection approuvée et ses pièces publiables ; aucun accès aux secrets candidats ou aux pièces et métadonnées privées |
+| Serveur public | présenter l’entrée de demande et le parcours interactif ; servir la projection approuvée et ses pièces publiables ; aucun accès public direct au stockage privé ni aux secrets fournisseurs |
 | Exécuteur de travaux longs | opérer les campagnes indépendamment des requêtes HTTP, sous identité et autorité propres ; conserver observations, incidents et évaluations privées |
 | Opérateur autorisé | préparer, admettre, arrêter, reprendre et approuver selon l’opération ; une interface opérateur web n’est pas exigée |
 | Contrôleur de livraison | installer une source ou un artefact approuvé, vérifier son identité et consigner le résultat ; aucun droit d’appel candidat déduit du droit de déployer |
 
 Les comptes du web, de l’exécuteur et de la livraison limitent chacun l’accès à leur responsabilité. Une projection contrôlée est remise au serveur public sous autorité de publication ; exposer directement un dossier privé n’est pas une interface de publication. Les secrets sont injectés séparément du code et de la projection. Les journaux d’exploitation doivent permettre le diagnostic sans exposer secrets, entrées privées ou sorties brutes.
+
+Soumission d’une demande, consultation autorisée de son dossier et publication ouverte sont des accès distincts. Le parcours public ne rend pas ses dossiers ni ses résultats publics par défaut. Avant réalisation de ces accès, décider l’identité ou session, les droits, l’isolation et le composant existant responsable de la préparation assistée et de ses accès fournisseur. Aucune attribution de secrets au serveur public n’est déduite de l’ouverture du formulaire. Ces choix n’imposent ni nouveau service ni gestion de comptes ; ils bloquent les fonctions qui en dépendent tant qu’ils ne sont pas approuvés. Les décisions de traitement des saisies, conservation, financement, abus et publication relèvent du [PRD](PRD.md#51-périmètre-010).
 
 ### 12.2 Persistance et intégrité
 
@@ -216,14 +230,16 @@ L’écriture d’une pièce et celle de sa référence doivent laisser un état
 
 Les lignes suivantes fixent des effets et des preuves, pas des noms de commandes ni un format de protocole.
 
+Interruption et reprise couvrent aussi les appels assistés de préparation et de jugement, même avant l’existence d’une campagne. Un appel aux effets inconnus ne peut pas être rejoué implicitement ; les réservations et dépenses des différentes phases restent attribuées et ne sont pas allouées deux fois.
+
 | Opération | Entrée et effet autorisé | Preuve ou refus attendu |
 |---|---|---|
 | Initialiser | emplacement de données et runtime identifiés | schéma et répertoires privés cohérents ; aucune base existante écrasée |
-| Préparer | version de tâche, cas, panel et conditions communes | manifeste gelé, références et champs non décidés visibles ; aucun appel |
+| Préparer | demande et brouillon, puis version de tâche, cas, panel et conditions communes | assistance sous autorité et budget propres ; dossier construit et aperçu lié au paquet, validations et qualification référencées ; gel du contrat et du manifeste distincts, aucun appel candidat |
 | Admettre et lancer | manifeste et autorités d’exécution, d’appels et de budget | contrôles des [règles d’admission](RULES.md#9-incidents-et-inconnues), réservation et intention persistante avant émission |
 | Interrompre | exécution identifiée et motif d’arrêt | admission de nouveaux appels arrêtée, travaux actifs suivis, reçus acquis conservés ; effets inconnus signalés |
 | Reprendre | état conservé et autorité explicite | rapprochement des tentatives et du budget, cellules encore autorisées identifiées ; aucun rejeu d’une tentative ambiguë |
-| Évaluer et restituer | observations intègres, méthode et décisions requises | verdicts et conclusion traçables ; couverture partielle visible sans nouvel appel |
+| Évaluer et restituer | observations intègres, méthode et décisions requises | jugement assisté éventuel sous autorité et budget propres, sans nouvel appel candidat ; restitution sans appel modèle, verdicts et comparaison traçables, couverture partielle visible |
 | Publier | projection et pièces explicitement approuvées | identité de publication et cohérence des références visibles ; aucune ouverture implicite des données privées |
 
 L’état de campagne décrit préparation, admission, activité, interruption ou clôture à partir des reçus. Une clôture peut être partielle ; elle ne prouve ni satisfaction ni publication. Les tentatives conservent leur état propre et les cellules non lancées restent distinguées. Une correction d’évaluation autorisée crée une nouvelle évaluation reliée à la précédente ; elle ne remplace pas silencieusement le verdict déjà publié.

@@ -23,15 +23,23 @@ Toute extension suit la [règle KISS](../docs/RULES.md#11-kiss-et-évolution).
 | Responsable de campagne | `<rôle et référence de responsabilité vérifiable ; identité privée si nécessaire>` |
 | Date de préparation | `<date>` |
 
-Approbation du responsable de campagne avant exécution, hors empreinte du contrat : `EN_ATTENTE` / `<preuve et date, référençant l’empreinte du contrat et les preuves de qualification>`. Cette preuve est liée au contrat sans entrer dans l’empreinte qu’elle approuve.
+Approbation du responsable de campagne avant appels candidats, hors empreinte du contrat : `EN_ATTENTE` / `<preuve et date, référençant l’empreinte du contrat et les preuves de qualification>`. Cette preuve est liée au contrat sans entrer dans l’empreinte qu’elle approuve.
 
-Une valeur `EN_ATTENTE` interdit l'exécution. Le demandeur-lecteur fournit son besoin ; le responsable de campagne prépare et approuve le contrat. Les deux rôles peuvent être tenus par la même personne.
+Une approbation `EN_ATTENTE` interdit les appels candidats. Le brouillon peut être préparé avec assistance sous autorité et budget propres. Le demandeur-lecteur valide le besoin représenté ; le responsable de campagne prépare et approuve le contrat. Les deux rôles peuvent être tenus par la même personne, sans que la validation du besoin remplace qualification, approbation, dépense ou publication.
 
 ## 2. Besoin et résultat attendu
 
 ### Situation
 
 `<acteur, contexte et besoin>`
+
+Demande et précisions : `<expression initiale et réponses utiles, sous la politique de saisie et de conservation approuvée ; aucune donnée personnelle ou confidentielle>`.
+
+Reformulation : `<travail compris, sans réduction silencieuse du besoin ni solution intégrée à la consigne>`.
+
+Hypothèses validées et paramètres fictifs : `<distinguer les accords sur le besoin des personnes, organismes, faits et pièces inventés>`.
+
+Limites de préparation : `<outil absent, travail non évaluable ou référence insuffisante ; périmètre alternatif accepté ou motif d’arrêt>`. Aucun nombre fixe de questions n’est déduit du gabarit.
 
 ### Résultat attendu
 
@@ -66,11 +74,19 @@ Usage du résultat et intervention humaine : `<ce que le destinataire peut en fa
 
 Niveau éventuel : `<définition et dimensions approuvées avant exécution, ou NON DÉFINI>`. Décrire les caractéristiques qui varient entre cas et celles qui restent communes, selon les [règles de charge et de portée](../docs/RULES.md#4-contrat-avant-exécution). Une étiquette ne remplace pas cette description.
 
-Couverture et limites : `<motif de sélection, usages couverts et exclus, nature synthétique ou réelle, biais connus et limites de généralisation>`.
+Couverture et limites : `<motif de sélection, usages couverts et exclus, nature entièrement fictive du dossier 0.1.0, biais connus et limites de généralisation>`. Un cas validé ne prouve pas la réussite sur les dossiers réels de l’utilisateur. Un exemple pédagogique public n’est pas réputé inédit.
 
 Règle d’agrégation : `<forme et portée du résultat ; cas et tentatives pris en compte, dénominateur, traitement des manquants, incidents et INDETERMINE ; ou AUCUNE : verdicts par cas et tentative seulement>`.
 
 ### Entrées et outils autorisés
+
+Consigne exacte commune aux candidats : `<texte ou pièce identifiée, sans réponse attendue réservée au jugement>`.
+
+Aperçu présenté : `<situation fictive, informations importantes, livrables, critères compréhensibles, incertitudes recevables, exclusions et intervention humaine ; références aux pièces existantes et au même paquet prévu pour les candidats>`.
+
+Validation du besoin, hors empreinte : `EN_ATTENTE` / `<preuve datée liée à l’identité et à l’empreinte du paquet présenté>`. Les pièces de « Voir l’exemple » sont consultables ; la référence de jugement reste séparée sauf exposition explicitement décidée et déclarée.
+
+Modifications, hors empreinte : `<changements demandés, accords conservés, question ciblée si nécessaire, contrôles affectés refaits et nouvelle validation du paquet>`. Toute modification du paquet présenté exige cette validation ; après gel, nouvelle version sans réécriture des résultats.
 
 | Élément | Rôle | Visible au candidat | Identité ou empreinte |
 |---|---|:---:|---|
@@ -78,7 +94,7 @@ Règle d’agrégation : `<forme et portée du résultat ; cas et tentatives pri
 
 Modalité documentaire, si pertinente : `<textes utiles fournis, recherche dans une bibliothèque figée ou consultation externe autorisée ; corpus, versions et droits ; preuves prévues des requêtes et pièces consultées>`.
 
-Tout élément non listé est indisponible. Aucun secret ou chemin externe n'est autorisé sans décision explicite.
+Tout élément non listé est indisponible. Le parcours 0.1.0 ne comprend aucun téléversement de dossier réel, accès à l’ordinateur, connecteur vers les données de l’utilisateur ou action sur son téléphone. Aucun secret n’est fourni au candidat. Préparer un calendrier ne prouve aucune notification réelle ; fournir du texte ne mesure pas l’OCR.
 
 ### Sortie brute attendue
 
@@ -102,12 +118,12 @@ La sortie brute est conservée avant contrôle ou jugement. Aucun post-traitemen
 
 ### Critères secondaires
 
-Conserver au maximum deux lignes. Un critère est défini avant l'exécution et sert seulement à expliquer le bénéfice d'une configuration déjà `SATISFAIT`. Sans unité et sens favorable fixés ici, il reste descriptif et ne départage pas.
+Conserver au maximum deux lignes pour 0.1.0, complémentaires aux obligations et au coût. Un critère est défini avant les appels candidats ; une mesure valide peut porter sur une sortie non admissible sans changer son verdict. Une colonne ordonnable a une mesure, une preuve, une unité ou échelle justifiée, un sens favorable et une règle d’agrégation si nécessaire ; sinon elle reste descriptive. Calculs, complétude, rapprochements et durée sont des possibilités, pas des colonnes obligatoires. Une note ou un décompte des obligations pour les classer compte comme critère supplémentaire.
 
-| ID | Critère | Question observable | Unité | Sens favorable | Preuve |
+| ID | Critère | Question observable | Unité ou échelle | Sens favorable | Preuve |
 |---|---|---|---|---|---|
-| `S1` | `<nom>` | `<question>` | `<unité ou descriptif>` | `<plus haut / plus bas / oui>` | `<observation>` |
-| `S2` | `<nom ou supprimer la ligne>` | `<question>` | `<unité ou descriptif>` | `<plus haut / plus bas / oui>` | `<observation>` |
+| `S1` | `<nom>` | `<question>` | `<unité, échelle justifiée ou descriptif>` | `<plus haut / plus bas / oui>` | `<observation>` |
+| `S2` | `<nom ou supprimer la ligne>` | `<question>` | `<unité, échelle justifiée ou descriptif>` | `<plus haut / plus bas / oui>` | `<observation>` |
 
 ### Verdicts
 
@@ -116,6 +132,8 @@ Conserver au maximum deux lignes. Un critère est défini avant l'exécution et 
 - `INDETERMINE` : preuve insuffisante ou contradictoire
 
 Appliquer les [règles de verdict](../docs/RULES.md#6-erreurs-et-verdict), notamment lorsqu’un défaut est prouvé mais qu’un autre contrôle manque.
+
+Distinguer défaut candidat et problème de consigne, données, référence, évaluation ou exécution. Ni l’accord de l’utilisateur sur l’exemple ni un consensus de modèles ne prouve la justesse de la référence ; passages, calculs et contrôles adaptés l’étayent. Une ambiguïté de l’épreuve n’est pas un échec du modèle.
 
 ### Référence et méthode d’évaluation
 
@@ -143,6 +161,8 @@ La base fixe aussi l’unité de travail comparable : `<cas et quantité de trav
 ## 5. Références de campagne et de panel
 
 Le manifeste de chaque campagne, référencé par le catalogue, fige les informations suivantes sans réécrire la version de tâche.
+
+La liste de modèles à essayer pour l’assistance n’est pas ce panel. Présenter les critères déjà proposés, le panel, les conditions et les coûts avant lancement ; modifier un critère renvoie à la qualification et aux validations affectées. Le manifeste et ses conditions doivent être approuvés avant admission, indépendamment de l’approbation de la tâche.
 
 | Champ | Valeur |
 |---|---|
@@ -189,6 +209,12 @@ Chaque valeur référence sa preuve et sa date. Les [règles de gel](../docs/RUL
 
 ## 7. Acquisition et incidents
 
+### Assistance de préparation et de jugement
+
+Enregistrements hors empreinte du contrat : `<opération et phase : interview, génération, correction ou jugement ; configuration et consignes demandées puis observées ; ressources vues ; autorité et enveloppe accordées avant consommation ; intentions, reçus, dépenses et réservations ; terminaison, incident ou effets inconnus>`.
+
+Les opérations de préparation peuvent référencer le brouillon avant qu’une campagne existe. Leurs dépenses restent séparées des tentatives candidates. Une enveloppe épuisée ou un appel ambigu bloque les nouveaux appels dépendants ; conserver l’état et les coûts connus, sans relance implicite. La simple restitution n’appelle aucun modèle.
+
 ### Autorisation propre à la campagne
 
 | Champ | Valeur |
@@ -215,7 +241,7 @@ Les incidents conservent leur preuve et leur portée. Leur effet sur l’évalua
 
 La restitution référence les verdicts par cas, les tentatives et les reçus de la campagne, sans les recopier dans le contrat gelé. Chaque opération conserve son identifiant d’exécution, sa version réelle du moteur, ses entrées, son autorité et sa terminaison. Chaque tentative relie la demande figée aux valeurs observées de fournisseur, modèle, accès, route, paramètres et effort, avec leur source ou `INCONNU`, selon les [objets d’acquisition](../docs/ARD.md#44-acquisition-tentative-et-exécution).
 
-| Cas et tentative | Configuration | Erreurs et obligations | Verdict | Motif et critères concernés | Preuves | Coût observé | Bénéfices prévus |
+| Cas et tentative | Configuration | Erreurs et obligations | Verdict | Motif et critères concernés | Preuves | Coût observé | Mesures prévues |
 |---|---|---|---|---|---|---|---|
 | `<identités>` | `<identité>` | `<constats>` | `<verdict>` | `<motif et références>` | `<pièces et passages>` | `<valeur et unité, ou INCONNU>` | `<faits ou AUCUN>` |
 
@@ -227,19 +253,21 @@ Responsable des verdicts : `<rôle>`.
 
 Appliquer l’[ordre de décision](../docs/RULES.md#7-ordre-de-décision) et les [règles économiques](../docs/RULES.md#8-coût-et-bénéfices). La restitution suit le [parcours public](../docs/PRD.md#10-restitution-publique).
 
+### Classements par critère et filtres
+
+`<colonnes ordonnables reliées aux définitions et preuves du contrat ; observations descriptives ; périmètre consulté et couverture>`.
+
+Ordonner seulement les valeurs connues et comparables ; afficher les autres sans rang avec motif. Conserver les égalités et les verdicts, même pour une sortie erronée bon marché. Les filtres ne changent ni contrat, ni verdicts, ni population des statistiques déjà calculées. Sans agrégation préalable, rester au cas et à la tentative. Aucun rang ne désigne automatiquement une option utilisable ou un meilleur modèle.
+
 ### Conclusion économique
 
-`<conclusion bornée aux cas et tentatives comparables ; INCOMPLETE si le coût d’une configuration SATISFAIT est INCONNU ou non comparable ; sans admissible, indiquer que la comparaison est sans objet>`
+`<périmètre de comparaison des coûts ; valeurs connues, inconnues et incompatibilités ; INCOMPLETE si la comparaison de ce périmètre est incomplète ; aucune désignation d’option>`.
 
-### Configurations `SATISFAIT` co-moins-chères
+Un coût inconnu ou non comparable peut conserver l’admissibilité sur les critères non économiques. `INCOMPLETE` n’est pas un quatrième verdict. Un coût `INCONNU` ne satisfait jamais une obligation de coût. Les dépenses non admissibles restent consultables et triables sur une base comparable, sans rendre les sorties utilisables ; un sous-total connu n’est pas un coût complet.
 
-`<identités, ou AUCUNE ; si la conclusion est INCOMPLETE, aucune option n'est déclarée globalement moins chère>`
+### Mesures complémentaires
 
-Un coût inconnu ou non comparable peut conserver l'admissibilité sur les critères non économiques ; les coûts connus restent visibles, mais la conclusion économique est `INCOMPLETE`. Cette mention n'est pas un quatrième verdict. Un coût `INCONNU` ne satisfait jamais une obligation de coût et ne prouve aucune supériorité économique.
-
-### Bénéfices prévus des options `SATISFAIT` plus chères
-
-`<liens aux seuls critères secondaires déclarés, ou AUCUN>`
+`<observations et preuves des critères secondaires prévus, ou AUCUNE ; comparabilité et limites>`. Une mesure valide reste consultable quel que soit le verdict ; elle ne compense pas une obligation non satisfaite.
 
 ## 9. Publication et limite d'attribution
 
@@ -247,11 +275,17 @@ Pièces publiables : `<entrées, sorties et passages approuvés>`.
 
 Pièces privées et limites de vérification publique : `<références et motifs>`.
 
-La publication référence son autorité et sa version de restitution. Aucun contenu candidat n'est interprété comme code actif dans le site.
+La publication référence son autorité, les pièces approuvées et sa version de restitution. Valider un besoin ou terminer une préparation ou campagne ne publie rien au catalogue. Aucun contenu candidat n’est interprété comme code actif dans le site.
 
 Limite d’attribution affichée : `<formulation conforme au PRD, section 8, et limites propres à la campagne>`.
 
 ## 10. Qualification documentaire
+
+- [ ] demande, reformulation, hypothèses validées et paramètres fictifs sont distincts ; aucune tâche non évaluable n’est transformée silencieusement
+- [ ] l’aperçu ouvre les pièces construites et référence le paquet prévu pour les candidats ; toute modification entraîne les vérifications concernées et une nouvelle validation
+- [ ] les appels d’assistance ont leur autorité et budget avant consommation, avec coûts et reprises séparés des candidats
+- [ ] les filtres préservent les verdicts et la population des statistiques calculées ; chaque tri expose sa portée
+- [ ] le parcours, les pièces et les preuves sont accessibles au clavier, avec lecteur d’écran et sur petit écran
 
 - [ ] version, cas et preuves attendues sont identifiés ; la couverture est justifiée
 - [ ] résultat attendu, usage, intervention humaine, obligations et tolérances, erreurs éliminatoires sont définis avant exécution
@@ -259,18 +293,18 @@ Limite d’attribution affichée : `<formulation conforme au PRD, section 8, et 
 - [ ] toute agrégation des cas est définie avant exécution, sinon seuls les verdicts par cas sont permis
 - [ ] chaque campagne référence le contrat sans le réécrire ; ses autorités et états restent distincts
 - [ ] les trois verdicts sont présents
-- [ ] zéro à deux critères secondaires sont prévus, avec unité et sens favorable s'ils départagent
-- [ ] le responsable de campagne a approuvé le contrat ou l'exécution reste interdite
+- [ ] zéro à deux critères secondaires sont prévus pour 0.1.0 ; chaque colonne ordonnable a sa mesure, preuve, unité ou échelle justifiée, sens favorable et agrégation éventuelle
+- [ ] le besoin représenté par le paquet a été validé et le responsable a approuvé le contrat qualifié, ou les appels candidats restent interdits
 - [ ] les conditions de test communes sont déclarées une fois et identiques entre les configurations comparées
 - [ ] chaque configuration expose l’effort demandé et l’effort observé, ou `INCONNU` pour une valeur non prouvée
 - [ ] chaque configuration distingue sa route demandée de sa route observée ; toute valeur non prouvée reste `INCONNU`
 - [ ] la base de coût fixe le périmètre d'attribution, les tentatives comptées, l'unité commune et la conversion éventuelle avant exécution
 - [ ] chaque verdict porte un motif, ses preuves et son responsable
-- [ ] le coût observé de chaque configuration reste visible ; les non-`SATISFAIT` sont exclus de la recommandation économique et la conclusion est `INCOMPLETE` si un coût `SATISFAIT` est inconnu ou non comparable
-- [ ] aucun score global, podium général, classement universel ou graphique trompeur n'est produit
+- [ ] les coûts et mesures valides restent visibles avec les erreurs ; inconnues et incompatibilités sont sans rang, égalités conservées et complétude économique explicite
+- [ ] aucun score combiné n’est produit en 0.1.0 ; aucun meilleur modèle absolu, podium général, classement universel ou graphique trompeur n’est produit
 - [ ] la limite d'attribution est visible
 - [ ] les extensions non autorisées restent absentes
 - [ ] la conclusion est bornée au contrat, aux cas et tentatives couverts, à la campagne, aux conditions communes et à la date
 - [ ] les pièces publiables sont autorisées et les restrictions sont visibles
 
-Un scénario de maquette ne devient pas implicitement une tâche du catalogue.
+Un scénario de maquette ou un exemple pédagogique ne devient pas implicitement une tâche exécutable du catalogue. Le score pondéré personnalisé reste une capacité différée du [PRD](../docs/PRD.md#52-extensions), sans formule ni exécution dans ce gabarit 0.1.0.
