@@ -100,12 +100,31 @@ def restore(source, destination):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore'))
-    parser.add_argument('--data', type=Path, required=True)
+    parser.add_argument('action', choices=('initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
+    parser.add_argument('--data', type=Path)
     parser.add_argument('--destination', type=Path)
+    parser.add_argument('--socket', type=Path)
+    parser.add_argument('--public', type=Path)
+    parser.add_argument('--listen', default='127.0.0.1')
+    parser.add_argument('--port', type=int, default=8080)
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
+        if args.action in ('web', 'executor'):
+            from .service import release_identity, serve_executor, serve_web
+            if args.socket is None:
+                raise ValueError('Socket requise')
+            if args.action == 'web':
+                if args.public is None or not 1024 <= args.port <= 65535:
+                    raise ValueError('Projection et port requis')
+                serve_web(args.listen, args.port, args.public, args.socket, release_identity())
+            else:
+                if args.data is None:
+                    raise ValueError('Données requises')
+                serve_executor(args.data, args.socket, release_identity())
+            return 0
+        if args.data is None:
+            raise ValueError('Données requises')
         if args.action == 'initialize':
             initialize(args.data)
             result = {'state': 'INITIALIZED_ADMISSION_BLOCKED'}

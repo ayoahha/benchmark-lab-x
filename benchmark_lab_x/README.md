@@ -128,3 +128,17 @@ Le reçu décrit la construction effectuée ; son authenticité doit être véri
 ## Outillage des premières campagnes
 
 Les outils sous `tools/` conservent leurs contrats historiques et ne sont pas les commandes décrites ci-dessus. Dans `tools/campagne_v1.py`, le rendu et sa vérification calculent encore les empreintes des canons du checkout courant sous des libellés historiques ; les tests rétablissent au contraire les contrats du commit `38e226a59020aad517cd0dbb16892ffb87d448ab`. Leur réussite ne valide pas une restitution historique régénérée contre les canons courants. Toute opération sur ces campagnes doit identifier ses sources d’origine avant exécution.
+
+Les commandes `benchmark-runtime web --public … --socket …` et
+`benchmark-runtime executor --data … --socket …` fournissent les processus
+Linux. Le web expose `/healthz` et `/readyz` sans appel modèle ; le second contrôle
+interroge l'exécuteur par socket Unix et vérifie le stockage. Au démarrage,
+l'exécuteur ferme l'admission et conserve les anciennes émissions sans reçu en
+`UNKNOWN`. Ce processus ne fournit pas encore le moteur de campagnes S4/S5.
+
+Le web sert uniquement une projection nommée par l'empreinte de son manifeste
+`publication.json`, sélectionnée par `public/active.json`. Chaque fichier servi
+est vérifié ; sans publication vérifiée, la racine répond 503. Ce mécanisme ne
+fournit pas encore le parcours privé interactif S2/S6. Les deux processus, leur
+arrêt et leur redémarrage sont testés avec de vraies sockets locales ; la preuve
+de déploiement Linux reste distincte.
