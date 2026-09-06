@@ -95,7 +95,7 @@ Le workflow [GitHub Pages](../.github/workflows/pages.yml) publie `pages/` lors 
 
 Le module `benchmark_lab_x.runtime` fournit une initialisation privée, la vérification de SQLite et des pièces, la maintenance, une sauvegarde cohérente et une restauration vers un nouvel emplacement. Ces interfaces sont distinctes du moteur historique ci-dessus. Le serveur public, le traitement des travaux longs et leurs accès ne sont pas encore fournis ; ces commandes ne constituent pas le service 0.1.0 complet.
 
-Avec Python 3.12 ou supérieur, le répertoire parent des données doit exister. L’initialisation crée exclusivement son emplacement, en mode privé, et refuse tout répertoire déjà présent :
+Avec Python 3.12 ou supérieur, le répertoire parent des données doit exister. L’initialisation crée son emplacement privé ou utilise le répertoire vide préparé par Ansible sous le compte de service. Elle refuse tout emplacement contenant déjà des données :
 
 ```sh
 python3 -B -m benchmark_lab_x.runtime initialize --data /chemin/prive/benchmark

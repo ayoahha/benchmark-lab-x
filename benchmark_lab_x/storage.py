@@ -49,8 +49,13 @@ def private_path(path, directory=False):
 
 def initialize(root):
     root = Path(root).absolute()
-    # L'emplacement entier est créé exclusivement, jamais repris ou écrasé
-    root.mkdir(mode=0o700)
+    # Ansible peut préparer le répertoire privé vide sous son compte de service
+    if root.exists() or root.is_symlink():
+        private_path(root, directory=True)
+        if any(root.iterdir()):
+            raise FileExistsError(root)
+    else:
+        root.mkdir(mode=0o700)
     (root / "pieces").mkdir(mode=0o700)
     db = root / "metadata.sqlite3"
     fd = os.open(db, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

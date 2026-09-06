@@ -16,6 +16,7 @@ class ServiceStorageTests(unittest.TestCase):
     def test_reopen_corruption_and_unknown_schema_preserve_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / 'private'
+            root.mkdir(mode=0o700)
             initialize(root)
             with self.assertRaises(FileExistsError):
                 initialize(root)

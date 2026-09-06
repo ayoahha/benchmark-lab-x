@@ -23,6 +23,7 @@ def build(repo, source, destination):
     if recipe != Path(__file__).read_bytes():
         raise ValueError('Recette de build différente du commit demandé')
     files = {}
+    modes = {}
     blobs = {}
     for entry in git(repo, 'ls-tree', '-rz', source, '--', 'benchmark_lab_x').split(b'\0'):
         if not entry:
@@ -38,6 +39,7 @@ def build(repo, source, destination):
             continue
         files[name] = git(repo, 'cat-file', 'blob', blob)
         blobs[name] = blob
+        modes[name] = 0o755 if mode == '100755' else 0o644
     if not {'benchmark_lab_x/storage.py', 'benchmark_lab_x/runtime.py', 'benchmark_lab_x/__init__.py'} <= files.keys():
         raise ValueError('Interfaces runtime absentes du commit')
     # Le schéma livré vient du commit construit, sans importer du code non approuvé
@@ -52,7 +54,7 @@ def build(repo, source, destination):
                 for name, raw in sorted(files.items()):
                     info = tarfile.TarInfo(name)
                     info.size = len(raw)
-                    info.mode = 0o644
+                    info.mode = modes.get(name, 0o644)
                     archive.addfile(info, io.BytesIO(raw))
     return {'source_sha': source, 'recipe_sha256': hashlib.sha256(recipe).hexdigest(), 'tree_sha': git(repo, 'rev-parse', source + '^{tree}').decode().strip(), 'source_blobs': blobs, 'artifact_sha256': hashlib.sha256(Path(destination).read_bytes()).hexdigest(), 'schema_version': manifest['schema_version']}
 
