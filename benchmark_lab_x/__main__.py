@@ -105,11 +105,11 @@ def _write_json_bytes(path, raw):
             stream.write(raw[:halfway])
             stream.flush()
             os.fsync(stream.fileno())
-            if os.environ.get("V2_ALPHA_DEMO_LAUNCH_SOCKET_FD") is not None and os.environ.get("V2_ALPHA_DEMO_TEST_PRIVATE_RECEIPT_GATE") == path.name:
+            if os.environ.get("BENCHMARK_LAB_X_LAUNCH_SOCKET_FD") is not None and os.environ.get("BENCHMARK_LAB_X_TEST_PRIVATE_RECEIPT_GATE") == path.name:
                 _test_event(f"PRIVATE_JSON_HALF_WRITTEN {path.name} {temporary.name}")
                 _test_gate()
-            if os.environ.get("V2_ALPHA_DEMO_TEST_PRIVATE_COLLECTION_GATE") == "1" and path.name.startswith(".collection-"):
-                os.environ.pop("V2_ALPHA_DEMO_TEST_PRIVATE_COLLECTION_GATE")
+            if os.environ.get("BENCHMARK_LAB_X_TEST_PRIVATE_COLLECTION_GATE") == "1" and path.name.startswith(".collection-"):
+                os.environ.pop("BENCHMARK_LAB_X_TEST_PRIVATE_COLLECTION_GATE")
                 _test_event(f"PRIVATE_COLLECTION_HALF_WRITTEN {temporary.name}")
                 _test_gate()
             stream.write(raw[halfway:])
@@ -247,7 +247,7 @@ def prepare(run_dir, pi_binary=None, repo_root=None):
             (_write_json_bytes if name.endswith(".json") else _write_exclusive)(run / name, raw)
         public_environment = _public_environment(Path(repo_root or DEFAULT_REPO_ROOT).absolute())
         seal = {
-            "schema": "benchmark-lab-x-v2-alpha-seal-1",
+            "schema": "benchmark-lab-x-seal-1",
             "run": run_id,
             "created_at": _now(),
             "base_commit": BASE_COMMIT,
@@ -276,7 +276,7 @@ def _validate_prepared(run, run_id):
     _private_tree(run)
     seal_path = run / "seal.json"
     seal = _load_json(seal_path)
-    if seal.get("schema") != "benchmark-lab-x-v2-alpha-seal-1" or seal.get("run") != run_id or seal.get("base_commit") != BASE_COMMIT:
+    if seal.get("schema") != "benchmark-lab-x-seal-1" or seal.get("run") != run_id or seal.get("base_commit") != BASE_COMMIT:
         raise ValueError("sceau de préparation invalide")
     for name, digest in seal.get("artifacts", {}).items():
         path = run / name
@@ -315,7 +315,7 @@ def _number(value, label):
 
 def _validate_s9(auth, run_id, seal, seal_sha, panel):
     required = {
-        "schema": "benchmark-lab-x-v2-alpha-s9-authorization-1",
+        "schema": "benchmark-lab-x-s9-authorization-1",
         "effect": "candidate_calls_and_spend_s9",
         "run": run_id,
         "seal_sha256": seal_sha,
@@ -358,11 +358,11 @@ def _pi_agent_dir(run):
 
 def _bounded_env(agent_dir):
     env = {key: os.environ[key] for key in ["PATH", "LANG", "LC_ALL", "TMPDIR", "OPENROUTER_API_KEY"] if key in os.environ}
-    if "V2_ALPHA_DEMO_TEST_SOCKET_FD" in os.environ:
-        env["V2_ALPHA_DEMO_TEST_SOCKET_FD"] = os.environ["V2_ALPHA_DEMO_TEST_SOCKET_FD"]
-    if "V2_ALPHA_DEMO_LAUNCH_SOCKET_FD" in os.environ:
-        env["V2_ALPHA_DEMO_LAUNCH_SOCKET_FD"] = os.environ["V2_ALPHA_DEMO_LAUNCH_SOCKET_FD"]
-    for key in ["V2_ALPHA_DEMO_TEST_POPEN_GATE", "V2_ALPHA_DEMO_TEST_PRIVATE_RECEIPT_GATE", "V2_ALPHA_DEMO_TEST_TIMEOUT_SECONDS", "V2_ALPHA_DEMO_TEST_CANDIDATE_EXCEPTION"]:
+    if "BENCHMARK_LAB_X_TEST_SOCKET_FD" in os.environ:
+        env["BENCHMARK_LAB_X_TEST_SOCKET_FD"] = os.environ["BENCHMARK_LAB_X_TEST_SOCKET_FD"]
+    if "BENCHMARK_LAB_X_LAUNCH_SOCKET_FD" in os.environ:
+        env["BENCHMARK_LAB_X_LAUNCH_SOCKET_FD"] = os.environ["BENCHMARK_LAB_X_LAUNCH_SOCKET_FD"]
+    for key in ["BENCHMARK_LAB_X_TEST_POPEN_GATE", "BENCHMARK_LAB_X_TEST_PRIVATE_RECEIPT_GATE", "BENCHMARK_LAB_X_TEST_TIMEOUT_SECONDS", "BENCHMARK_LAB_X_TEST_CANDIDATE_EXCEPTION"]:
         if key in os.environ:
             env[key] = os.environ[key]
     env.update({"PI_CODING_AGENT_DIR": str(agent_dir), "PI_SKIP_VERSION_CHECK": "1"})
@@ -384,7 +384,7 @@ def _signal_group(process, signum):
 
 
 def _test_event(message):
-    fd = os.environ.get("V2_ALPHA_DEMO_TEST_SOCKET_FD")
+    fd = os.environ.get("BENCHMARK_LAB_X_TEST_SOCKET_FD")
     if fd is not None:
         os.write(int(fd), f"{message}\n".encode())
 
@@ -400,7 +400,7 @@ def _socket_line(sock):
 
 
 def _launch_permission(config_id):
-    fd = os.environ.get("V2_ALPHA_DEMO_LAUNCH_SOCKET_FD")
+    fd = os.environ.get("BENCHMARK_LAB_X_LAUNCH_SOCKET_FD")
     if fd is None:
         return
     sock = socket.socket(fileno=int(fd))
@@ -413,7 +413,7 @@ def _launch_permission(config_id):
 
 
 def _request_supervised_termination(config_id, reason):
-    sock = socket.socket(fileno=int(os.environ["V2_ALPHA_DEMO_LAUNCH_SOCKET_FD"]))
+    sock = socket.socket(fileno=int(os.environ["BENCHMARK_LAB_X_LAUNCH_SOCKET_FD"]))
     try:
         sock.sendall(f"TERMINATE {config_id} {reason}\n".encode())
         sock.settimeout(3)
@@ -500,7 +500,7 @@ def _receipt(run, config, marker, authority_sha, stdout_path, stderr_path, retur
     if process_incident:
         incident = process_incident if incident == "AUCUN" else f"{process_incident};{incident}"
     value = {
-        "schema": "benchmark-lab-x-v2-alpha-receipt-1",
+        "schema": "benchmark-lab-x-receipt-1",
         "config_id": config["id"],
         "marker": marker.name,
         "marker_sha256": _sha(marker),
@@ -573,16 +573,16 @@ def collect(run_dir, authority, repo_root=None, _collection_path=None, _own_sigt
             try:
                 _launch_permission(config["id"])
                 marker = run / f"{config['id']}.started.json"
-                _write_json(marker, {"schema": "benchmark-lab-x-v2-alpha-attempt-1", "config_id": config["id"], "nonce": secrets.token_hex(16), "seal_sha256": _sha(run / "seal.json"), "authority_sha256": authority_sha, "started_at": _now()})
-                test_fd = os.environ.get("V2_ALPHA_DEMO_TEST_SOCKET_FD")
+                _write_json(marker, {"schema": "benchmark-lab-x-attempt-1", "config_id": config["id"], "nonce": secrets.token_hex(16), "seal_sha256": _sha(run / "seal.json"), "authority_sha256": authority_sha, "started_at": _now()})
+                test_fd = os.environ.get("BENCHMARK_LAB_X_TEST_SOCKET_FD")
                 process = subprocess.Popen(
                     argv, cwd=run, env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                     umask=0o077,
-                    start_new_session=os.environ.get("V2_ALPHA_DEMO_LAUNCH_SOCKET_FD") is None,
+                    start_new_session=os.environ.get("BENCHMARK_LAB_X_LAUNCH_SOCKET_FD") is None,
                     pass_fds=(int(test_fd),) if test_fd is not None else (),
                 )
                 _test_event(f"CANDIDATE_POPENED_BEFORE_ACTIVE_PID {config['id']} {process.pid}")
-                if os.environ.get("V2_ALPHA_DEMO_TEST_POPEN_GATE") == config["id"]:
+                if os.environ.get("BENCHMARK_LAB_X_TEST_POPEN_GATE") == config["id"]:
                     _test_gate()
                 if _active_path:
                     _write_exclusive(_active_path, str(process.pid))
@@ -593,19 +593,19 @@ def collect(run_dir, authority, repo_root=None, _collection_path=None, _own_sigt
                         stdout, stderr = process.communicate()
                         process_incident = "SIGTERM_GROUPE_TUE"
                     else:
-                        if os.environ.get("V2_ALPHA_DEMO_TEST_CANDIDATE_EXCEPTION") == config["id"]:
+                        if os.environ.get("BENCHMARK_LAB_X_TEST_CANDIDATE_EXCEPTION") == config["id"]:
                             raise RuntimeError("exception candidat causale")
-                        timeout = float(os.environ.get("V2_ALPHA_DEMO_TEST_TIMEOUT_SECONDS", TIMEOUT_SECONDS))
+                        timeout = float(os.environ.get("BENCHMARK_LAB_X_TEST_TIMEOUT_SECONDS", TIMEOUT_SECONDS))
                         stdout, stderr = process.communicate(timeout=timeout)
                 except subprocess.TimeoutExpired:
-                    if os.environ.get("V2_ALPHA_DEMO_LAUNCH_SOCKET_FD") is not None:
+                    if os.environ.get("BENCHMARK_LAB_X_LAUNCH_SOCKET_FD") is not None:
                         _request_supervised_termination(config["id"], "CANDIDATE_TIMEOUT")
                         raise RuntimeError("timeout candidat supervisé")
                     _kill_group(process)
                     stdout, stderr = process.communicate()
                     process_incident = "TIMEOUT_GROUPE_TUE"
                 except BaseException as exc:
-                    if os.environ.get("V2_ALPHA_DEMO_LAUNCH_SOCKET_FD") is not None:
+                    if os.environ.get("BENCHMARK_LAB_X_LAUNCH_SOCKET_FD") is not None:
                         _request_supervised_termination(config["id"], "CANDIDATE_EXCEPTION")
                         raise
                     pgid = process.pid
@@ -680,7 +680,7 @@ def collect(run_dir, authority, repo_root=None, _collection_path=None, _own_sigt
               if not entry["executed"] and entry["reason"] == "NON_TENTEE":
                   entry["reason"] = f"NON_TENTEE_APRES_{stop_reason}"
       collection = {
-          "schema": "benchmark-lab-x-v2-alpha-collection-1",
+          "schema": "benchmark-lab-x-collection-1",
           "run": run_id,
           "seal_sha256": _sha(run / "seal.json"),
           "authority_sha256": authority_sha,
@@ -708,7 +708,7 @@ def collect(run_dir, authority, repo_root=None, _collection_path=None, _own_sigt
 def _validate_collection(run, run_id, seal, panel, collection_path=None):
     collection_path = Path(collection_path) if collection_path else run / "collection.json"
     collection = _load_json(collection_path)
-    if collection.get("schema") != "benchmark-lab-x-v2-alpha-collection-1" or collection.get("run") != run_id or collection.get("seal_sha256") != _sha(run / "seal.json"):
+    if collection.get("schema") != "benchmark-lab-x-collection-1" or collection.get("run") != run_id or collection.get("seal_sha256") != _sha(run / "seal.json"):
         raise ValueError("collection invalide ou non liée")
     auth_path = run / "authorization-s9.json"
     if not auth_path.is_file() or collection.get("authority_sha256") != _sha(auth_path):
@@ -728,14 +728,14 @@ def _validate_collection(run, run_id, seal, panel, collection_path=None):
         if receipt_path.name != f"{item['config_id']}.receipt.json" or not receipt_path.is_file() or _sha(receipt_path) != item.get("sha256"):
             raise ValueError("reçu absent ou altéré")
         receipt = _load_json(receipt_path)
-        if receipt.get("schema") != "benchmark-lab-x-v2-alpha-receipt-1" or receipt.get("config_id") != item["config_id"] or receipt.get("authority_sha256") != collection["authority_sha256"]:
+        if receipt.get("schema") != "benchmark-lab-x-receipt-1" or receipt.get("config_id") != item["config_id"] or receipt.get("authority_sha256") != collection["authority_sha256"]:
             raise ValueError("reçu fabriqué ou mal lié")
         for kind in ["marker", "stdout", "stderr"]:
             source = run / receipt[kind]
             if not source.is_file() or _sha(source) != receipt[f"{kind}_sha256"]:
                 raise ValueError(f"preuve brute altérée: {kind}")
         marker = _load_json(run / receipt["marker"])
-        if marker.get("schema") != "benchmark-lab-x-v2-alpha-attempt-1" or marker.get("config_id") != item["config_id"] or marker.get("authority_sha256") != collection["authority_sha256"]:
+        if marker.get("schema") != "benchmark-lab-x-attempt-1" or marker.get("config_id") != item["config_id"] or marker.get("authority_sha256") != collection["authority_sha256"]:
             raise ValueError("marqueur de tentative invalide")
         config = next(p for p in panel if p["id"] == item["config_id"])
         if receipt.get("requested") != config or receipt.get("route_observed") != "INCONNU" or receipt.get("effort_observed") != "INCONNU":
@@ -791,11 +791,11 @@ def review(run_dir, repo_root=None):
         _write_exclusive(copy, content.encode())
         cases.append({"blind_id": blind_id, "copy": f"review/{copy.name}", "copy_sha256": _sha(copy)})
         private_cases.append({"blind_id": blind_id, "receipt_sha256": item["sha256"]})
-    review_map = {"schema": "benchmark-lab-x-v2-alpha-review-map-1", "cases": private_cases}
+    review_map = {"schema": "benchmark-lab-x-review-map-1", "cases": private_cases}
     _write_json(run / "review-map.json", review_map)
     campaign = _campaign()
     dossier = {
-        "schema": "benchmark-lab-x-v2-alpha-review-1",
+        "schema": "benchmark-lab-x-review-1",
         "review_map_sha256": _sha(run / "review-map.json"),
         "cases": cases,
         "checklist": {"obligations": campaign["obligations"], "fatal_errors": campaign["fatal_errors"]},
@@ -810,7 +810,7 @@ def _validate_review(run, collection, receipts):
     review_path = run / "review.json"
     dossier = _load_json(review_path)
     campaign = _campaign()
-    if set(dossier) != {"schema", "review_map_sha256", "cases", "checklist", "created_at"} or dossier.get("schema") != "benchmark-lab-x-v2-alpha-review-1":
+    if set(dossier) != {"schema", "review_map_sha256", "cases", "checklist", "created_at"} or dossier.get("schema") != "benchmark-lab-x-review-1":
         raise ValueError("revue non liée ou altérée")
     if dossier.get("checklist") != {"obligations": campaign["obligations"], "fatal_errors": campaign["fatal_errors"]}:
         raise ValueError("checklist de revue divergente")
@@ -822,7 +822,7 @@ def _validate_review(run, collection, receipts):
     review_map = _load_json(map_path)
     private_cases = review_map.get("cases", [])
     public_ids = [case.get("blind_id") for case in cases]
-    if set(review_map) != {"schema", "cases"} or review_map.get("schema") != "benchmark-lab-x-v2-alpha-review-map-1" or len(cases) != len(receipts) or len(set(public_ids)) != len(receipts):
+    if set(review_map) != {"schema", "cases"} or review_map.get("schema") != "benchmark-lab-x-review-map-1" or len(cases) != len(receipts) or len(set(public_ids)) != len(receipts):
         raise ValueError("revue aveugle invalide")
     if len(private_cases) != len(receipts) or any(set(item) != {"blind_id", "receipt_sha256"} for item in private_cases) or {item.get("blind_id") for item in private_cases} != set(public_ids) or {item.get("receipt_sha256") for item in private_cases} != receipt_hashes:
         raise ValueError("bijection privée invalide")
@@ -834,7 +834,7 @@ def _validate_review(run, collection, receipts):
 
 
 def _validate_decisions(value, dossier):
-    if value.get("schema") != "benchmark-lab-x-v2-alpha-decisions-1" or value.get("review_sha256") is None or value.get("accepted") is not True:
+    if value.get("schema") != "benchmark-lab-x-decisions-1" or value.get("review_sha256") is None or value.get("accepted") is not True:
         raise ValueError("décisions non acceptées ou schéma invalide")
     expected_ids = {case["blind_id"] for case in dossier["cases"]}
     decisions = value.get("decisions")
@@ -860,7 +860,7 @@ def _validate_decisions(value, dossier):
 
 def _validate_s10(auth, run_id, seal_sha, review_sha, decisions_sha, s9_id):
     expected = {
-        "schema": "benchmark-lab-x-v2-alpha-s10-authorization-1",
+        "schema": "benchmark-lab-x-s10-authorization-1",
         "effect": "product_execution_and_acceptance_s10",
         "run": run_id,
         "seal_sha256": seal_sha,
@@ -920,7 +920,7 @@ def _results(run, dossier, review_map, receipts, decisions):
         economy = {"status": "COMPLETE", "known_costs": {}, "least_expensive": [], "benefits": {}}
     campaign = _campaign()
     return {
-        "schema": "benchmark-lab-x-v2-alpha-results-1", "task": campaign["task_id"], "contract": campaign,
+        "schema": "benchmark-lab-x-results-1", "task": campaign["task_id"], "contract": campaign,
         "dates": {"prepared": _load_json(run / "seal.json")["created_at"], "reviewed": dossier["created_at"], "built": _now()},
         "conditions": {"requested": campaign["common_conditions"], "applied": {"settings_sha256": _sha(run / "settings.json"), "models_sha256": _sha(run / "models.json")}, "observed": {"pi_version": PI_VERSION, **_load_json(run / "seal.json")["public_environment"]}},
         "configurations": configs, "economy": economy,
@@ -979,6 +979,15 @@ def _task_brief(campaign):
     if fallback:
         return {**fallback, "source": "presentation"}
     return {"title": campaign["task_id"], "context": None, "objective": None, "decision": None, "source": "none"}
+
+
+def _human_duration(seconds):
+    if type(seconds) is not int or seconds < 0:
+        return "Non communiqué"
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    parts = [(hours, "h"), (minutes, "min"), (seconds, "s")]
+    return " ".join(f"{value} {unit}" for value, unit in parts if value) or "0 s"
 
 
 def _human_date(raw, with_time=False):
@@ -1214,7 +1223,7 @@ def _render_verify(results):
         ("Harnais", f"Pi {requested['pi_version']}, identique pour toutes les configurations"),
         ("Sortie", {"text-only": "texte uniquement"}.get(requested["output"], requested["output"])),
         ("Limite de sortie", f"{requested['max_tokens']:,}".replace(",", " ") + " tokens"),
-        ("Durée maximale", f"{requested['timeout_seconds']} secondes"),
+        ("Durée maximale", _human_duration(requested["timeout_seconds"])),
         ("Effort de raisonnement demandé", thinking),
         ("Session", {"ephemeral": "éphémère"}.get(requested["session"], requested["session"])),
         ("Tentatives comptées", f"{campaign['cost_basis']['attempts_per_configuration']} par configuration, sans nouvelle tentative"),
@@ -1285,23 +1294,24 @@ def build(run_dir, decisions, authority, repo_root=None):
     _write_json_bytes(run / "authorization-s10.json", auth_raw)
     _write_json(run / "results.json", results)
     _write_exclusive(run / "index.html", html_bytes)
-    final = {"schema": "benchmark-lab-x-v2-alpha-final-seal-1", "run": run_id, "files": {name: _sha(run / name) for name in ["results.json", "index.html", "decisions.json", "authorization-s10.json"]}, "built_at": _now()}
+    final = {"schema": "benchmark-lab-x-final-seal-1", "run": run_id, "files": {name: _sha(run / name) for name in ["results.json", "index.html", "decisions.json", "authorization-s10.json"]}, "built_at": _now()}
     _write_json(run / "final-seal.json", final)
     _private_tree(run)
     return results
 
 
+# Historical schema identifiers are accepted only when reading sealed results
 def present(source_run_dir, run_dir, repo_root=None):
     source, source_id = _run_path(source_run_dir, repo_root)
     _validate_final(source, source_id)
     results_raw = (source / "results.json").read_bytes()
     results = _strict_json_bytes(results_raw, str(source / "results.json"))
-    if not isinstance(results, dict) or results.get("schema") != "benchmark-lab-x-v2-alpha-results-1":
+    if not isinstance(results, dict) or results.get("schema") not in {"benchmark-lab-x-results-1", "benchmark-lab-x-v2-alpha-results-1"}:
         raise ValueError("résultats source invalides")
     page = _render_html(results)
     run, run_id = _run_path(run_dir, repo_root, create=True)
     source_record = {
-        "schema": "benchmark-lab-x-v2-alpha-presentation-source-1",
+        "schema": "benchmark-lab-x-presentation-source-1",
         "source_run": source_id,
         "source_final_seal_sha256": _sha(source / "final-seal.json"),
         "source_results_sha256": hashlib.sha256(results_raw).hexdigest(),
@@ -1311,7 +1321,7 @@ def present(source_run_dir, run_dir, repo_root=None):
         _write_json(run / "source.json", source_record)
         _write_exclusive(run / "index.html", page)
         seal = {
-            "schema": "benchmark-lab-x-v2-alpha-presentation-seal-1",
+            "schema": "benchmark-lab-x-presentation-seal-1",
             "run": run_id,
             "source_run": source_id,
             "source_sha256": _sha(run / "source.json"),
@@ -1329,7 +1339,7 @@ def present(source_run_dir, run_dir, repo_root=None):
 
 def _validate_final(run, run_id):
     seal = _load_json(run / "final-seal.json")
-    if seal.get("schema") != "benchmark-lab-x-v2-alpha-final-seal-1" or seal.get("run") != run_id:
+    if seal.get("schema") not in {"benchmark-lab-x-final-seal-1", "benchmark-lab-x-v2-alpha-final-seal-1"} or seal.get("run") != run_id:
         raise ValueError("sceau final invalide")
     for name, digest in seal.get("files", {}).items():
         if not (run / name).is_file() or _sha(run / name) != digest:
@@ -1339,7 +1349,7 @@ def _validate_final(run, run_id):
 
 def _validate_presentation(run, run_id, repo_root=None):
     seal = _load_json(run / "presentation-seal.json")
-    if seal.get("schema") != "benchmark-lab-x-v2-alpha-presentation-seal-1" or seal.get("run") != run_id:
+    if seal.get("schema") not in {"benchmark-lab-x-presentation-seal-1", "benchmark-lab-x-v2-alpha-presentation-seal-1"} or seal.get("run") != run_id:
         raise ValueError("sceau de présentation invalide")
     if set(seal.get("files", {})) != {"results.json", "index.html", "source.json"}:
         raise ValueError("fichiers de présentation incomplets")
@@ -1349,7 +1359,7 @@ def _validate_presentation(run, run_id, repo_root=None):
     if seal.get("source_sha256") != _sha(run / "source.json"):
         raise ValueError("source de présentation altérée")
     source_record = _load_json(run / "source.json")
-    if source_record.get("schema") != "benchmark-lab-x-v2-alpha-presentation-source-1" or source_record.get("source_run") != seal.get("source_run"):
+    if source_record.get("schema") not in {"benchmark-lab-x-presentation-source-1", "benchmark-lab-x-v2-alpha-presentation-source-1"} or source_record.get("source_run") != seal.get("source_run"):
         raise ValueError("source de présentation invalide")
     source, source_id = _run_path(source_record["source_run"], repo_root)
     _validate_final(source, source_id)
@@ -1373,7 +1383,7 @@ def show(run_dir, repo_root=None, opener=None):
 def _collect_worker():
     run_dir, authority, repo_root, result_path, active_path = sys.argv[1:]
     signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
-    if os.environ.get("V2_ALPHA_DEMO_TEST_WORKER_IGNORES_SIGTERM") == "1":
+    if os.environ.get("BENCHMARK_LAB_X_TEST_WORKER_IGNORES_SIGTERM") == "1":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
     try:
         collect(run_dir, authority, repo_root, result_path, False, active_path)
@@ -1384,7 +1394,7 @@ def _collect_worker():
 
 
 def _test_gate():
-    fd = os.environ.get("V2_ALPHA_DEMO_TEST_SOCKET_FD")
+    fd = os.environ.get("BENCHMARK_LAB_X_TEST_SOCKET_FD")
     if fd is not None and not os.read(int(fd), 1):
         raise RuntimeError("canal de test fermé")
 
@@ -1404,7 +1414,7 @@ def _valid_interruption_receipt(run, config, authority_sha):
         receipt = _load_json(run / f"{config['id']}.receipt.json")
         if (
             not isinstance(receipt, dict)
-            or receipt.get("schema") != "benchmark-lab-x-v2-alpha-receipt-1"
+            or receipt.get("schema") != "benchmark-lab-x-receipt-1"
             or receipt.get("config_id") != config["id"]
             or receipt.get("authority_sha256") != authority_sha
             or receipt.get("requested") != config
@@ -1417,7 +1427,7 @@ def _valid_interruption_receipt(run, config, authority_sha):
             if source.parent != run or not source.is_file() or _sha(source) != receipt[f"{kind}_sha256"]:
                 return False
         marker = _load_json(run / receipt["marker"])
-        if not isinstance(marker, dict) or marker.get("schema") != "benchmark-lab-x-v2-alpha-attempt-1" or marker.get("config_id") != config["id"] or marker.get("authority_sha256") != authority_sha:
+        if not isinstance(marker, dict) or marker.get("schema") != "benchmark-lab-x-attempt-1" or marker.get("config_id") != config["id"] or marker.get("authority_sha256") != authority_sha:
             return False
         parsed = _attempt_result((run / receipt["stdout"]).read_bytes(), config)
         return receipt.get("raw_jsonl_sha256") == receipt.get("stdout_sha256") and all(receipt.get(key) == parsed.get(key) for key in ["cost", "output", "observed", "retry", "final_text_sha256"])
@@ -1437,7 +1447,7 @@ def _interruption_collection(run, run_id, seal, panel, authority_raw, stop_reaso
         if marker.is_file():
             try:
                 marker_value = _load_json(marker)
-                marker_valid = isinstance(marker_value, dict) and marker_value.get("schema") == "benchmark-lab-x-v2-alpha-attempt-1" and marker_value.get("config_id") == config["id"] and marker_value.get("authority_sha256") == authority_sha
+                marker_valid = isinstance(marker_value, dict) and marker_value.get("schema") == "benchmark-lab-x-attempt-1" and marker_value.get("config_id") == config["id"] and marker_value.get("authority_sha256") == authority_sha
             except (OSError, ValueError):
                 pass
         if not valid and marker_valid:
@@ -1466,7 +1476,7 @@ def _interruption_collection(run, run_id, seal, panel, authority_raw, stop_reaso
     known = all(value != "INCONNU" for value in values)
     spent = sum((_number(value, "coût reçu") for value in values), Decimal(0)) if known else None
     return {
-        "schema": "benchmark-lab-x-v2-alpha-collection-1", "run": run_id,
+        "schema": "benchmark-lab-x-collection-1", "run": run_id,
         "seal_sha256": _sha(run / "seal.json"), "authority_sha256": authority_sha,
         "receipts": receipts, "matrix": matrix,
         "spent": float(spent) if known else "INCONNU", "budget_known": known,
@@ -1519,8 +1529,8 @@ def _supervise_collect(run_dir, authority):
     if signal.getsignal(signal.SIGTERM) is signal.SIG_IGN:
         raise RuntimeError("SIGTERM hérité en SIG_IGN")
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
-    test_fd = os.environ.get("V2_ALPHA_DEMO_TEST_SOCKET_FD")
-    repo_root = os.environ.get("V2_ALPHA_DEMO_TEST_REPO_ROOT") if test_fd is not None else None
+    test_fd = os.environ.get("BENCHMARK_LAB_X_TEST_SOCKET_FD")
+    repo_root = os.environ.get("BENCHMARK_LAB_X_TEST_REPO_ROOT") if test_fd is not None else None
     run, run_id = _run_path(run_dir, repo_root)
     if (run / "collection.json").exists():
         raise FileExistsError("collection immuable déjà présente")
@@ -1592,7 +1602,7 @@ def _supervise_collect(run_dir, authority):
                 _, config_id = request.split(" ", 1)
                 if request != f"LAUNCH_REQUEST {config_id}":
                     raise RuntimeError("demande de lancement invalide")
-                if os.environ.get("V2_ALPHA_DEMO_TEST_C2_REQUEST_GATE") == "1" and config_id == "C2":
+                if os.environ.get("BENCHMARK_LAB_X_TEST_C2_REQUEST_GATE") == "1" and config_id == "C2":
                     _test_event("C2_LAUNCH_REQUEST")
                     if not interrupted.wait(5):
                         raise RuntimeError("SIGTERM causal absent avant permis C2")
@@ -1607,16 +1617,16 @@ def _supervise_collect(run_dir, authority):
     ready.wait()
     _test_event("OWNED")
     _test_gate()
-    with tempfile.TemporaryDirectory(prefix="v2-alpha-collect-") as private_dir:
+    with tempfile.TemporaryDirectory(prefix="benchmark-lab-x-collect-") as private_dir:
         result_path = Path(private_dir) / "collection.json"
         active_path = Path(private_dir) / "active.pid"
         command = [
             sys.executable, "-B", "-c",
-            "from v2_alpha_demo.__main__ import _collect_worker; raise SystemExit(_collect_worker())",
+            "from benchmark_lab_x.__main__ import _collect_worker; raise SystemExit(_collect_worker())",
             str(run), str(authority), str(Path(repo_root or DEFAULT_REPO_ROOT).absolute()), str(result_path), str(active_path),
         ]
         worker_env = os.environ.copy()
-        worker_env["V2_ALPHA_DEMO_LAUNCH_SOCKET_FD"] = str(permit_child.fileno())
+        worker_env["BENCHMARK_LAB_X_LAUNCH_SOCKET_FD"] = str(permit_child.fileno())
         pass_fds = tuple(fd for fd in (int(test_fd) if test_fd is not None else None, permit_child.fileno()) if fd is not None)
         with lock:
             worker = None
@@ -1699,7 +1709,7 @@ def _supervise_collect(run_dir, authority):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="python -m v2_alpha_demo")
+    parser = argparse.ArgumentParser(prog="python -m benchmark_lab_x")
     commands = parser.add_subparsers(dest="command", required=True)
     p = commands.add_parser("prepare")
     p.add_argument("--run-dir", required=True)

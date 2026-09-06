@@ -9,7 +9,7 @@ Version contractuelle 7, 11 août 2026
 
 Statut : **historique et spécialisé, candidat non officiel**
 
-> Ce document conserve le contrat prospectif du prototype pentagone-rotatif. Il n'est pas une autorité du produit courant et ne doit pas être généralisé à V2-alpha. Le [PRD](PRD.md), l'[ARD](ARD.md) et les [règles](RULES.md) gouvernent le produit courant.
+> Ce document conserve le contrat prospectif du prototype pentagone-rotatif. Il n’est pas une autorité du produit courant. Le [PRD](PRD.md), l'[ARD](ARD.md) et les [règles](RULES.md) gouvernent le produit courant.
 
 ## 1. Autorité et portée
 

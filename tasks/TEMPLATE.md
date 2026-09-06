@@ -4,11 +4,9 @@ style_gate: pass
 
 # Carte de tâche : `<nom lisible>`
 
-Suivi de livraison : `<Issue ; Status dans le Project>`
+Ce gabarit prépare le contrat d’une tâche de benchmark, distinct d’une Story de livraison. Les sections 1 à 4 définissent le contrat à geler. L’empreinte porte sur le contenu contractuel identifié, sans sa propre valeur ni les enregistrements marqués hors empreinte. Les sections 5 à 7 décrivent le manifeste de campagne et les enregistrements d’exploitation qui lui sont liés ; les sections 8 et 9 concernent les résultats et la publication. Les observations et autorisations acquises après le gel ne réécrivent ni le contrat ni le manifeste.
 
-L'état d'exécution de chaque campagne appartient à ses reçus ; il n'est pas déduit du suivi de livraison.
-
-Ce gabarit prépare une version de tâche. Les sections 1 à 4 définissent le contrat ; les suivantes décrivent les informations à référencer depuis chaque manifeste de campagne et restitution, sans les dupliquer dans une version gelée. Une nouvelle campagne ne modifie pas le contrat. Une carte approuvée n'autorise ni acquisition, ni dépense, ni publication.
+Le suivi GitHub reste extérieur à la carte : état de l’Issue, `Status` du Project et progrès des sous-Issues ne décrivent pas l’exécution d’une campagne. Une carte approuvée n’autorise ni acquisition, ni dépense, ni publication.
 
 Toute extension suit la [règle KISS](../docs/RULES.md#11-kiss-et-évolution).
 
@@ -17,13 +15,15 @@ Toute extension suit la [règle KISS](../docs/RULES.md#11-kiss-et-évolution).
 | Champ | Valeur |
 |---|---|
 | Identifiant stable de tâche | `<slug décidé>` |
-| Version de tâche | `<identité et empreinte du contrat et des cas>` |
+| Version de tâche | `<identité et empreinte du contrat, des cas, de la référence de jugement et de la méthode d’évaluation>` |
 | Tâche | `<travail précis>` |
+| Métier ou domaine ; famille de tâche | `<contexte d’usage ; travail demandé, sans comparabilité implicite>` |
 | Titre public | `<titre lisible de la tâche, repris tel quel par la restitution>` |
 | Demandeur-lecteur | `<besoin exprimé par ce rôle>` |
-| Responsable de campagne | `<rôle tenu, sans identité codée>` |
+| Responsable de campagne | `<rôle et référence de responsabilité vérifiable ; identité privée si nécessaire>` |
 | Date de préparation | `<date>` |
-| Approbation du responsable de campagne avant exécution | `EN_ATTENTE` / `<preuve et date>` |
+
+Approbation du responsable de campagne avant exécution, hors empreinte du contrat : `EN_ATTENTE` / `<preuve et date, référençant l’empreinte du contrat et les preuves de qualification>`. Cette preuve est liée au contrat sans entrer dans l’empreinte qu’elle approuve.
 
 Une valeur `EN_ATTENTE` interdit l'exécution. Le demandeur-lecteur fournit son besoin ; le responsable de campagne prépare et approuve le contrat. Les deux rôles peuvent être tenus par la même personne.
 
@@ -35,7 +35,9 @@ Une valeur `EN_ATTENTE` interdit l'exécution. Le demandeur-lecteur fournit son 
 
 ### Résultat attendu
 
-`<artefact ou état précis qui sert le besoin>`
+`<artefact ou état précis qui sert le besoin ; propriétés réellement mesurées et propriétés non évaluées>`
+
+Usage du résultat et intervention humaine : `<ce que le destinataire peut en faire ; relecture, adaptations ou corrections nécessaires admises par le contrat>`.
 
 ### Décision éclairée
 
@@ -58,19 +60,23 @@ Une valeur `EN_ATTENTE` interdit l'exécution. Le demandeur-lecteur fournit son 
 
 ### Cas d'essai
 
-| Cas | Entrée exacte | Identité ou empreinte | Difficulté couverte | Preuves attendues |
+| Cas | Entrée exacte et provenance | Identité ou empreinte | Charge et difficulté décrites | Preuves attendues |
 |---|---|---|---|---|
-| `<id>` | `<texte ou référence>` | `<identité>` | `<motif du choix>` | `<références>` |
+| `<id>` | `<texte ou référence>` | `<identité>` | `<quantité et unité pertinentes ; contraintes concrètes et motif du choix>` | `<références>` |
 
-Couverture et limites : `<cas retenus et portée réellement recherchée>`.
+Niveau éventuel : `<définition et dimensions approuvées avant exécution, ou NON DÉFINI>`. Décrire les caractéristiques qui varient entre cas et celles qui restent communes, selon les [règles de charge et de portée](../docs/RULES.md#4-contrat-avant-exécution). Une étiquette ne remplace pas cette description.
 
-Règle d'agrégation des verdicts : `<règle fixée avant exécution, ou AUCUNE : verdicts par cas seulement>`.
+Couverture et limites : `<motif de sélection, usages couverts et exclus, nature synthétique ou réelle, biais connus et limites de généralisation>`.
+
+Règle d’agrégation : `<forme et portée du résultat ; cas et tentatives pris en compte, dénominateur, traitement des manquants, incidents et INDETERMINE ; ou AUCUNE : verdicts par cas et tentative seulement>`.
 
 ### Entrées et outils autorisés
 
 | Élément | Rôle | Visible au candidat | Identité ou empreinte |
 |---|---|:---:|---|
 | `<entrée ou outil>` | `<rôle>` | oui / non | `<version, SHA-256 ou INCONNU>` |
+
+Modalité documentaire, si pertinente : `<textes utiles fournis, recherche dans une bibliothèque figée ou consultation externe autorisée ; corpus, versions et droits ; preuves prévues des requêtes et pièces consultées>`.
 
 Tout élément non listé est indisponible. Aucun secret ou chemin externe n'est autorisé sans décision explicite.
 
@@ -86,13 +92,13 @@ La sortie brute est conservée avant contrôle ou jugement. Aucun post-traitemen
 
 | ID | Obligation | Preuve attendue |
 |---|---|---|
-| `O1` | `<condition obligatoire>` | `<observation prévue avant exécution>` |
+| `O1` | `<condition nécessaire à l’usage ; motif et tolérances recevables propres à ce critère>` | `<contrôle, version, observation et pièce attendue>` |
 
 ### Erreurs éliminatoires
 
 | ID | Erreur | Preuve | Effet |
 |---|---|---|---|
-| `E1` | `<défaut précis>` | `<observation>` | interdit `SATISFAIT` |
+| `E1` | `<défaut précis, avec limites ou tolérances propres à cette condition>` | `<contrôle, version et observation>` | interdit `SATISFAIT` |
 
 ### Critères secondaires
 
@@ -109,22 +115,47 @@ Conserver au maximum deux lignes. Un critère est défini avant l'exécution et 
 - `NE SATISFAIT PAS` : erreur éliminatoire ou obligation non remplie établie
 - `INDETERMINE` : preuve insuffisante ou contradictoire
 
-Aucun autre verdict, score global ou seuil ajouté après résultat n'est permis.
+Appliquer les [règles de verdict](../docs/RULES.md#6-erreurs-et-verdict), notamment lorsqu’un défaut est prouvé mais qu’un autre contrôle manque.
 
-## 5. Références de campagne et de panel
+### Référence et méthode d’évaluation
 
-Ces informations appartiennent au manifeste de chaque campagne, référencé par le catalogue ; elles ne réécrivent pas la version de tâche.
+Référence de jugement : `<identité et empreinte ; attendus reliés aux passages, calculs ou contraintes ; solutions alternatives recevables ; informations insuffisantes et points discutables>`.
+
+Qualification avant approbation, enregistrée hors empreinte du contrat : `<preuves référençant le contrat candidat exact ; vérification de la consigne, des cas, de la référence et des contrôles ; témoins adaptés de réussite, de défaut et d’alternative valable lorsqu’il en existe ; ambiguïtés lorsqu’elles sont prévues ; limites non résolues>`.
+
+Méthode : `<contrôles automatiques et témoins prévus identifiés et versionnés ; jugement humain ou assisté, configuration et consignes prévues de l’assistance IA éventuelle ; responsable, constats et approbation requis ; visibilité de l’identité et du coût pendant le jugement>`.
+
+Revue de la référence et de la méthode avant approbation, enregistrée hors empreinte du contrat : `<auteurs et pièces ; pour chaque assistance IA, configuration, consignes et sources, critiques, désaccords et arbitrage ; revue professionnelle : phase, périmètre et preuve, ou ABSENTE ; limites restantes>`. Appliquer les [règles de qualification et de revue](../docs/RULES.md#4-contrat-avant-exécution).
+
+Exposition connue avant approbation : `<part de la référence visible au candidat ; connaissance préalable des cas par les modèles ou évaluateurs, si connue ; protections et limites>`. Une référence incertaine suit les [règles de verdict](../docs/RULES.md#6-erreurs-et-verdict).
+
+### Base de coût fixée avant exécution
 
 | Champ | Valeur |
 |---|---|
-| Campagne | `<identité>` |
+| Périmètre d'attribution | `<coûts inclus et exclus ; préparation et jugement distingués, avec règle d’imputation s’ils entrent dans la comparaison>` |
+| Tentatives comptées | `<première tentative, retries autorisés, incidents>` |
+| Unité commune | `<devise et unité>` |
+| Règle de conversion | `<source, date et formule, ou SANS OBJET>` |
+
+La base fixe aussi l’unité de travail comparable : `<cas et quantité de travail auxquels le coût se rapporte>`. Les prix datés, prévisions, réservations et dépenses observées appartiennent à la campagne ; ils ne réécrivent pas cette base.
+
+## 5. Références de campagne et de panel
+
+Le manifeste de chaque campagne, référencé par le catalogue, fige les informations suivantes sans réécrire la version de tâche.
+
+| Champ | Valeur |
+|---|---|
+| Campagne et version de manifeste | `<identité et empreinte>` |
+| Moteur prévu | `<version et interfaces retenues>` |
 | Version de tâche et cas retenus | `<références et empreintes>` |
 | Panel figé | `<référence et empreinte>` |
-| Autorité d'exécution produit | `<référence ou ABSENTE>` |
-| Autorité des appels candidats et budget | `<référence ou ABSENTE>` |
-| Autorité de publication | `<référence ou ABSENTE>` |
 
-Pour chaque configuration du panel, conserver :
+Liens entre l’assistance IA et ce panel : `<modèle ou fournisseur commun à la préparation, au jugement et aux candidats ; exposition connue lors de la campagne, protections et limites>`, selon les [règles de revue](../docs/RULES.md#4-contrat-avant-exécution).
+
+Autorités liées au manifeste : exécution produit `<référence ou ABSENTE>` ; appels candidats et budget `<référence ou ABSENTE>`. Leur preuve, comme celle d’une reprise ultérieure, est conservée séparément des conditions figées. L’autorité de publication est référencée en section 9.
+
+Pour chaque configuration demandée du panel, conserver :
 
 | Champ | Valeur |
 |---|---|
@@ -132,9 +163,9 @@ Pour chaque configuration du panel, conserver :
 | Modèle et révision imposée | `<nom, version exacte et preuve attendue>` |
 | Fournisseur et accès direct ou API | `<valeurs>` |
 | Identifiant utilisable sur le canal | `<identifiant vérifié, ou INCONNU>` |
-| Route demandée et route observée | `<valeurs distinctes, ou INCONNU>` |
-| Paramètres et effort demandés puis observés | `<valeurs distinctes, ou INCONNU>` |
-| Identité observée | `<valeur et preuve, ou INCONNU>` |
+| Route demandée | `<valeur, ou INCONNU>` |
+| Paramètres et effort demandés | `<valeurs, ou INCONNU>` |
+| Observations exigées | `<sources, champs ou pièces observables attendus pour prouver l’identité, la route, les paramètres et l’effort>` |
 
 La sélection d'un nom ne prouve pas sa disponibilité. Une révision imposée ne peut pas être remplacée silencieusement. Pour un modèle local autorisé, relever aussi poids, quantification, serveur d'inférence et matériel. Les conditions communes sont référencées une fois en section 6.
 
@@ -145,16 +176,16 @@ Déclarées et figées dans le manifeste de campagne avant le premier candidat, 
 | Champ | Valeur commune figée | Statut |
 |---|---|---|
 | Paquet ou fork Pi | `<valeur>` | `<déclarée / configurée / active / observée>` |
-| Version exécutée | `<valeur ou INCONNU>` | `<statut>` |
+| Version exécutée et empreinte de Pi | `<valeurs ou INCONNU>` | `<statut>` |
 | Paquets ou extensions | `<identifiants exacts ou aucun>` | `<statut>` |
 | Outils | `<liste ou aucun>` | `<statut>` |
 | Skills | `<état>` | `<statut>` |
 | Contexte | `<identité ou empreinte>` | `<statut>` |
 | Réglages par défaut de Pi | `<fournisseur, modèle et effort par défaut>` | `<statut>` |
-| Environnement | `<valeur>` | `<statut>` |
+| Environnement | `<système, matériel, runtimes, dépendances et identités nécessaires à l’attribution>` | `<statut>` |
 | Date de gel | `<date>` | observée |
 
-Tout changement d'un de ces champs ouvre une nouvelle comparaison. Pi reste le harnais commun. L'environnement identifié doit rester disponible pendant la campagne malgré les mises à jour du poste ou du site.
+Chaque valeur référence sa preuve et sa date. Les [règles de gel](../docs/RULES.md#4-contrat-avant-exécution) et l’[identité d’environnement](../docs/ARD.md#31-identité-de-lenvironnement-dexécution) s’appliquent. Les réglages influents non observables et les limites de reproduction sont déclarés.
 
 ## 7. Acquisition et incidents
 
@@ -164,62 +195,41 @@ Tout changement d'un de ces champs ouvre une nouvelle comparaison. Pi reste le h
 |---|---|
 | Tentatives autorisées par cas et configuration | `<règle et autorité, ou aucune>` |
 | Retries autorisés | `<règle et autorité, ou aucun>` |
-| Dépense maximale | `<montant, devise, périmètre et autorité, ou zéro>` |
+| Dépense maximale | `<montant, devise, périmètre et autorité, ou ABSENTE : appel interdit>` |
 | Durée et arrêt | `<limites décidées ou mesurées, sans valeur inventée>` |
 
-Une autorité absente interdit l'opération correspondante. Ces valeurs appartiennent au manifeste de campagne.
+Une autorité absente interdit l’opération correspondante. Le manifeste fixe aussi le plan d’ordre, les répétitions éventuelles et leur justification ; aucun nombre n’est imposé par le gabarit. La reprise doit nommer les cellules encore autorisées et les effets acquis, selon les [règles d’admission et de reprise](../docs/RULES.md#9-incidents-et-inconnues).
 
-### Base de coût fixée avant exécution
-
-| Champ | Valeur |
-|---|---|
-| Périmètre d'attribution | `<coûts inclus et exclus>` |
-| Tentatives comptées | `<première tentative, retries autorisés, incidents>` |
-| Unité commune | `<devise et unité>` |
-| Règle de conversion | `<source, date et formule, ou SANS OBJET>` |
+La base de coût est celle du contrat en section 4. Chaque campagne lui associe :
 
 | Champ | Valeur |
 |---|---|
-| Les cas et tentatives prévus suffisent-ils à la conclusion permise ? | `<justification et limites ; aucune fiabilité générale déduite d'un seul cas>` |
-| Politique de retry | `<règle autorisée ou aucun>` |
-| Règle d'arrêt | `<condition>` |
-| Source du coût observé | `<reçu, ou INCONNU>` |
+| Prix et prévision avant appel | `<source datée, calcul, périmètre et limite de facturation connue>` |
+| Réservations et dépenses | `<registre lié aux tentatives ; coût observé sourcé ou INCONNU>` |
+| Admission | `<preuve des identités, conditions, stockage, autorités et budget avant émission>` |
+| Interruption ou reprise | `<motif, intentions, reçus et effets inconnus conservés ; autorité de reprise éventuelle>` |
 
-| Classe | Preuve | Effet |
-|---|---|---|
-| Sortie obtenue | artefact relié au reçu | appliquer le contrat |
-| Incident fournisseur | preuve attribuable | publier séparément |
-| `HARNESS_ERROR` | défaut du dispositif | réduire la couverture, sans produire `NE SATISFAIT PAS` |
-| Preuve manquante | champ requis absent | `INDETERMINE` ou `INCONNU` |
-
-Répétitions et statistiques exigent une justification et une règle préalable. Prévision, réservation, coût observé et limite fournisseur restent distincts. Une tentative aux effets inconnus ne doit pas être rejouée ; les observations d'une campagne partielle restent conservées.
+Les incidents conservent leur preuve et leur portée. Leur effet sur l’évaluation suit les [règles de verdict](../docs/RULES.md#6-erreurs-et-verdict) ; la couverture manquante reste visible.
 
 ## 8. Verdicts et décision économique
 
-La restitution référence les verdicts par cas, les tentatives et les reçus de la campagne, sans les recopier dans le contrat gelé.
+La restitution référence les verdicts par cas, les tentatives et les reçus de la campagne, sans les recopier dans le contrat gelé. Chaque opération conserve son identifiant d’exécution, sa version réelle du moteur, ses entrées, son autorité et sa terminaison. Chaque tentative relie la demande figée aux valeurs observées de fournisseur, modèle, accès, route, paramètres et effort, avec leur source ou `INCONNU`, selon les [objets d’acquisition](../docs/ARD.md#44-acquisition-tentative-et-exécution).
 
 | Cas et tentative | Configuration | Erreurs et obligations | Verdict | Motif et critères concernés | Preuves | Coût observé | Bénéfices prévus |
 |---|---|---|---|---|---|---|---|
 | `<identités>` | `<identité>` | `<constats>` | `<verdict>` | `<motif et références>` | `<pièces et passages>` | `<valeur et unité, ou INCONNU>` | `<faits ou AUCUN>` |
 
+Les reçus d’évaluation conservent les configurations et consignes réellement utilisées par l’assistance IA éventuelle, les pièces vues, les constats, désaccords et arbitrages requis par la méthode, sans les ajouter rétroactivement à la carte gelée.
+
 Une synthèse multi-cas applique uniquement la règle d'agrégation du contrat et affiche sa couverture.
 
 Responsable des verdicts : `<rôle>`.
 
-Appliquer l'ordre suivant :
-
-1. erreurs éliminatoires ;
-2. obligations et preuve ;
-3. verdict ;
-4. exclusion de `NE SATISFAIT PAS` et `INDETERMINE` de la recommandation économique ;
-5. coût connu et comparable parmi les seuls `SATISFAIT` ;
-6. bénéfices prévus des `SATISFAIT` plus chers.
-
-La page campagne expose la conclusion contextualisée, un tableau commun des configurations puis les preuves sur demande. Cet ordre de lecture ne modifie pas l'ordre de calcul. La recommandation économique reste limitée aux configurations `SATISFAIT`.
+Appliquer l’[ordre de décision](../docs/RULES.md#7-ordre-de-décision) et les [règles économiques](../docs/RULES.md#8-coût-et-bénéfices). La restitution suit le [parcours public](../docs/PRD.md#10-restitution-publique).
 
 ### Conclusion économique
 
-`<COMPLETE si tous les coûts SATISFAIT sont connus et comparables ; sinon INCOMPLETE>`
+`<conclusion bornée aux cas et tentatives comparables ; INCOMPLETE si le coût d’une configuration SATISFAIT est INCONNU ou non comparable ; sans admissible, indiquer que la comparaison est sans objet>`
 
 ### Configurations `SATISFAIT` co-moins-chères
 
@@ -239,28 +249,27 @@ Pièces privées et limites de vérification publique : `<références et motifs
 
 La publication référence son autorité et sa version de restitution. Aucun contenu candidat n'est interprété comme code actif dans le site.
 
-La restitution contient cette formulation ou son équivalent :
-
-> Le verdict porte sur la configuration observée sous les conditions de test communes déclarées. Il n'attribue pas au seul modèle un effet que le fournisseur, l'effort, Pi ou ses réglages peuvent influencer, et ne démontre pas que le modèle isolé aurait produit le même résultat sous un autre harnais, fournisseur, contexte ou environnement.
+Limite d’attribution affichée : `<formulation conforme au PRD, section 8, et limites propres à la campagne>`.
 
 ## 10. Qualification documentaire
 
 - [ ] version, cas et preuves attendues sont identifiés ; la couverture est justifiée
-- [ ] résultat attendu, obligations et erreurs éliminatoires sont définis avant exécution
+- [ ] résultat attendu, usage, intervention humaine, obligations et tolérances, erreurs éliminatoires sont définis avant exécution
+- [ ] référence et méthode sont identifiées et qualifiées ; alternatives, exposition, assistance IA et éventuelle revue professionnelle sont documentées
 - [ ] toute agrégation des cas est définie avant exécution, sinon seuls les verdicts par cas sont permis
 - [ ] chaque campagne référence le contrat sans le réécrire ; ses autorités et états restent distincts
 - [ ] les trois verdicts sont présents
 - [ ] zéro à deux critères secondaires sont prévus, avec unité et sens favorable s'ils départagent
 - [ ] le responsable de campagne a approuvé le contrat ou l'exécution reste interdite
 - [ ] les conditions de test communes sont déclarées une fois et identiques entre les configurations comparées
-- [ ] chaque configuration expose ses valeurs propres, dont l'effort de raisonnement effectif
+- [ ] chaque configuration expose l’effort demandé et l’effort observé, ou `INCONNU` pour une valeur non prouvée
 - [ ] chaque configuration distingue sa route demandée de sa route observée ; toute valeur non prouvée reste `INCONNU`
 - [ ] la base de coût fixe le périmètre d'attribution, les tentatives comptées, l'unité commune et la conversion éventuelle avant exécution
 - [ ] chaque verdict porte un motif, ses preuves et son responsable
 - [ ] le coût observé de chaque configuration reste visible ; les non-`SATISFAIT` sont exclus de la recommandation économique et la conclusion est `INCOMPLETE` si un coût `SATISFAIT` est inconnu ou non comparable
 - [ ] aucun score global, podium général, classement universel ou graphique trompeur n'est produit
 - [ ] la limite d'attribution est visible
-- [ ] les éléments différés restent absents
+- [ ] les extensions non autorisées restent absentes
 - [ ] la conclusion est bornée au contrat, aux cas et tentatives couverts, à la campagne, aux conditions communes et à la date
 - [ ] les pièces publiables sont autorisées et les restrictions sont visibles
 

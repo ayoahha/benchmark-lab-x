@@ -16,7 +16,7 @@ Lire les documents utiles avant de modifier leur domaine :
 
 - `docs/PRD.md` pour le besoin et le périmètre produit
 - `docs/ARD.md` pour les objets, frontières et flux
-- `docs/RULES.md` pour les invariants de décision et de preuve
+- `docs/RULES.md` pour les invariants de décision et de preuve, ainsi que le versionnement SemVer
 - `CONTEXT.md` pour le vocabulaire
 - `tasks/TEMPLATE.md` pour le contrat minimal d'une future tâche
 
@@ -33,7 +33,7 @@ La demande actuelle d'Ayo prévaut sur ce fichier. PRD, ARD et règles gouvernen
 - ne pas transformer une découverte adjacente en nouvelle tâche
 - ne pas fabriquer de mesure, de preuve, d'état ou d'autorité absente
 - séparer clairement fait établi, déduction et hypothèse lorsque cette distinction change une décision
-- ne jamais requalifier V0 ou V1 à partir de la spécification courante
+- ne jamais requalifier les campagnes et prototypes historiques à partir de la spécification courante
 
 ## Autorité et sécurité
 
@@ -45,9 +45,9 @@ Demander une autorisation explicite avant toute opération Git destructive, fusi
 
 GitHub Issues porte les tâches, dépendances, décisions et preuves. Le champ `Status` du [Project #5](https://github.com/users/ayoahha/projects/5) porte l'état de travail. Aucun backlog local ne le duplique.
 
-Créer ou redécouper les Issues seulement après décision explicite d'Ayo. Ne pas redécouper les anciennes cartes pour fabriquer le nouveau backlog. Utiliser Parent issue et Sub-issues progress pour Initiative, Epic et Story ; réserver « graphe » à l'exécution agentique. Le nombre d'Epics et de Stories découle des résultats décidés, au minimum KISS.
+Créer ou redécouper les Issues seulement après décision explicite d’Ayo. Vérifier le parent courant avant toute création ; ne pas rattacher une nouvelle livraison à une initiative historique par défaut. Ne pas redécouper les anciennes cartes pour fabriquer le nouveau backlog. Utiliser les relations natives `Parent issue` et `Sub-issues progress` pour Initiative, Epic et Story ; réserver « graphe » à l’exécution agentique. Le nombre d’Epics et de Stories découle des résultats décidés.
 
-Aucune Story de tâche, campagne ou candidat tant que son contenu, son panel et son budget ne sont pas décidés. Une Issue se ferme avec sa preuve de résultat ou une décision explicite de remplacement. Son état ne prouve pas l'état d'exécution d'une campagne.
+Aucune Story de tâche, campagne ou candidat tant que son contenu, son panel et son budget ne sont pas décidés. Une Issue se ferme avec sa preuve de résultat ou une décision explicite de remplacement. Distinguer l’état ouvert ou fermé de l’Issue, le champ `Status` du Project et le progrès de ses sous-Issues. Aucun ne prouve l’état d’exécution d’une campagne. `tasks/TEMPLATE.md` décrit une tâche de benchmark, pas une Story de livraison.
 
 ## Validation
 
@@ -57,7 +57,7 @@ Exécuter d'abord le test le plus proche du changement. Avant livraison d'un cha
 uv run --with requests --with mpmath==1.3.0 python -m unittest discover -s tests
 ```
 
-Cette commande ne découvre pas la suite `v2_alpha_demo/test_demo.py`. Ne pas la présenter comme validation complète du moteur ; distinguer ses preuves macOS de celles réellement acquises sous Linux. Ne pas lancer un appel modèle pour compenser un test absent.
+Cette commande ne découvre pas la suite `benchmark_lab_x/test_demo.py`. Ne pas la présenter comme validation complète du moteur ; distinguer ses preuves macOS de celles réellement acquises sous Linux. Ne pas lancer un appel modèle pour compenser un test absent.
 
 Pour un changement documentaire, vérifier aussi les liens, les chemins canoniques et l'absence de source concurrente. Ne pas déplacer dans la prose un contrôle que la CI peut garantir.
 
@@ -73,4 +73,4 @@ S'arrêter dès que le résultat autorisé est prouvé. Si une information ou un
 
 ## Règles de revue
 
-Signaler comme bloquant toute nouvelle autorité documentaire concurrente, requalification de V0 ou V1, architecture présentée comme construite sans preuve ou choix d'architecture sans autorité, secret versionné ou contournement d'une preuve requise. Laisser le formatage automatique aux outils du dépôt.
+Signaler comme bloquant toute nouvelle autorité documentaire concurrente, requalification de campagnes ou prototypes historiques, architecture présentée comme construite sans preuve ou choix d'architecture sans autorité, secret versionné ou contournement d'une preuve requise. Laisser le formatage automatique aux outils du dépôt.
