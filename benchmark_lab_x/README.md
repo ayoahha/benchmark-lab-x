@@ -91,6 +91,40 @@ Une préparation antérieure au changement de moteur n’est pas réutilisable p
 
 Le workflow [GitHub Pages](../.github/workflows/pages.yml) publie `pages/` lors des changements configurés sur `main`. Construire une page locale et l’intégrer dans cette publication sont deux actions d’autorités distinctes.
 
+## Interfaces locales du service Linux en construction
+
+Le module `benchmark_lab_x.runtime` fournit une initialisation privée, la vérification de SQLite et des pièces, la maintenance, une sauvegarde cohérente et une restauration vers un nouvel emplacement. Ces interfaces sont distinctes du moteur historique ci-dessus. Le serveur public, le traitement des travaux longs et leurs accès ne sont pas encore fournis ; ces commandes ne constituent pas le service 0.1.0 complet.
+
+Avec Python 3.12 ou supérieur, le répertoire parent des données doit exister. L’initialisation crée exclusivement son emplacement, en mode privé, et refuse tout répertoire déjà présent :
+
+```sh
+python3 -B -m benchmark_lab_x.runtime initialize --data /chemin/prive/benchmark
+python3 -B -m benchmark_lab_x.runtime verify --data /chemin/prive/benchmark
+python3 -B -m benchmark_lab_x.runtime status --data /chemin/prive/benchmark
+```
+
+Ces commandes n’émettent aucun appel modèle. Les pièces et les révisions de dossier sont immuables. Une empreinte divergente, une pièce orpheline, une référence dangereuse ou un schéma inconnu provoque un refus. La bibliothèque de stockage utilise des réservations monétaires entières, attribuées à leur phase ; elle persiste l’intention et l’état d’émission avant le transport. Elle ne fournit pas encore le transport ni l’interface publique d’autorisation.
+
+Pour une sauvegarde, arrêter les admissions puis attendre la fin des émissions actives. La vérification de quiescence distingue les travaux encore en cours des effets historiques inconnus. Ces derniers restent conservés et bloquent la reprise des appels :
+
+```sh
+python3 -B -m benchmark_lab_x.runtime maintenance --data /chemin/prive/benchmark
+python3 -B -m benchmark_lab_x.runtime quiescence --data /chemin/prive/benchmark
+python3 -B -m benchmark_lab_x.runtime backup --data /chemin/prive/benchmark --destination /chemin/prive/sauvegarde-neuve
+python3 -B -m benchmark_lab_x.runtime verify-backup --data /chemin/prive/sauvegarde-neuve
+python3 -B -m benchmark_lab_x.runtime restore --data /chemin/prive/sauvegarde-neuve --destination /chemin/prive/restauration-neuve
+```
+
+La sauvegarde bloque les écrivains SQLite pendant la copie des pièces et vérifie leurs liens. La restauration préserve la source et toute cible existante. Elle impose un blocage durable des admissions, même après une autre maintenance : le rapprochement des effets postérieurs à la sauvegarde doit être réalisé avant toute reprise. Cette interface de rapprochement reste à construire. Une copie de données vérifiée ne prouve pas la restauration d’un service Linux ni une récupération PBS.
+
+`tools/build_runtime.py` construit une archive déterministe depuis les seuls fichiers suivis d’un commit complet. Il ignore les modifications du worktree et refuse une source dépourvue des interfaces runtime. La sortie JSON relie le commit, l’arbre, les blobs Git et l’empreinte de l’archive. Le build n’installe aucune dépendance et n’exécute pas la source construite :
+
+```sh
+python3 tools/build_runtime.py --source <commit-produit-complet> --output /chemin/benchmark-runtime.tar.gz
+```
+
+Le reçu décrit la construction effectuée ; son authenticité doit être vérifiée depuis le job ou l’opérateur identifié. L’archive utilise le format `release.json` du candidat infra. Elle ne fournit pas encore de serveur web ni d’exécuteur et ne doit pas être déployée comme un service complet. Aucun tag de livraison 0.1.0 n’est créé par ces interfaces.
+
 ## Outillage des premières campagnes
 
 Les outils sous `tools/` conservent leurs contrats historiques et ne sont pas les commandes décrites ci-dessus. Dans `tools/campagne_v1.py`, le rendu et sa vérification calculent encore les empreintes des canons du checkout courant sous des libellés historiques ; les tests rétablissent au contraire les contrats du commit `38e226a59020aad517cd0dbb16892ffb87d448ab`. Leur réussite ne valide pas une restitution historique régénérée contre les canons courants. Toute opération sur ces campagnes doit identifier ses sources d’origine avant exécution.

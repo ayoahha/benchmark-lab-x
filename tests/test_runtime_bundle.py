@@ -1,0 +1,48 @@
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import unittest
+
+from tools.build_runtime import build
+
+
+class RuntimeBundleTests(unittest.TestCase):
+    def test_build_is_commit_bound_reproducible_and_runtime_initializes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / 'source'
+            repo.mkdir()
+            package = repo / 'benchmark_lab_x'
+            package.mkdir()
+            source_package = Path(__file__).resolve().parents[1] / 'benchmark_lab_x'
+            for name in ('__init__.py', 'storage.py', 'runtime.py'):
+                shutil.copyfile(source_package / name, package / name)
+            (repo / 'tools').mkdir()
+            shutil.copyfile(source_package.parent / 'tools/build_runtime.py', repo / 'tools/build_runtime.py')
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(repo), *args], stderr=subprocess.DEVNULL).decode().strip()
+            git('init')
+            git('add', 'benchmark_lab_x', 'tools/build_runtime.py')
+            commit = git('-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit-tree', git('write-tree'), '-m', 'Controlled runtime fixture')
+            first = build(repo, commit, root / 'first.tar.gz')
+            (package / 'storage.py').write_text('Invalid uncommitted content')
+            second = build(repo, commit, root / 'second.tar.gz')
+            self.assertEqual(first, second)
+            unpacked = root / 'release'
+            unpacked.mkdir()
+            with tarfile.open(root / 'first.tar.gz') as archive:
+                archive.extractall(unpacked, filter='data')
+            manifest = json.loads((unpacked / 'release.json').read_text())
+            for name, expected in manifest['files'].items():
+                self.assertEqual(expected, hashlib.sha256((unpacked / name).read_bytes()).hexdigest())
+            result = subprocess.run([sys.executable, '-m', 'benchmark_lab_x.runtime', 'initialize', '--data', str(root / 'private')], cwd=unpacked, check=True, capture_output=True, text=True)
+            self.assertEqual('INITIALIZED_ADMISSION_BLOCKED', json.loads(result.stdout)['state'])
+
+
+if __name__ == '__main__':
+    unittest.main()
