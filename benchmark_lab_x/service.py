@@ -12,6 +12,11 @@ import socket
 import socketserver
 import sqlite3
 import stat
+import threading
+from http.cookies import SimpleCookie, CookieError
+from urllib.parse import parse_qs
+
+from .storage import ConflictError, BudgetError, _unique_object
 
 from .storage import Store
 from .runtime import encode, status, stop, verify
@@ -40,7 +45,7 @@ def executor_health(path):
         return result
 
 
-def serve_executor(data, socket_path, source):
+def serve_executor(data, socket_path, source, *, transport=None):
     data, socket_path = Path(data), Path(socket_path)
     with closing(Store(data)) as store:
         lock_fd = os.open(data / 'executor.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -58,10 +63,31 @@ def serve_executor(data, socket_path, source):
                 def handle(self):
                     self.connection.settimeout(2)
                     try:
-                        if self.rfile.readline(8) != b'health\n':
-                            return
-                        verify(store)
-                        result = {'source_sha': source, 'storage': 'ok', **status(data, store)}
+                        raw = self.rfile.readline(1048577)
+                        if raw == b'health\n':
+                            verify(store)
+                            result = {'source_sha': source, 'storage': 'ok', **status(data, store)}
+                        else:
+                            from . import preparation
+                            if len(raw) > 1048576 or not raw.endswith(b'\n'):
+                                return
+                            message = json.loads(raw, object_pairs_hook=_unique_object)
+                            if set(message) != {'method', 'path', 'token', 'body'}:
+                                return
+                            try:
+                                code, value, cookie, start = preparation.dispatch(
+                                    store, message['method'], message['path'], message['token'], message['body'],
+                                    source, transport is not None)
+                                if start:
+                                    threading.Thread(target=preparation.execute, args=(data, start, transport), daemon=True).start()
+                                result = {'status': code, 'value': value.hex() if isinstance(value, bytes) else value,
+                                          'piece': isinstance(value, bytes), 'cookie': cookie}
+                            except preparation.Denied:
+                                result = {'status': 403, 'value': {'error': 'Accès refusé : session, CSRF ou admission requis.'}}
+                            except (ConflictError, BudgetError):
+                                result = {'status': 409, 'value': {'error': 'Action refusée : révision périmée, opération en attente ou budget indisponible. Consultez le dossier courant.'}}
+                            except (ValueError, KeyError, TypeError, sqlite3.Error):
+                                result = {'status': 400, 'value': {'error': 'Action non vérifiée. Vérifiez les champs ou consultez le dossier courant.'}}
                         self.wfile.write((encode(result) + '\n').encode())
                     except (OSError, ValueError, sqlite3.Error):
                         return
@@ -72,6 +98,18 @@ def serve_executor(data, socket_path, source):
             stop(data, store, 'PROCESS_STOPPED_ADMISSION_BLOCKED', after_process_exit=True)
         finally:
             os.close(lock_fd)
+
+
+def preparation_request(socket_path, method, path, token, body=None):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(2)
+        connection.connect(str(socket_path))
+        connection.sendall((encode(dict(method=method, path=path, token=token, body=body)) + '\n').encode())
+        with connection.makefile('rb') as stream:
+            raw = stream.readline(8388609)
+        if len(raw) > 8388608 or not raw.endswith(b'\n'):
+            raise ValueError('Réponse de préparation invalide')
+        return json.loads(raw)
 
 
 def run(server):
@@ -107,23 +145,98 @@ def serve_web(address, port, public, socket_path, source):
             # Les URL peuvent contenir une saisie privée ; ne pas les journaliser
             pass
 
-        def respond(self, code, value, media_type='application/json'):
+        def respond(self, code, value, media_type='application/json', headers=None):
             raw = value if isinstance(value, bytes) else encode(value).encode()
             self.send_response(code)
             self.send_header('Content-Type', media_type)
             self.send_header('Content-Length', str(len(raw)))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
-            self.send_header('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'")
+            self.send_header('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
             self.send_header('Referrer-Policy', 'no-referrer')
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             if self.command != 'HEAD':
                 self.wfile.write(raw)
+
+        def preparation(self):
+            from . import preparation
+            if self.path == '/preparation/style.css' and self.command in ('GET', 'HEAD'):
+                self.respond(200, Path(__file__).with_name('preparation.css').read_bytes(), 'text/css; charset=utf-8')
+                return
+            wants_json = 'application/json' in self.headers.get('Accept', '')
+            try:
+                cookies = SimpleCookie(self.headers.get('Cookie', ''))
+                cookie = cookies.get('benchmark_session')
+                token = cookie.value if cookie else None
+                body = None
+                if self.command == 'POST':
+                    length = self.headers.get('Content-Length', '')
+                    if not length.isdecimal() or not 0 < int(length) <= 524288 or self.headers.get('Transfer-Encoding'):
+                        raise ValueError('Corps invalide')
+                    raw = self.rfile.read(int(length))
+                    if len(raw) != int(length):
+                        raise ValueError('Corps incomplet')
+                    media = self.headers.get_content_type()
+                    if media == 'application/json':
+                        body = json.loads(raw, object_pairs_hook=_unique_object)
+                    elif media == 'application/x-www-form-urlencoded':
+                        values = parse_qs(raw.decode('utf-8'), keep_blank_values=True, strict_parsing=True)
+                        if any(len(v) != 1 for v in values.values()):
+                            raise ValueError('Champ répété')
+                        body = {k: v[0] for k, v in values.items()}
+                        if 'revision' in body:
+                            if not re.fullmatch('[1-9][0-9]*', body['revision']):
+                                raise ValueError('Révision invalide')
+                            body['revision'] = int(body['revision'])
+                    else:
+                        raise ValueError('Type de formulaire inconnu')
+                result = preparation_request(socket_path, 'GET' if self.command == 'HEAD' else self.command,
+                                             self.path, token, body)
+                headers = {}
+                if result.get('cookie'):
+                    token = result['cookie']
+                    headers['Set-Cookie'] = ('benchmark_session=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/preparation')
+                if result.get('piece'):
+                    headers['Content-Disposition'] = 'inline; filename="piece.txt"'
+                    self.respond(result['status'], bytes.fromhex(result['value']), 'text/plain; charset=utf-8', headers)
+                elif wants_json:
+                    self.respond(result['status'], result['value'], headers=headers)
+                else:
+                    csrf = ''
+                    view_path = self.path
+                    if result['status'] < 400:
+                        home = preparation_request(socket_path, 'GET', '/preparation', token)
+                        csrf = home['value']['csrf_token']
+                        if self.command == 'POST' and self.path.endswith('/validation'):
+                            target = '/preparation/dossiers/' + result['value']['dossier_id']
+                            result = preparation_request(socket_path, 'GET', target, token)
+                            view_path = target
+                    page = preparation.render(result['value'], csrf, view_path, error=result['status'] >= 400)
+                    self.respond(result['status'], page, 'text/html; charset=utf-8', headers)
+            except (ValueError, TypeError, KeyError, CookieError):
+                value = {'error': 'Formulaire invalide. Aucun nouvel appel admis.'}
+                self.respond(400, value if wants_json else preparation.render(value, '', error=True),
+                             'application/json' if wants_json else 'text/html; charset=utf-8')
+            except OSError:
+                value = {'error': 'Exécuteur indisponible. Consultez le dossier avant toute nouvelle soumission.'}
+                self.respond(503, value if wants_json else preparation.render(value, '', error=True),
+                             'application/json' if wants_json else 'text/html; charset=utf-8')
+
+        def do_POST(self):
+            if self.path == '/preparation' or self.path.startswith('/preparation/'):
+                self.preparation()
+            else:
+                self.respond(404, {'error': 'NOT_FOUND'})
 
         def do_HEAD(self):
             self.do_GET()
 
         def do_GET(self):
+            if self.path == '/preparation' or self.path.startswith('/preparation/'):
+                self.preparation()
+                return
             if self.path == '/healthz':
                 self.respond(200, {'web': 'ok', 'source_sha': source})
                 return

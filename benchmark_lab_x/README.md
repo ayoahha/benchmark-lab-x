@@ -93,7 +93,7 @@ Le workflow [GitHub Pages](../.github/workflows/pages.yml) publie `pages/` lors 
 
 ## Interfaces locales du service Linux en construction
 
-Le module `benchmark_lab_x.runtime` fournit une initialisation privée, la vérification de SQLite et des pièces, la maintenance, une sauvegarde cohérente et une restauration vers un nouvel emplacement. Ces interfaces sont distinctes du moteur historique ci-dessus. Les processus web et exécuteur sont fournis ci-dessous. Le parcours interactif, les appels assistés et le traitement des campagnes restent à construire.
+Le module `benchmark_lab_x.runtime` fournit une initialisation privée, la vérification de SQLite et des pièces, la maintenance, une sauvegarde cohérente et une restauration vers un nouvel emplacement. Ces interfaces sont distinctes du moteur historique ci-dessus. Les processus web et exécuteur sont fournis ci-dessous. Le candidat local ajoute le parcours fictif S2 décrit plus bas. Les appels assistés réels et le traitement des campagnes restent à construire.
 
 Avec Python 3.12 ou supérieur, le répertoire parent des données doit exister. L’initialisation crée son emplacement privé ou utilise le répertoire vide préparé par Ansible sous le compte de service. Elle refuse tout emplacement contenant déjà des données :
 
@@ -105,7 +105,7 @@ python3 -B -m benchmark_lab_x.runtime status --data /chemin/prive/benchmark
 
 Ces commandes n’émettent aucun appel modèle. Les pièces et les révisions de dossier sont immuables. Une empreinte divergente, une pièce orpheline, une référence dangereuse ou un schéma inconnu provoque un refus. La bibliothèque S1 conserve les montants en texte décimal exact, les intentions, les réservations et les reçus. Elle persiste l’état `EMISSION_POSSIBLE` avant le transport. Elle ne fournit pas encore le transport ni l’interface publique d’autorisation.
 
-Ce runtime ne possède aucun transport ni commande d’ouverture des admissions : `admission` reste faux, et `maintenance` constate cet état. L’admission effective des futurs appels devra être raccordée à ces commandes avant leur introduction. `quiescence` et `backup` refusent les opérations S1 encore en `EMISSION_POSSIBLE`. Après arrêt du processus, les effets inconnus sont conservés en `AMBIGUOUS` ; ils restent sauvegardables et bloquent les nouveaux appels dépendants dans S1 :
+Le runtime ne possède aucun transport réel. Sur une base S1 seule, `admission` reste faux. L’extension explicite S2 permet une admission opérateur ; `maintenance` la ferme durablement. Même avec cette admission configurée, l’absence de transport interdit tout appel. `quiescence` et `backup` refusent les opérations S1 encore en `EMISSION_POSSIBLE`. Après arrêt du processus, les effets inconnus sont conservés en `AMBIGUOUS` ; ils restent sauvegardables et bloquent les nouveaux appels dépendants dans S1 :
 
 ```sh
 python3 -B -m benchmark_lab_x.runtime maintenance --data /chemin/prive/benchmark
@@ -132,10 +132,10 @@ interroge l'exécuteur par socket Unix et vérifie le stockage. Au démarrage,
 l'exécuteur conserve les émissions S1 sans reçu en `AMBIGUOUS`, avec leur
 réservation et un motif d'interruption. Ce processus ne fournit pas encore le moteur de campagnes S4/S5.
 
-Le web sert uniquement une projection nommée par l'empreinte de son manifeste
+En dehors de `/preparation`, le web sert une projection nommée par l'empreinte de son manifeste
 `publication.json`, sélectionnée par `public/active.json`. Chaque fichier servi
 est vérifié ; sans publication vérifiée, la racine répond 503. Ce mécanisme ne
-fournit pas encore le parcours privé interactif S2/S6. Les deux processus, leur
+publie aucun dossier du parcours privé S2 et ne fournit pas S6. Les deux processus, leur
 arrêt et leur redémarrage sont testés avec de vraies sockets locales ; la preuve
 de déploiement Linux reste distincte.
 
@@ -145,6 +145,54 @@ sans conversion ni réécriture. Un déploiement sur des données de ce candidat
 exige une décision distincte de migration ou d'initialisation dans un nouvel
 emplacement, en préservant la base d'origine. Cette intégration ne migre aucune
 donnée et ne déploie aucun service.
+
+## Parcours fictif de préparation S2
+
+Le module fournit `/preparation` : saisie du besoin, clarification, consultation des pièces, correction et validation du dossier, de sa révision et de l’empreinte exacte du paquet. Ce parcours utilise les services locaux et un transport fictif de test. L’assistant réel, l’ouverture du service et la publication gardent leurs qualifications et autorités distinctes.
+
+L’exécuteur existant porte les sessions et les opérations ; le web relaie les actions par sa socket Unix et rend des formulaires HTML natifs, sans script ni dépendance ajoutée. Un GET ne lance aucun travail. Après un envoi, le lien vers le dossier permet de consulter l’attente puis le résultat. Les erreurs de révision imposent de consulter la version courante. Les anciennes révisions, pièces et validations restent consultables ; tout nouveau paquet exige un nouvel accord. Le besoin et les réponses restent dans le payload S1, les corrections dans les actions attribuées. Les paramètres fictifs ne deviennent pas des accords. La validation du besoin ne qualifie pas la référence et n’approuve aucun contrat, appel, budget ou publication.
+
+Le cookie `benchmark_session` est opaque, `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/preparation`, sans `Domain`, `Expires` ou `Max-Age`. Le stockage ne conserve que son SHA-256 et une identité interne. Le même navigateur retrouve ses dossiers tant qu’il conserve ce cookie ; sa survie à la fermeture n’est pas garantie. Perdre le cookie fait perdre l’accès sans effacer les dossiers. Aucun compte, durée de conservation ou récupération n’est ajouté. Chaque action et pièce exige sa session propriétaire ; les POST exigent aussi le jeton CSRF. Les champs d’autorité ne sont pas acceptés dans les formulaires. Les pièces sont du texte inerte, et la référence privée de jugement reste hors du paquet demandeur/candidat.
+
+L’initialisation suivante est une opération locale explicite sur une base S1 intégrée neuve, sans données métier ni pièces résiduelles. Elle refuse une base S1 peuplée, une extension partielle, un schéma inconnu et le schéma distinct de #197 :
+
+```sh
+python3 -B -m benchmark_lab_x.runtime initialize-preparation --data /chemin/prive/benchmark
+```
+
+Elle ajoute les six tables identifiées `benchmark-lab-x/preparation/v1`, dans une seule transaction, avec admission fermée. Sur une extension déjà exacte, elle ne réécrit rien. `user_version=1` et les tables S1 restent inchangés. Le lecteur courant conserve la lecture des deux formes S1 ; les lecteurs S1 antérieurs refusent les tables S2 supplémentaires. Aucune migration ou compatibilité inverse n’est annoncée. Sauvegarde, restauration et vérification comprennent les jointures S2 et les empreintes des paquets.
+
+L’opérateur peut enregistrer une admission depuis un fichier privé contenant exactement `authority_id`, `budget_id`, `reserve_amount` (texte décimal) et `requested_configuration` (objet non vide). Le budget S1 doit déjà exister ; cette commande ne crée pas d’enveloppe :
+
+```sh
+python3 -B -m benchmark_lab_x.runtime admit-preparation --data /chemin/prive/benchmark --authority /chemin/prive/autorite.json
+```
+
+Cette commande ne fournit aucun transport. Le seul point d’injection est `serve_executor(data, socket_path, source, *, transport=None)` ; seul le lanceur de test fournit la fonction fictive `transport(operation, request)`. Aucun paramètre HTTP, fichier utilisateur ou variable d’environnement ne peut la sélectionner. La valeur par défaut refuse tout appel. Les valeurs fictives des tests ne prouvent aucun coût réel : coûts réels et tarifs de l’implémentation sur abonnement restent inconnus, `UNMEASURED`.
+
+L’action, son contexte exact, l’intention S1 et la réserve sont persistés avant accusé de réception. L’admission et le marqueur de restauration sont revérifiés dans la transaction qui précède l’émission. Le travailleur possède sa connexion SQLite et laisse le gestionnaire de santé disponible. Un doublon aux mêmes données retrouve son opération ; une identité réutilisée avec un autre contenu est refusée. Un reçu publié conserve les coûts sourcés, y compris `UNKNOWN`, puis les pièces vérifiées et le nouveau pointeur deviennent visibles ensemble. Si le reçu S1 est valide mais le résultat applicatif inutilisable, le reçu et le coût originaux sont conservés avec une révision suspendue et l’admission fermée, dans une seule transaction. Aucun paquet ni accord ne sont inventés. Un effet sans reçu S1 valide reste ambigu ; une interruption ne relance aucun travail, même une intention jamais émise. Démarrage, maintenance et restauration ferment l’admission. Le marqueur `restore_pending` ne peut être supprimé par le navigateur ou `admit-preparation`.
+
+L’API négocie JSON avec `Accept: application/json`. Ses routes sont :
+
+| Méthode | Route | Effet |
+|---|---|---|
+| GET | `/preparation` | Session, CSRF et liste des dossiers propres |
+| POST | `/preparation/dossiers` | Brouillon et opération réservée, réponse 202 |
+| GET | `/preparation/dossiers/{id}` | Vue courante, attente ou suspension |
+| GET | `/preparation/dossiers/{id}/revisions/{n}` | Révision exacte conservée |
+| POST | `/preparation/dossiers/{id}/messages` | Clarification ou correction depuis la révision courante |
+| POST | `/preparation/dossiers/{id}/validation` | Accord lié au dossier, à la révision et à `package_sha256` |
+| GET | `/preparation/dossiers/{id}/revisions/{n}/pieces/{piece_id}` | Octets vérifiés d’une pièce candidate appartenant au paquet |
+
+Les requêtes JSON et formulaires portent les mêmes champs. Une création porte `dossier_id`, `action_id`, `request`, `csrf_token` ; un message porte `action_id`, `revision` (entier JSON), `kind` (`clarify` ou `correct`), `message`, `csrf_token` ; une validation porte `dossier_id`, `revision`, `package_sha256`, `csrf_token`. Les champs supplémentaires sont refusés. Une soumission ne transforme pas son texte en autorité opérateur.
+
+Les contrôles de publication portent sur la structure du paquet, les jointures, la relecture des pièces et leurs empreintes. Ils ne qualifient pas la justesse métier de la référence générée : cette qualification reste NON VÉRIFIÉ, et `qualified` reste faux. Les déclarations de limites et les demandes de clarification sont celles du transport fictif attribué ; aucun assistant réel n’a été évalué.
+
+La commande CI est `uv run --with requests --with mpmath==1.3.0 python -m unittest discover -s tests` : 870 tests passent sur macOS pour le candidat corrigé. Elle exclut `benchmark_lab_x/test_demo.py`, dont les 69 tests ont été exécutés séparément sur macOS. Les huit parcours HTTP avec vrais processus Web et exécuteur locaux passent également. Les transports sont entièrement fictifs ; ces preuves ne qualifient aucun assistant réel.
+
+La vérification manuelle du 7 septembre 2026 utilise macOS 27.0 (26A5425a) et Chrome 152.0.7977.83 installé. Saisie, clarification, consultation de la pièce textuelle, retour à l’aperçu, validation et correction ont été effectués au clavier, avec focus visible. Le texte de la pièce a été effectivement affiché ; la correction conserve les accords antérieurs et exige une nouvelle validation. Le zoom Chrome à 200 % a été observé sur l’aperçu, ses limites et son lien de pièce. Le contrôle antérieur à 320 × 720 dans le navigateur Codex a vérifié l’absence de débordement horizontal de la page ; il reste une preuve distincte.
+
+Le parcours VoiceOver réel reste NON VÉRIFIÉ : VoiceOver 10 est installé, mais son activation locale n’a pas persisté pendant le contrôle. L’arbre accessible ne remplace pas cette preuve. Les résultats Linux doivent être attribués à la CI Ubuntu de la PR et à sa révision exacte ; aucune preuve Linux n’est déduite des tests macOS. Le test HTTP relaie explicitement le cookie Secure ; la qualification HTTPS et d’exploitation reste distincte de la preuve logicielle.
 
 ## Outillage des premières campagnes
 

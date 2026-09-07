@@ -2,8 +2,8 @@
 
 Emission is a caller responsibility, after mark_emission_possible commits.
 Opening or inspecting storage never retries an operation or releases a reserve.
-Schema 1 accepts the exact canary layout and the extended S1 layout; only newly
-initialized databases get the latter. No implicit migration is performed.
+Schema 1 accepts the canary, integrated S1 and explicitly initialized S2 layouts.
+S2 has its own structure identity; no implicit migration is performed.
 """
 
 from __future__ import annotations
@@ -23,6 +23,58 @@ import stat
 
 
 SCHEMA_VERSION = 1
+PREPARATION_IDENTITY = "benchmark-lab-x/preparation/v1"
+_S2_SCHEMA = (
+    """CREATE TABLE s2_sessions (
+    session_id TEXT PRIMARY KEY NOT NULL,
+    token_sha256 TEXT UNIQUE NOT NULL CHECK(length(token_sha256) = 64)
+)""",
+    """CREATE TABLE s2_dossiers (
+    dossier_id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL REFERENCES s2_sessions(session_id),
+    current_revision INTEGER NOT NULL,
+    FOREIGN KEY(dossier_id, current_revision) REFERENCES dossier_revisions(dossier_id, revision)
+)""",
+    """CREATE TABLE s2_revisions (
+    dossier_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    stage TEXT NOT NULL CHECK(stage IN ('draft', 'clarification', 'preview', 'scope_confirmation', 'suspended')),
+    explanation TEXT NOT NULL,
+    package_json TEXT,
+    package_sha256 TEXT,
+    changes_json TEXT NOT NULL,
+    checks_json TEXT NOT NULL,
+    PRIMARY KEY(dossier_id, revision),
+    FOREIGN KEY(dossier_id, revision) REFERENCES dossier_revisions(dossier_id, revision),
+    CHECK((package_json IS NULL AND package_sha256 IS NULL) OR
+          (package_json IS NOT NULL AND length(package_sha256) = 64))
+)""",
+    """CREATE TABLE s2_actions (
+    dossier_id TEXT NOT NULL REFERENCES s2_dossiers(dossier_id),
+    action_id TEXT NOT NULL,
+    input_revision INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('create', 'clarify', 'correct')),
+    request_json TEXT NOT NULL,
+    operation_id TEXT UNIQUE NOT NULL REFERENCES operations(operation_id),
+    PRIMARY KEY(dossier_id, action_id),
+    FOREIGN KEY(dossier_id, input_revision) REFERENCES dossier_revisions(dossier_id, revision)
+)""",
+    """CREATE TABLE s2_validations (
+    dossier_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    package_sha256 TEXT NOT NULL CHECK(length(package_sha256) = 64),
+    session_id TEXT NOT NULL REFERENCES s2_sessions(session_id),
+    validated_at TEXT NOT NULL,
+    PRIMARY KEY(dossier_id, revision, package_sha256),
+    FOREIGN KEY(dossier_id, revision) REFERENCES s2_revisions(dossier_id, revision)
+)""",
+    """CREATE TABLE s2_control (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    format_identity TEXT NOT NULL CHECK(format_identity = 'benchmark-lab-x/preparation/v1'),
+    admission_json TEXT
+)""",
+)
+
 
 
 class SchemaError(ValueError):
@@ -390,8 +442,21 @@ def _check_schema(connection, allow_empty=False):
             ("index", f"sqlite_autoindex_{name}_1", name, None)
             for name in ('budgets', 'operations', 'reservations')
         ]
+        s2 = extended + [("table", name, name, statement)
+                         for name, statement in zip(
+                             ('s2_sessions', 's2_dossiers', 's2_revisions', 's2_actions',
+                              's2_validations', 's2_control'), _S2_SCHEMA)]
+        s2 += [("index", f"sqlite_autoindex_{name}_{number}", name, None)
+               for name, count in (('s2_sessions', 2), ('s2_dossiers', 1),
+                                   ('s2_revisions', 1), ('s2_actions', 2),
+                                   ('s2_validations', 1))
+               for number in range(1, count + 1)]
         layout = ('canary' if normalized(rows) == normalized(expected) else
-                  's1' if normalized(rows) == normalized(extended) else None)
+                  's1' if normalized(rows) == normalized(extended) else
+                  's2' if normalized(rows) == normalized(s2) else None)
+        if layout == 's2' and connection.execute(
+                'SELECT singleton, format_identity FROM s2_control').fetchall() != [(1, PREPARATION_IDENTITY)]:
+            raise SchemaError('unsupported preparation identity')
         if layout is None:
             raise SchemaError("unsupported storage schema structure")
         if connection.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
@@ -453,6 +518,27 @@ def initialize(root: Path) -> None:
             os.close(parent_fd)
     finally:
         os.close(root_fd)
+
+
+def initialize_preparation(root: Path) -> None:
+    """Extend only a fresh integrated S1 database, never migrate business data."""
+    store = Store(root)
+    try:
+        connection = store._connection_checked()
+        with _transaction(connection, write=True):
+            layout = _check_schema(connection)
+            if layout == 's2':
+                return
+            if layout != 's1' or os.listdir(store._pieces_fd) or any(connection.execute(
+                    'SELECT 1 FROM ' + table + ' LIMIT 1').fetchone()
+                    for table in ('dossier_revisions', 'pieces', 'budgets', 'operations', 'reservations')):
+                raise SchemaError('preparation requires an empty integrated S1 database')
+            for statement in _S2_SCHEMA:
+                connection.execute(statement)
+            connection.execute('INSERT INTO s2_control VALUES (1, ?, NULL)', (PREPARATION_IDENTITY,))
+            _check_schema(connection)
+    finally:
+        store.close()
 
 
 class Store:
@@ -598,38 +684,42 @@ class Store:
             return self._budget(connection, budget_id, self._operations(connection))
 
     def reserve_intent(self, operation: dict, budget_id: str, amount: str) -> None:
+        connection = self._s1_connection()
+        with _transaction(connection, write=True):
+            self._reserve_intent(connection, operation, budget_id, amount)
+
+    def _reserve_intent(self, connection, operation, budget_id, amount):
+        """Shared reservation body; caller owns the enclosing transaction."""
         _operation(operation)
         _text(budget_id, 'budget_id')
         requested = _money(amount)
         values = [operation[key] for key in _OPERATION_KEYS]
         values[6] = _strict_json(operation['requested_configuration'])
         values[7] = _strict_json(operation['resources'])
-        connection = self._s1_connection()
-        with _transaction(connection, write=True):
-            operations = self._operations(connection)
-            if any(row['operation_id'] == operation['operation_id'] for row in operations):
-                raise ConflictError('operation identity already exists')
-            budget = self._budget(connection, budget_id, operations)
-            if not connection.execute(
-                'SELECT 1 FROM dossier_revisions WHERE dossier_id=? AND revision=?',
-                (operation['dossier_id'], operation['revision']),
-            ).fetchone():
-                raise KeyError((operation['dossier_id'], operation['revision']))
-            if (budget['unknown_cost_operations'] or any(
-                    row['budget_id'] == budget_id and row['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS')
-                    for row in operations)):
-                raise BudgetError('unresolved effects or costs block this envelope')
-            if requested > Decimal(budget['available']):
-                raise BudgetError('insufficient available budget')
-            connection.execute(
-                'INSERT INTO operations (' + ', '.join(_OPERATION_COLUMNS) + ') '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (*values, 'INTENT_RECORDED', None, None, None,
-                 datetime.now(timezone.utc).isoformat()),
-            )
-            # Keep the original reserve as evidence even after a known settlement
-            connection.execute('INSERT INTO reservations VALUES (?, ?, ?)',
-                               (operation['operation_id'], budget_id, amount))
+        operations = self._operations(connection)
+        if any(row['operation_id'] == operation['operation_id'] for row in operations):
+            raise ConflictError('operation identity already exists')
+        budget = self._budget(connection, budget_id, operations)
+        if not connection.execute(
+            'SELECT 1 FROM dossier_revisions WHERE dossier_id=? AND revision=?',
+            (operation['dossier_id'], operation['revision']),
+        ).fetchone():
+            raise KeyError((operation['dossier_id'], operation['revision']))
+        if (budget['unknown_cost_operations'] or any(
+                row['budget_id'] == budget_id and row['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS')
+                for row in operations)):
+            raise BudgetError('unresolved effects or costs block this envelope')
+        if requested > Decimal(budget['available']):
+            raise BudgetError('insufficient available budget')
+        connection.execute(
+            'INSERT INTO operations (' + ', '.join(_OPERATION_COLUMNS) + ') '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (*values, 'INTENT_RECORDED', None, None, None,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        # Keep the original reserve as evidence even after a known settlement
+        connection.execute('INSERT INTO reservations VALUES (?, ?, ?)',
+                           (operation['operation_id'], budget_id, amount))
 
     def _operation_for_update(self, connection, operation_id, allowed):
         for record in self._operations(connection):
@@ -660,22 +750,25 @@ class Store:
             )
 
     def record_receipt(self, operation_id: str, receipt: dict, observed_cost: dict) -> None:
-        _text(operation_id, 'operation_id')
-        receipt_json, cost_json = _receipt(receipt, observed_cost)
         connection = self._s1_connection()
         with _transaction(connection, write=True):
-            operation = self._operation_for_update(
-                connection, operation_id, ('EMISSION_POSSIBLE', 'AMBIGUOUS'))
-            currency = connection.execute('SELECT currency FROM budgets WHERE budget_id=?',
-                                          (operation['budget_id'],)).fetchone()[0]
-            if observed_cost['currency'] != currency:
-                raise ValueError('observed cost currency must match its envelope')
-            # A sourced fact is retained even when it exceeds the reserve or limit
-            # Receipt identities are scoped to their operation, never overwritten
-            connection.execute(
-                "UPDATE operations SET state='RECEIVED', receipt_json=?, observed_cost_json=? "
-                'WHERE operation_id=?', (receipt_json, cost_json, operation_id),
-            )
+            self._record_receipt(connection, operation_id, receipt, observed_cost)
+
+    def _record_receipt(self, connection, operation_id, receipt, observed_cost):
+        _text(operation_id, 'operation_id')
+        receipt_json, cost_json = _receipt(receipt, observed_cost)
+        operation = self._operation_for_update(
+            connection, operation_id, ('EMISSION_POSSIBLE', 'AMBIGUOUS'))
+        currency = connection.execute('SELECT currency FROM budgets WHERE budget_id=?',
+                                      (operation['budget_id'],)).fetchone()[0]
+        if observed_cost['currency'] != currency:
+            raise ValueError('observed cost currency must match its envelope')
+        # A sourced fact is retained even when it exceeds the reserve or limit
+        # Receipt identities are scoped to their operation, never overwritten
+        connection.execute(
+            "UPDATE operations SET state='RECEIVED', receipt_json=?, observed_cost_json=? "
+            'WHERE operation_id=?', (receipt_json, cost_json, operation_id),
+        )
 
     def verify_storage(self) -> dict:
         """Inspect a coherent metadata snapshot and private files without repair."""
@@ -700,10 +793,13 @@ class Store:
             # Inventory names only: do not follow links or remove partial/orphan bytes
             orphans = sorted('pieces/' + name for name in os.listdir(self._pieces_fd)
                              if 'pieces/' + name not in references)
-            operations = self._operations(connection) if layout == 's1' else []
-            if layout == 's1':
+            operations = self._operations(connection) if layout in ('s1', 's2') else []
+            if layout in ('s1', 's2'):
                 for (budget_id,) in connection.execute('SELECT budget_id FROM budgets').fetchall():
                     self._budget(connection, budget_id, operations)
+            if layout == 's2':
+                from .preparation import verify_preparation
+                verify_preparation(self, connection)
             return {
                 'schema_version': SCHEMA_VERSION, 'integrity_ok': intact and not broken,
                 'broken_pieces': broken, 'orphan_files': orphans,
@@ -746,6 +842,14 @@ class Store:
 
     def put_piece(self, dossier_id: str, revision: int, piece_id: str, *,
                   name: str, role: str, media_type: str, content: bytes) -> dict:
+        connection = self._connection_checked()
+        with _transaction(connection, write=True):
+            return self._put_piece(connection, dossier_id, revision, piece_id,
+                                   name=name, role=role, media_type=media_type, content=content)
+
+    def _put_piece(self, connection, dossier_id, revision, piece_id, *,
+                   name, role, media_type, content):
+        # Failed commits retain orphan bytes for S1 integrity inspection
         _identity(dossier_id, revision)
         for label, value in (("piece_id", piece_id), ("name", name), ("media_type", media_type)):
             _text(value, label)
@@ -753,49 +857,40 @@ class Store:
             raise ValueError("role must be candidate or judge")
         if type(content) is not bytes:
             raise ValueError("content must be bytes")
-        connection = self._connection_checked()
-        connection.execute("BEGIN IMMEDIATE")
+        if connection.execute("SELECT 1 FROM pieces WHERE piece_id=?", (piece_id,)).fetchone():
+            raise ConflictError("piece identity already exists")
+        if not connection.execute(
+            "SELECT 1 FROM dossier_revisions WHERE dossier_id=? AND revision=?",
+            (dossier_id, revision),
+        ).fetchone():
+            raise KeyError((dossier_id, revision))
+        filename = secrets.token_hex(16) + ".bin"
+        temporary = "." + filename + ".tmp"
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=self._pieces_fd)
         try:
-            if connection.execute("SELECT 1 FROM pieces WHERE piece_id=?", (piece_id,)).fetchone():
-                raise ConflictError("piece identity already exists")
-            if not connection.execute(
-                "SELECT 1 FROM dossier_revisions WHERE dossier_id=? AND revision=?",
-                (dossier_id, revision),
-            ).fetchone():
-                raise KeyError((dossier_id, revision))
-            filename = secrets.token_hex(16) + ".bin"
-            temporary = "." + filename + ".tmp"
-            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                         0o600, dir_fd=self._pieces_fd)
+            with os.fdopen(fd, "wb") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
             try:
-                with os.fdopen(fd, "wb") as stream:
-                    os.fchmod(stream.fileno(), 0o600)
-                    stream.write(content)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                try:
-                    os.link(temporary, filename, src_dir_fd=self._pieces_fd,
-                            dst_dir_fd=self._pieces_fd, follow_symlinks=False)
-                except FileExistsError as error:
-                    raise ConflictError("piece file already exists") from error
-            finally:
-                os.unlink(temporary, dir_fd=self._pieces_fd)
-            os.fsync(self._pieces_fd)
-            meta = dict(zip(_PIECE_COLUMNS, (
-                piece_id, dossier_id, revision, name, role, media_type,
-                "pieces/" + filename, hashlib.sha256(content).hexdigest(), len(content),
-            )))
-            connection.execute(
-                "INSERT INTO pieces (" + ", ".join(_PIECE_COLUMNS) + ") "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", tuple(meta.values()),
-            )
-            connection.execute("COMMIT")
-            return meta
-        except BaseException:
-            # Keep a published orphan if the reference could not be committed
-            if connection.in_transaction:
-                connection.execute("ROLLBACK")
-            raise
+                os.link(temporary, filename, src_dir_fd=self._pieces_fd,
+                        dst_dir_fd=self._pieces_fd, follow_symlinks=False)
+            except FileExistsError as error:
+                raise ConflictError("piece file already exists") from error
+        finally:
+            os.unlink(temporary, dir_fd=self._pieces_fd)
+        os.fsync(self._pieces_fd)
+        meta = dict(zip(_PIECE_COLUMNS, (
+            piece_id, dossier_id, revision, name, role, media_type,
+            "pieces/" + filename, hashlib.sha256(content).hexdigest(), len(content),
+        )))
+        connection.execute(
+            "INSERT INTO pieces (" + ", ".join(_PIECE_COLUMNS) + ") "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", tuple(meta.values()),
+        )
+        return meta
 
     def get_piece(self, piece_id: str) -> dict:
         _text(piece_id, "piece_id")
