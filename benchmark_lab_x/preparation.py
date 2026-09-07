@@ -180,6 +180,11 @@ def view(store, session_id, dossier_id, revision=None):
                     'Admission fermée : intention conservée sans émission ni reprise automatique.' if blocked_intent else
                     'Préparation en attente. Actualisez pour consulter son avancement ; aucun appel ne sera relancé.')
                 result['validation'] = None
+        if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='s3_control'").fetchone():
+            from .qualification import projection
+            result['qualification'] = projection(store, connection, dossier_id, revision,
+                                                  eligible=result['validation'] is not None)
+            result['qualified'] = result['qualification']['status'] in ('QUALIFIED', 'APPROVED')
         return result
 
 
@@ -548,7 +553,7 @@ def render(value, csrf, path='/preparation', *, error=False):
                 f'<li><a href="{text(url)}/revisions/{revision}/pieces/{text(p["id"])}">{text(p["name"])} (texte, {p["size_bytes"]} octets)</a></li>'
                 for p in package['pieces']) + '</ul><p>La référence privée de jugement est séparée des pièces présentées.</p>')
             content += section('Changements et vérifications', listing(value['changes']) +
-                               '<p>Les octets des pièces et l’empreinte du paquet ont été vérifiés. La qualification de la référence reste NON VÉRIFIÉ.</p>')
+                               '<p>Les octets des pièces et l’empreinte du paquet ont été vérifiés.</p>')
             content += '<p>Empreinte du paquet : <code>' + text(value['package_sha256']) + '</code></p>'
         if value.get('observed_cost'):
             cost = value['observed_cost']
@@ -558,6 +563,21 @@ def render(value, csrf, path='/preparation', *, error=False):
             content += '<p>Coût observé : INCONNU en l’absence de reçu de coût.</p>'
         if value['validation']:
             content += '<p role="status">Votre validation est enregistrée pour ce dossier, cette révision et cette empreinte.</p>'
+        else:
+            content += '<p role="status">Validation du besoin : nouvelle validation requise pour le paquet présenté.</p>'
+        qualification = value.get('qualification', {})
+        labels = {'PENDING': 'En attente', 'QUALIFIED': 'Contrôles requis prouvés',
+                  'BLOCKED': 'Bloquée : référence ou contrôles insuffisamment prouvés',
+                  'APPROVED': 'Approuvée par action opérateur locale'}
+        content += section('Qualification', '<p>' + text(labels.get(
+            qualification.get('qualification_status'), 'En attente')) + '</p>')
+        content += section('Approbation', '<p>' + text(labels.get(
+            qualification.get('approval_status'), 'En attente')) + '</p>'
+            '<p>La validation du besoin, la qualification et l’approbation restent distinctes. '
+            'Aucun appel ni publication n’est autorisé par cet état. Les preuves, la référence '
+            'et les limites de jugement sont réservées à l’inspection locale du responsable.</p>')
+        if qualification.get('contract_sha256'):
+            content += '<p>Contrat : <code>' + text(qualification['contract_sha256']) + '</code></p>'
         if value['stage'] != 'waiting':
             content += section('Préciser ou corriger cet exemple', form(url + '/messages',
                 {'action_id': secrets.token_hex(16), 'revision': revision},
