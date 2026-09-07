@@ -285,7 +285,7 @@ Limite d’attribution affichée : `<formulation conforme au PRD, section 8, et 
 - [ ] l’aperçu ouvre les pièces construites et référence le paquet prévu pour les candidats ; toute modification entraîne les vérifications concernées et une nouvelle validation
 - [ ] les appels d’assistance ont leur autorité et budget avant consommation, avec coûts et reprises séparés des candidats
 - [ ] les filtres préservent les verdicts et la population des statistiques calculées ; chaque tri expose sa portée
-- [ ] le parcours, les pièces et les preuves sont accessibles au clavier, avec lecteur d’écran et sur petit écran
+- [ ] le parcours, les pièces et les preuves sont accessibles au clavier et sur petit écran
 
 - [ ] version, cas et preuves attendues sont identifiés ; la couverture est justifiée
 - [ ] résultat attendu, usage, intervention humaine, obligations et tolérances, erreurs éliminatoires sont définis avant exécution

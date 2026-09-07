@@ -9,7 +9,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 
-from .storage import IntegrityError, Store, initialize, _private, _strict_json as encode
+from .storage import IntegrityError, Store, initialize, initialize_preparation, _unique_object, _private, _strict_json as encode
 
 
 def private_path(path, directory=False):
@@ -38,12 +38,21 @@ def status(root, store):
         private_path(marker)
         if json.loads(marker.read_text()) != {'state': 'RESTORED_RECONCILIATION_REQUIRED'}:
             raise IntegrityError('État de restauration inconnu')
-    # Aucun transport ni commande d'ouverture des admissions dans ce runtime
-    return {'admission': False, 'restore_pending': restored,
+    connection = store._s1_connection()
+    extended = connection.execute("SELECT 1 FROM sqlite_schema WHERE name='s2_control'").fetchone()
+    opened = False
+    if extended:
+        from .preparation import admission
+        opened = bool(admission(store))
+    return {'admission': opened and not restored, 'restore_pending': restored,
             'operations': dict(Counter(row['state'] for row in store.inspect_operations()))}
 
 
 def stop(root, store, reason, after_process_exit=False):
+    connection = store._s1_connection()
+    if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='s2_control'").fetchone():
+        from .preparation import close_admission
+        close_admission(store)
     if after_process_exit:
         for row in store.inspect_operations():
             if row['state'] == 'EMISSION_POSSIBLE':
@@ -154,8 +163,9 @@ def restore(source, destination):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
+    parser.add_argument('action', choices=('initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
     parser.add_argument('--data', type=Path)
+    parser.add_argument('--authority', type=Path)
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--socket', type=Path)
     parser.add_argument('--public', type=Path)
@@ -184,6 +194,9 @@ def main(argv=None):
                 raise FileExistsError('Initialisation réservée à un emplacement vide')
             initialize(args.data)
             result = {'state': 'INITIALIZED_ADMISSION_BLOCKED'}
+        elif args.action == 'initialize-preparation':
+            initialize_preparation(args.data)
+            result = {'state': 'PREPARATION_INITIALIZED_ADMISSION_BLOCKED'}
         elif args.action == 'verify-backup':
             result = verify_backup(args.data)
         elif args.action in ('backup', 'restore'):
@@ -192,7 +205,15 @@ def main(argv=None):
             result = (backup if args.action == 'backup' else restore)(args.data, args.destination)
         else:
             with closing(Store(args.data)) as store:
-                if args.action == 'verify':
+                if args.action == 'admit-preparation':
+                    from .preparation import admit
+                    if args.authority is None:
+                        raise ValueError('Autorité requise')
+                    private_path(args.authority)
+                    authority = json.loads(args.authority.read_text(), object_pairs_hook=_unique_object)
+                    admit(store, authority)
+                    result = status(args.data, store)
+                elif args.action == 'verify':
                     result = verify(store)
                 elif args.action == 'maintenance':
                     result = stop(args.data, store, 'MAINTENANCE')
