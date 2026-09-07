@@ -93,7 +93,7 @@ Le workflow [GitHub Pages](../.github/workflows/pages.yml) publie `pages/` lors 
 
 ## Interfaces locales du service Linux en construction
 
-Le module `benchmark_lab_x.runtime` fournit une initialisation privée, la vérification de SQLite et des pièces, la maintenance, une sauvegarde cohérente et une restauration vers un nouvel emplacement. Ces interfaces sont distinctes du moteur historique ci-dessus. Le serveur public, le traitement des travaux longs et leurs accès ne sont pas encore fournis ; ces commandes ne constituent pas le service 0.1.0 complet.
+Le module `benchmark_lab_x.runtime` fournit une initialisation privée, la vérification de SQLite et des pièces, la maintenance, une sauvegarde cohérente et une restauration vers un nouvel emplacement. Ces interfaces sont distinctes du moteur historique ci-dessus. Les processus web et exécuteur sont fournis ci-dessous. Le parcours interactif, les appels assistés et le traitement des campagnes restent à construire.
 
 Avec Python 3.12 ou supérieur, le répertoire parent des données doit exister. L’initialisation crée son emplacement privé ou utilise le répertoire vide préparé par Ansible sous le compte de service. Elle refuse tout emplacement contenant déjà des données :
 
@@ -103,9 +103,9 @@ python3 -B -m benchmark_lab_x.runtime verify --data /chemin/prive/benchmark
 python3 -B -m benchmark_lab_x.runtime status --data /chemin/prive/benchmark
 ```
 
-Ces commandes n’émettent aucun appel modèle. Les pièces et les révisions de dossier sont immuables. Une empreinte divergente, une pièce orpheline, une référence dangereuse ou un schéma inconnu provoque un refus. La bibliothèque de stockage utilise des réservations monétaires entières, attribuées à leur phase ; elle persiste l’intention et l’état d’émission avant le transport. Elle ne fournit pas encore le transport ni l’interface publique d’autorisation.
+Ces commandes n’émettent aucun appel modèle. Les pièces et les révisions de dossier sont immuables. Une empreinte divergente, une pièce orpheline, une référence dangereuse ou un schéma inconnu provoque un refus. La bibliothèque S1 conserve les montants en texte décimal exact, les intentions, les réservations et les reçus. Elle persiste l’état `EMISSION_POSSIBLE` avant le transport. Elle ne fournit pas encore le transport ni l’interface publique d’autorisation.
 
-Pour une sauvegarde, arrêter les admissions puis attendre la fin des émissions actives. La vérification de quiescence distingue les travaux encore en cours des effets historiques inconnus. Ces derniers restent conservés et bloquent la reprise des appels :
+Ce runtime ne possède aucun transport ni commande d’ouverture des admissions : `admission` reste faux, et `maintenance` constate cet état. L’admission effective des futurs appels devra être raccordée à ces commandes avant leur introduction. `quiescence` et `backup` refusent les opérations S1 encore en `EMISSION_POSSIBLE`. Après arrêt du processus, les effets inconnus sont conservés en `AMBIGUOUS` ; ils restent sauvegardables et bloquent les nouveaux appels dépendants dans S1 :
 
 ```sh
 python3 -B -m benchmark_lab_x.runtime maintenance --data /chemin/prive/benchmark
@@ -115,7 +115,7 @@ python3 -B -m benchmark_lab_x.runtime verify-backup --data /chemin/prive/sauvega
 python3 -B -m benchmark_lab_x.runtime restore --data /chemin/prive/sauvegarde-neuve --destination /chemin/prive/restauration-neuve
 ```
 
-La sauvegarde bloque les écrivains SQLite pendant la copie des pièces et vérifie leurs liens. La restauration préserve la source et toute cible existante. Elle impose un blocage durable des admissions, même après une autre maintenance : le rapprochement des effets postérieurs à la sauvegarde doit être réalisé avant toute reprise. Cette interface de rapprochement reste à construire. Une copie de données vérifiée ne prouve pas la restauration d’un service Linux ni une récupération PBS.
+La sauvegarde bloque les écrivains SQLite pendant la copie des pièces et vérifie leurs liens. La restauration préserve la source et toute cible existante. Elle crée le marqueur privé `restore.json`, conservé par les sauvegardes suivantes et exposé par `restore_pending`. Aucun effacement ni reprise n’est fourni : le rapprochement des effets postérieurs à la sauvegarde doit être réalisé avant toute future ouverture des appels. Une copie de données vérifiée ne prouve pas la restauration d’un service Linux ni une récupération PBS.
 
 `tools/build_runtime.py` construit une archive déterministe depuis les seuls fichiers suivis d’un commit complet. Il ignore les modifications du worktree et refuse une source dépourvue des interfaces runtime. La sortie JSON relie le commit, l’arbre, les blobs Git et l’empreinte de l’archive. Le build n’installe aucune dépendance et n’exécute pas la source construite :
 
@@ -123,18 +123,14 @@ La sauvegarde bloque les écrivains SQLite pendant la copie des pièces et véri
 python3 tools/build_runtime.py --source <commit-produit-complet> --output /chemin/benchmark-runtime.tar.gz
 ```
 
-Le reçu décrit la construction effectuée ; son authenticité doit être vérifiée depuis le job ou l’opérateur identifié. L’archive utilise le format `release.json` du candidat infra. Elle ne fournit pas encore de serveur web ni d’exécuteur et ne doit pas être déployée comme un service complet. Aucun tag de livraison 0.1.0 n’est créé par ces interfaces.
-
-## Outillage des premières campagnes
-
-Les outils sous `tools/` conservent leurs contrats historiques et ne sont pas les commandes décrites ci-dessus. Dans `tools/campagne_v1.py`, le rendu et sa vérification calculent encore les empreintes des canons du checkout courant sous des libellés historiques ; les tests rétablissent au contraire les contrats du commit `38e226a59020aad517cd0dbb16892ffb87d448ab`. Leur réussite ne valide pas une restitution historique régénérée contre les canons courants. Toute opération sur ces campagnes doit identifier ses sources d’origine avant exécution.
+Le reçu décrit la construction effectuée ; son authenticité doit être vérifiée depuis le job ou l’opérateur identifié. L’archive utilise le format `release.json` du candidat infra. Elle inclut les deux processus, leur commande et le stockage S1 ; le build refuse une archive sans ces composants. Aucun tag de livraison 0.1.0 n’est créé par ces interfaces.
 
 Les commandes `benchmark-runtime web --public … --socket …` et
 `benchmark-runtime executor --data … --socket …` fournissent les processus
 Linux. Le web expose `/healthz` et `/readyz` sans appel modèle ; le second contrôle
 interroge l'exécuteur par socket Unix et vérifie le stockage. Au démarrage,
-l'exécuteur ferme l'admission et conserve les anciennes émissions sans reçu en
-`UNKNOWN`. Ce processus ne fournit pas encore le moteur de campagnes S4/S5.
+l'exécuteur conserve les émissions S1 sans reçu en `AMBIGUOUS`, avec leur
+réservation et un motif d'interruption. Ce processus ne fournit pas encore le moteur de campagnes S4/S5.
 
 Le web sert uniquement une projection nommée par l'empreinte de son manifeste
 `publication.json`, sélectionnée par `public/active.json`. Chaque fichier servi
@@ -142,3 +138,14 @@ est vérifié ; sans publication vérifiée, la racine répond 503. Ce mécanism
 fournit pas encore le parcours privé interactif S2/S6. Les deux processus, leur
 arrêt et leur redémarrage sont testés avec de vraies sockets locales ; la preuve
 de déploiement Linux reste distincte.
+
+Le schéma S1 reste en version 1 avec ses contraintes exactes. Le premier candidat
+de la PR #197 possédait un autre schéma portant aussi le numéro 1 ; il est refusé
+sans conversion ni réécriture. Un déploiement sur des données de ce candidat
+exige une décision distincte de migration ou d'initialisation dans un nouvel
+emplacement, en préservant la base d'origine. Cette intégration ne migre aucune
+donnée et ne déploie aucun service.
+
+## Outillage des premières campagnes
+
+Les outils sous `tools/` conservent leurs contrats historiques et ne sont pas les commandes décrites ci-dessus. Dans `tools/campagne_v1.py`, le rendu et sa vérification calculent encore les empreintes des canons du checkout courant sous des libellés historiques ; les tests rétablissent au contraire les contrats du commit `38e226a59020aad517cd0dbb16892ffb87d448ab`. Leur réussite ne valide pas une restitution historique régénérée contre les canons courants. Toute opération sur ces campagnes doit identifier ses sources d’origine avant exécution.

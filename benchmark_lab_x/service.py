@@ -13,7 +13,8 @@ import socketserver
 import sqlite3
 import stat
 
-from .storage import Store, encode
+from .storage import Store
+from .runtime import encode, status, stop, verify
 
 
 def release_identity():
@@ -45,8 +46,8 @@ def serve_executor(data, socket_path, source):
         lock_fd = os.open(data / 'executor.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            store.verify()
-            store.stop('PROCESS_STARTED_ADMISSION_BLOCKED', after_process_exit=True)
+            verify(store)
+            stop(data, store, 'PROCESS_STARTED_ADMISSION_BLOCKED', after_process_exit=True)
             if socket_path.exists() or socket_path.is_symlink():
                 metadata = socket_path.lstat()
                 if not stat.S_ISSOCK(metadata.st_mode) or metadata.st_uid != os.getuid():
@@ -59,8 +60,8 @@ def serve_executor(data, socket_path, source):
                     try:
                         if self.rfile.readline(8) != b'health\n':
                             return
-                        store.verify()
-                        result = {'source_sha': source, 'storage': 'ok', **store.status()}
+                        verify(store)
+                        result = {'source_sha': source, 'storage': 'ok', **status(data, store)}
                         self.wfile.write((encode(result) + '\n').encode())
                     except (OSError, ValueError, sqlite3.Error):
                         return
@@ -68,7 +69,7 @@ def serve_executor(data, socket_path, source):
             with socketserver.UnixStreamServer(str(socket_path), Handler) as server:
                 os.chmod(socket_path, 0o660)
                 run(server)
-            store.stop('PROCESS_STOPPED_ADMISSION_BLOCKED', after_process_exit=True)
+            stop(data, store, 'PROCESS_STOPPED_ADMISSION_BLOCKED', after_process_exit=True)
         finally:
             os.close(lock_fd)
 

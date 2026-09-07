@@ -1,5 +1,6 @@
 """Commandes locales d'exploitation sans appel fournisseur."""
 import argparse
+from collections import Counter
 from contextlib import closing
 from hashlib import sha256
 import json
@@ -8,7 +9,46 @@ from pathlib import Path
 import shutil
 import sqlite3
 
-from .storage import IntegrityError, Store, encode, initialize, private_path, sync_directory
+from .storage import IntegrityError, Store, initialize, _private, _strict_json as encode
+
+
+def private_path(path, directory=False):
+    _private(Path(path).lstat(), directory=directory)
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def verify(store):
+    proof = store.verify_storage()
+    if not proof['integrity_ok'] or proof['orphan_files']:
+        raise IntegrityError('Stockage incomplet ou altéré')
+    return proof
+
+
+def status(root, store):
+    marker = Path(root) / 'restore.json'
+    restored = os.path.lexists(marker)
+    if restored:
+        private_path(marker)
+        if json.loads(marker.read_text()) != {'state': 'RESTORED_RECONCILIATION_REQUIRED'}:
+            raise IntegrityError('État de restauration inconnu')
+    # Aucun transport ni commande d'ouverture des admissions dans ce runtime
+    return {'admission': False, 'restore_pending': restored,
+            'operations': dict(Counter(row['state'] for row in store.inspect_operations()))}
+
+
+def stop(root, store, reason, after_process_exit=False):
+    if after_process_exit:
+        for row in store.inspect_operations():
+            if row['state'] == 'EMISSION_POSSIBLE':
+                store.mark_ambiguous(row['operation_id'], reason)
+    return status(root, store)
 
 
 def hashes(root):
@@ -32,22 +72,28 @@ def exclusive_json(path, value):
 def backup(root, destination):
     """Le verrou SQLite bloque les écrivains de pièces pendant toute la copie."""
     destination = Path(destination).absolute()
-    with closing(Store(root)) as store, store.transaction():
-        status = store.status()
-        if status['admission'] or status['operations'].get('SENDING', 0):
+    root = Path(root)
+    if destination.is_relative_to(root):
+        raise IntegrityError('Sauvegarde requise hors des données sources')
+    with closing(Store(root)) as store, closing(sqlite3.connect(root / 'metadata.sqlite3')) as lock:
+        lock.execute('BEGIN IMMEDIATE')
+        state = status(root, store)
+        if state['admission'] or state['operations'].get('EMISSION_POSSIBLE', 0):
             raise IntegrityError('Maintenance et arrêt des appels requis')
-        store.verify()
+        verify(store)
         destination.mkdir(mode=0o700)
         copied = destination / 'private'
         copied.mkdir(mode=0o700)
-        shutil.copytree(store.root / 'pieces', copied / 'pieces')
+        shutil.copytree(root / 'pieces', copied / 'pieces')
+        if state['restore_pending']:
+            shutil.copy2(root / 'restore.json', copied / 'restore.json')
         fd = os.open(copied / 'metadata.sqlite3', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         os.close(fd)
-        with closing(sqlite3.connect((store.root / 'metadata.sqlite3').as_uri() + '?mode=ro', uri=True)) as source:
+        with closing(sqlite3.connect((root / 'metadata.sqlite3').as_uri() + '?mode=ro', uri=True)) as source:
             with closing(sqlite3.connect(copied / 'metadata.sqlite3')) as target:
                 source.backup(target)
         with closing(Store(copied)) as check:
-            proof = check.verify()
+            proof = verify(check)
         for path in copied.rglob('*'):
             fd = os.open(path, os.O_RDONLY)
             try:
@@ -55,7 +101,7 @@ def backup(root, destination):
             finally:
                 os.close(fd)
         sync_directory(copied)
-        exclusive_json(destination / 'backup.json', {'schema_version': proof['schema_version'], 'files': hashes(copied), 'operations': status['operations']})
+        exclusive_json(destination / 'backup.json', {'schema_version': proof['schema_version'], 'files': hashes(copied), 'operations': state['operations']})
     return verify_backup(destination)
 
 
@@ -64,10 +110,16 @@ def verify_backup(destination):
     private_path(destination, directory=True)
     private_path(destination / 'backup.json')
     manifest = json.loads((destination / 'backup.json').read_text())
+    if type(manifest) is not dict or set(manifest) != {'schema_version', 'files', 'operations'}:
+        raise IntegrityError('Manifeste de sauvegarde invalide')
+    private_path(destination / 'private', directory=True)
     if hashes(destination / 'private') != manifest['files']:
         raise IntegrityError('Sauvegarde altérée')
     with closing(Store(destination / 'private')) as store:
-        proof = store.verify()
+        proof = verify(store)
+        state = status(destination / 'private', store)
+    if state['operations'] != manifest['operations']:
+        raise IntegrityError('Opérations de sauvegarde divergentes')
     if manifest['schema_version'] != proof['schema_version']:
         raise IntegrityError('Schéma de sauvegarde divergent')
     return {**proof, 'state': 'BACKUP_VERIFIED'}
@@ -76,6 +128,8 @@ def verify_backup(destination):
 def restore(source, destination):
     source = Path(source).absolute()
     destination = Path(destination).absolute()
+    if destination.is_relative_to(source):
+        raise IntegrityError('Restauration requise hors de la sauvegarde')
     verify_backup(source)
     manifest = json.loads((source / 'backup.json').read_text())
     # La cible neuve conserve toute base existante, y compris la source de secours
@@ -83,10 +137,10 @@ def restore(source, destination):
     if hashes(destination) != manifest['files']:
         raise IntegrityError('Copie de restauration divergente')
     with closing(Store(destination)) as store:
-        proof = store.verify()
-        with store.transaction():
-            store.db.execute('UPDATE runtime SET restore_pending=1,admission=0')
-        store.stop('RESTORED_RECONCILIATION_REQUIRED', after_process_exit=True)
+        proof = verify(store)
+        if not status(destination, store)['restore_pending']:
+            exclusive_json(destination / 'restore.json', {'state': 'RESTORED_RECONCILIATION_REQUIRED'})
+        stop(destination, store, 'RESTORED_RECONCILIATION_REQUIRED', after_process_exit=True)
     for path in destination.rglob('*'):
         fd = os.open(path, os.O_RDONLY)
         try:
@@ -126,6 +180,8 @@ def main(argv=None):
         if args.data is None:
             raise ValueError('Données requises')
         if args.action == 'initialize':
+            if args.data.exists() and any(args.data.iterdir()):
+                raise FileExistsError('Initialisation réservée à un emplacement vide')
             initialize(args.data)
             result = {'state': 'INITIALIZED_ADMISSION_BLOCKED'}
         elif args.action == 'verify-backup':
@@ -137,12 +193,12 @@ def main(argv=None):
         else:
             with closing(Store(args.data)) as store:
                 if args.action == 'verify':
-                    result = store.verify()
+                    result = verify(store)
                 elif args.action == 'maintenance':
-                    result = store.stop('MAINTENANCE')
+                    result = stop(args.data, store, 'MAINTENANCE')
                 else:
-                    result = store.status()
-                    if args.action == 'quiescence' and (result['admission'] or result['operations'].get('SENDING', 0)):
+                    result = status(args.data, store)
+                    if args.action == 'quiescence' and (result['admission'] or result['operations'].get('EMISSION_POSSIBLE', 0)):
                         raise IntegrityError('Travaux encore actifs ou admission ouverte')
         print(encode(result))
         return 0

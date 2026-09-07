@@ -40,7 +40,7 @@ def build(repo, source, destination):
         files[name] = git(repo, 'cat-file', 'blob', blob)
         blobs[name] = blob
         modes[name] = 0o755 if mode == '100755' else 0o644
-    if not {'benchmark_lab_x/storage.py', 'benchmark_lab_x/runtime.py', 'benchmark_lab_x/__init__.py'} <= files.keys():
+    if not {'benchmark_lab_x/storage.py', 'benchmark_lab_x/runtime.py', 'benchmark_lab_x/service.py', 'benchmark_lab_x/benchmark-runtime', 'benchmark_lab_x/__init__.py'} <= files.keys():
         raise ValueError('Interfaces runtime absentes du commit')
     # Le schéma livré vient du commit construit, sans importer du code non approuvé
     match = re.search(rb'^SCHEMA_VERSION = ([0-9]+)$', files['benchmark_lab_x/storage.py'], re.MULTILINE)

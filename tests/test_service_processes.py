@@ -15,23 +15,24 @@ from urllib.request import urlopen
 
 from benchmark_lab_x.service import executor_health
 from benchmark_lab_x.storage import Store, initialize
+from tests.test_storage import PAYLOAD, operation
 
 
 class ServiceProcessesTests(unittest.TestCase):
     def test_health_restart_and_private_boundary(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve() / 'release'
+            root.mkdir()
             shutil.copytree(Path(__file__).resolve().parents[1] / 'benchmark_lab_x', root / 'benchmark_lab_x')
             (root / 'release.json').write_text(json.dumps({'source_sha': 'a' * 40}))
-            data, public = root / 'private', root / 'public'
+            data, public = root.parent / 'private', root.parent / 'public'
             public.mkdir()
             initialize(data)
             with closing(Store(data)) as store:
-                store.save_dossier('private', 1, {'secret': 'must never be public'})
-                store.add_budget('test', phase='preparation', currency='USD', cap_units=1, units_per_currency=1, authority={'test': True})
-                store.resume({'test': True})
-                store.reserve('attempt', budget_id='test', dossier_id='private', revision=1, reserved_units=1, intent={'test': True})
-                store.mark_sending('attempt')
+                store.save_dossier('d', 1, {**PAYLOAD, 'request': 'must never be public'})
+                store.create_budget('test', '1', 'TEST')
+                store.reserve_intent(operation('attempt'), 'test', '1')
+                store.mark_emission_possible('attempt')
             sock = root / 'executor.sock'
             command = [sys.executable, '-m', 'benchmark_lab_x.runtime']
             children = []
@@ -48,7 +49,7 @@ class ServiceProcessesTests(unittest.TestCase):
                             raise
                         time.sleep(0.02)
                 self.assertFalse(health['admission'])
-                self.assertEqual({'UNKNOWN': 1}, health['operations'])
+                self.assertEqual({'AMBIGUOUS': 1}, health['operations'])
                 with socket.socket() as probe:
                     probe.bind(('127.0.0.1', 0))
                     port = probe.getsockname()[1]
@@ -105,7 +106,7 @@ class ServiceProcessesTests(unittest.TestCase):
                         if time.monotonic() >= deadline:
                             raise
                         time.sleep(0.02)
-                self.assertEqual({'UNKNOWN': 1}, health['operations'])
+                self.assertEqual({'AMBIGUOUS': 1}, health['operations'])
                 self.assertFalse(health['admission'])
             finally:
                 for child in children:
