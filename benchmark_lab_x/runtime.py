@@ -163,7 +163,7 @@ def restore(source, destination):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
+    parser.add_argument('action', choices=('inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
     parser.add_argument('--data', type=Path)
     parser.add_argument('--authority', type=Path)
     parser.add_argument('--destination', type=Path)
@@ -205,7 +205,24 @@ def main(argv=None):
             result = (backup if args.action == 'backup' else restore)(args.data, args.destination)
         else:
             with closing(Store(args.data)) as store:
-                if args.action == 'admit-preparation':
+                if args.action in ('inspect-qualification', 'approve-qualification'):
+                    from .qualification import inspect_contract, approve
+                    if args.authority is None:
+                        raise ValueError('Fichier opérateur privé requis')
+                    private_path(args.authority)
+                    request = json.loads(args.authority.read_text(), object_pairs_hook=_unique_object)
+                    if type(request) is not dict or 'contract_sha256' not in request:
+                        raise ValueError('Contrat exact requis')
+                    if args.action == 'inspect-qualification':
+                        if set(request) not in ({'contract_sha256'}, {'contract_sha256', 'qualification_id', 'actor', 'authority'}):
+                            raise ValueError('Requête opérateur invalide')
+                        result = inspect_contract(store, request['contract_sha256'])
+                    else:
+                        if set(request) != {'contract_sha256', 'qualification_id', 'actor', 'authority'}:
+                            raise ValueError('Requête opérateur invalide')
+                        result = approve(store, request['contract_sha256'], request['qualification_id'],
+                                         actor=request['actor'], authority=request['authority'])
+                elif args.action == 'admit-preparation':
                     from .preparation import admit
                     if args.authority is None:
                         raise ValueError('Autorité requise')
@@ -223,7 +240,7 @@ def main(argv=None):
                         raise IntegrityError('Travaux encore actifs ou admission ouverte')
         print(encode(result))
         return 0
-    except (OSError, ValueError, sqlite3.Error):
+    except (OSError, ValueError, KeyError, sqlite3.Error):
         # Ne pas copier le contenu d'une saisie ou un chemin privé dans les journaux
         print(encode({'state': 'HOLD', 'reason': 'OPERATION_NOT_VERIFIED'}))
         return 78
