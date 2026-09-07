@@ -160,7 +160,7 @@ Le détail des configurations vient après la synthèse. Le lecteur peut examine
 
 Une durée affichée précise ce qu’elle mesure : exécution, attente ou travail humain. Elle emploie des secondes, minutes ou heures selon l’ordre de grandeur, en gardant la valeur source accessible. Une limite de temps n’est pas une durée observée ; une durée d’exécution ne prouve pas du temps humain économisé. Cette règle de présentation n’impose aucune nouvelle mesure ni critère de classement.
 
-La saisie, l’interview, les aperçus, les corrections, les tris et filtres, la sélection de campagne et l’accès aux preuves doivent fonctionner au clavier, avec un focus visible et des intitulés compréhensibles par un lecteur d’écran. Les tableaux gardent leurs en-têtes et leur sens sur petit écran ou avec un texte agrandi. Les verdicts et inconnues restent compréhensibles sans couleur seule. Ces propriétés se vérifient sur le parcours complet, y compris les pièces ouvertes depuis l’aperçu et la comparaison. Un parcours manuel consigné vérifie les actions principales au clavier et avec un lecteur d’écran ; il nomme l’environnement utilisé, les actions et les écarts observés.
+La saisie, l’interview, les aperçus, les corrections, les tris et filtres, la sélection de campagne et l’accès aux preuves doivent fonctionner au clavier, avec un focus visible et des intitulés compréhensibles. Les tableaux gardent leurs en-têtes et leur sens sur petit écran ou avec un texte agrandi. Les verdicts et inconnues restent compréhensibles sans couleur seule. Ces propriétés se vérifient sur le parcours complet, y compris les pièces ouvertes depuis l’aperçu et la comparaison. Un parcours manuel consigné vérifie les actions principales au clavier ; il nomme l’environnement utilisé, les actions et les écarts observés.
 
 ## 11. Hors périmètre documentaire
 
@@ -189,7 +189,7 @@ Les choix techniques relèvent de l'ARD. Le backlog et son avancement relèvent 
 | Un filtre est appliqué après résultat | périmètre affiché, verdicts et population des statistiques inchangés ; aucune nouvelle agrégation implicite |
 | Aucune configuration n’est admissible | aucune option désignée comme utilisable ; dépenses et mesures valides restent consultables |
 | Une pièce est privée ou du contenu candidat est affiché | la limite de vérification est visible et le parcours ne donne aucun accès privé non autorisé ni exécution active |
-| Le parcours est utilisé au clavier, avec lecteur d’écran ou sur petit écran | saisie, interview, aperçu, correction, campagne, comparaison et preuves restent compréhensibles et accessibles |
+| Le parcours est utilisé au clavier ou sur petit écran | saisie, interview, aperçu, correction, campagne, comparaison et preuves restent compréhensibles et accessibles |
 | La liste d’essai des assistants ou le score futur est présentée | aucun panel candidat substitué, assistant sélectionné ou score 0.1.0 déduit de cette mention |
 | Une préparation ou campagne est terminée sans autorisation de publication | aucune demande, sortie ou pièce privée n’est publiée au catalogue |
 | Une démonstration utilise des données synthétiques | cette nature est visible ; elle ne remplace pas les résultats réels autorisés exigés par 0.1.0 |
