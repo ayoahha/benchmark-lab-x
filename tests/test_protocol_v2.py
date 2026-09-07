@@ -1349,12 +1349,13 @@ class ProtocolV2Tests(unittest.TestCase):
             ["HOLD_B0_09_SNAPSHOT_APPROVAL_REQUIRED"],
         )
         proposition = {"proposal_source": None, "b0_09_approval": None}
-        with tempfile.TemporaryDirectory(dir=RACINE) as tmp:
-            source_path = Path(tmp) / "routes.v3.proposed.json"
+        with tempfile.TemporaryDirectory() as tmp:
+            racine_fixture = Path(tmp)
+            source_path = racine_fixture / "routes.v3.proposed.json"
             source_path.write_text(
                 json.dumps(proposition, sort_keys=True) + "\n", encoding="utf-8"
             )
-            relatif = source_path.relative_to(RACINE).as_posix()
+            relatif = source_path.relative_to(racine_fixture).as_posix()
             source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
             approbation = {
                 "schema_version": "benchmark-lab-x/b0-09-approval/v2",
@@ -1374,7 +1375,7 @@ class ProtocolV2Tests(unittest.TestCase):
                     "approved_cap_microdollars": 100_000_000,
                 },
             }
-            lu, source = figer_routes_precollecte._source_proposition(snapshot, RACINE)
+            lu, source = figer_routes_precollecte._source_proposition(snapshot, racine_fixture)
             self.assertEqual(lu, proposition)
             self.assertEqual(source["sha256"], source_hash)
 
@@ -1385,7 +1386,7 @@ class ProtocolV2Tests(unittest.TestCase):
                 figer_routes_precollecte.SnapshotRoutesInvalide,
                 "empreinte de la proposition",
             ):
-                figer_routes_precollecte._source_proposition(altere, RACINE)
+                figer_routes_precollecte._source_proposition(altere, racine_fixture)
 
     def test_preparateur_v3_prend_budget_quotas_et_payload_dans_l_intention(self):
         alias = "reference-gpt-5-6"
