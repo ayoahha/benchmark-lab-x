@@ -22,6 +22,9 @@ import sqlite3
 import stat
 
 
+SCHEMA_VERSION = 1
+
+
 class SchemaError(ValueError):
     """The existing database is not a supported S1 schema"""
 
@@ -367,7 +370,7 @@ def _check_schema(connection, allow_empty=False):
             if connection.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
                 raise SchemaError("S1 requires the standard DELETE journal")
             return False
-        if version != 1:
+        if version != SCHEMA_VERSION:
             raise SchemaError("unsupported storage schema version")
         # Compare all schema objects, including constraints and automatic indexes
         expected = [
@@ -434,7 +437,7 @@ def initialize(root: Path) -> None:
             if not _check_schema(connection, allow_empty=True):
                 for statement in _SCHEMA + _S1_SCHEMA:
                     connection.execute(statement)
-                connection.execute("PRAGMA user_version=1")
+                connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             connection.execute("COMMIT")
         except BaseException:
             if connection.in_transaction:
@@ -702,7 +705,7 @@ class Store:
                 for (budget_id,) in connection.execute('SELECT budget_id FROM budgets').fetchall():
                     self._budget(connection, budget_id, operations)
             return {
-                'schema_version': 1, 'integrity_ok': intact and not broken,
+                'schema_version': SCHEMA_VERSION, 'integrity_ok': intact and not broken,
                 'broken_pieces': broken, 'orphan_files': orphans,
                 'active_operations': [row['operation_id'] for row in operations
                                       if row['state'] != 'RECEIVED'],
