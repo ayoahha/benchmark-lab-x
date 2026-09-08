@@ -185,6 +185,9 @@ def view(store, session_id, dossier_id, revision=None):
             result['qualification'] = projection(store, connection, dossier_id, revision,
                                                   eligible=result['validation'] is not None)
             result['qualified'] = result['qualification']['status'] in ('QUALIFIED', 'APPROVED')
+        if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='s4_control'").fetchone():
+            from .campaigns import projection
+            result['campaigns'] = projection(store, connection, dossier_id)
         return result
 
 
@@ -578,6 +581,73 @@ def render(value, csrf, path='/preparation', *, error=False):
             'et les limites de jugement sont réservées à l’inspection locale du responsable.</p>')
         if qualification.get('contract_sha256'):
             content += '<p>Contrat : <code>' + text(qualification['contract_sha256']) + '</code></p>'
+        if 'campaigns' in value:
+            campaigns = '<p>Suivi privé des comparaisons fictives de ce dossier. '
+            campaigns += 'L’acquisition conserve des reçus ; elle ne juge pas le contenu des sorties.</p>'
+            technical = {'NOT_STARTED': 'Non lancée : aucune tentative', 'INTENT_RECORDED': 'Intention enregistrée',
+                         'EMISSION_POSSIBLE': 'Appel actif ou émission possible, reçu en attente',
+                         'AMBIGUOUS': 'Effets inconnus : reprise bloquée', 'RECEIVED': 'Reçu conservé'}
+            for campaign in value['campaigns']:
+                task = campaign['task']
+                campaigns += '<article><h3>Campagne ' + text(campaign['campaign_id']) + '</h3>'
+                campaigns += '<p>Tâche ' + text(task['dossier_id']) + ', version ' + text(task['version'])
+                campaigns += ', révision du dossier ' + text(task['revision']) + '.</p>'
+                for label, digest in (('Manifeste', campaign['manifest_sha256']), ('Contrat', campaign['contract_sha256']),
+                                      ('Paquet', task['package_sha256'])):
+                    campaigns += '<p>' + label + ' : <code>' + text(digest) + '</code></p>'
+                campaigns += '<h4>Configurations demandées</h4>' + listing(
+                    f'{c["id"]} : {c["model"]}, révision {c["revision"]}, fournisseur {c["provider"]}, '
+                    f'accès {c["access"]}, canal {c["channel_id"]}, route {c["route"]}, effort {c["effort"]}, '
+                    f'paramètres {encode(c["parameters"])} ; observations exigées : {", ".join(c["required_observations"])}'
+                    for c in campaign['panel'])
+                conditions = campaign['conditions']
+                pi = conditions['pi']
+                campaigns += '<h4>Conditions Pi communes</h4><p>' + text(
+                    f'{pi["package"]} {pi["version"]} ; état {pi["status"]} ; gel {conditions["frozen_at"]}') + '</p>'
+                campaigns += '<p>Empreinte Pi : <code>' + text(pi['sha256']) + '</code></p>'
+                campaigns += '<details><summary>Contexte et environnement communs</summary>' + listing(
+                    f'{k} : {encode(conditions[k])}' for k in ('context_sha256', 'packages', 'tools', 'skills', 'defaults', 'environment')) + '</details>'
+                campaigns += '<h4>Autorités et budget</h4><p>' + (
+                    'Admission opérateur ouverte pour les cellules : ' + text(', '.join(campaign['allowed_cells'])) if campaign['admission_open'] else
+                    'Admission fermée. Autorités à fournir ou renouveler par l’opérateur : ' + text(', '.join(campaign['missing_authorities']))) + '.</p>'
+                if campaign['restore_pending']:
+                    campaigns += '<p>Restauration à rapprocher : toute nouvelle admission reste bloquée.</p>'
+                if campaign['stop_reason']:
+                    campaigns += '<p>Motif d’arrêt : ' + text(campaign['stop_reason']) + '.</p>'
+                budget = campaign['budget']
+                if budget:
+                    campaigns += '<p>' + text(f'Enveloppe {budget["budget_id"]} : {budget["limit"]} {budget["currency"]}. '
+                        f'Sous-total des coûts connus : {budget["spent"]}. Réservations conservées : {budget["reserved"]}. '
+                        f'Solde disponible : {budget["available"] if budget["balance_status"] == "KNOWN" else "INCONNU"}.') + '</p>'
+                else:
+                    campaigns += '<p>Budget prévu : INCONNU, enveloppe à désigner par l’opérateur.</p>'
+                campaigns += '<p>Prévisions de réserve par cellule : ' + text(
+                    encode(campaign['reserve_amounts']) if campaign['reserve_amounts'] else 'INCONNU, autorité attendue') + '.</p>'
+                campaigns += '<p>Base de coût : ' + text(encode(campaign['cost_basis'])) + '.</p>'
+                campaigns += '<p>La réservation ne prouve pas un plafond de facturation. Préparation et jugement conservent leurs opérations propres.</p>'
+                campaigns += '<h4>Cellules prévues</h4>' + listing(
+                    f'{c["cell_id"]} — cas {c["case_id"]}, configuration {c["configuration_id"]} : {technical[c["state"]]}'
+                    for c in campaign['cells'])
+                for attempt in campaign['attempts']:
+                    campaigns += '<details><summary>Tentative ' + text(attempt['operation_id']) + ' — ' + text(technical[attempt['state']]) + '</summary>'
+                    campaigns += '<p>Exécution ' + text(attempt['execution_id']) + ', cellule ' + text(attempt['cell_id']) + '.</p>'
+                    campaigns += '<p>Intention : ' + text(attempt['created_at']) + '. Émission possible : ' + text(attempt['emitted_at'] or 'Non lancée')
+                    campaigns += '. Réception : ' + text(attempt['received_at'] or 'INCONNU') + '.</p>'
+                    campaigns += '<p>Reçu : ' + text(attempt['receipt_id'] or 'Absent') + '. Preuve d’émission : ' + text(attempt['emission']) + '.</p>'
+                    campaigns += '<p>Configuration observée : ' + text(encode(attempt['observed_configuration'])) + '.</p>'
+                    campaigns += '<p>Sources des observations : ' + text(encode(attempt['observation_sources'])) + '.</p>'
+                    cost = attempt['observed_cost']
+                    campaigns += '<p>Coût observé : ' + text('INCONNU' if cost is None or cost['status'] == 'UNKNOWN' else cost['amount'] + ' ' + cost['currency'])
+                    campaigns += '. Source : ' + text(cost['source'] if cost else 'INCONNU') + '.</p>'
+                    if attempt['incident']:
+                        campaigns += '<p>Incident technique : ' + text(attempt['incident']) + '.</p>'
+                    if attempt['attribution_incident']:
+                        campaigns += '<p>Attribution non prouvée : ' + text(', '.join(attempt['attribution_incident'])) + '.</p>'
+                    campaigns += '<p>Sortie brute réservée à l’inspection opérateur. Aucun verdict de contenu produit.</p></details>'
+                campaigns += '</article>'
+            if not value['campaigns']:
+                campaigns += '<p>Aucune campagne liée à ce dossier.</p>'
+            content += section('Comparaisons de ce dossier', campaigns)
         if value['stage'] != 'waiting':
             content += section('Préciser ou corriger cet exemple', form(url + '/messages',
                 {'action_id': secrets.token_hex(16), 'revision': revision},

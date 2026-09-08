@@ -1,7 +1,8 @@
 """Commandes locales d'exploitation sans appel fournisseur."""
 import argparse
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, contextmanager
+import fcntl
 from hashlib import sha256
 import json
 import os
@@ -31,6 +32,18 @@ def verify(store):
     return proof
 
 
+@contextmanager
+def worker_lock(store, *, shared=False):
+    # The existing directory descriptor pins the same lock across processes
+    # ponytail: one lock per database, per-worker locks if finer recovery is needed
+    fd = store._root_fd
+    fcntl.flock(fd, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+    try:
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
 def status(root, store):
     marker = Path(root) / 'restore.json'
     restored = os.path.lexists(marker)
@@ -44,6 +57,12 @@ def status(root, store):
     if extended:
         from .preparation import admission
         opened = bool(admission(store))
+    campaigns_open = 0
+    if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='s4_control'").fetchone():
+        campaigns_open = connection.execute('SELECT count(*) FROM s4_status WHERE admission_id IS NOT NULL').fetchone()[0]
+        opened = opened or bool(campaigns_open)
+    # Keep the exact health wire fields consumed by service.executor_health
+    # Campaign admission contributes to the existing flag, not an extra field
     return {'admission': opened and not restored, 'restore_pending': restored,
             'operations': dict(Counter(row['state'] for row in store.inspect_operations()))}
 
@@ -53,10 +72,25 @@ def stop(root, store, reason, after_process_exit=False):
     if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='s2_control'").fetchone():
         from .preparation import close_admission
         close_admission(store)
+    if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='s4_control'").fetchone():
+        from .campaigns import close_admission
+        close_admission(store, reason)
     if after_process_exit:
+        campaigns = set()
+        if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='s4_control'").fetchone():
+            campaigns = {row[0] for row in connection.execute('SELECT operation_id FROM s4_attempts')}
         for row in store.inspect_operations():
-            if row['state'] == 'EMISSION_POSSIBLE':
+            if row['state'] == 'EMISSION_POSSIBLE' and row['operation_id'] not in campaigns:
                 store.mark_ambiguous(row['operation_id'], reason)
+        if campaigns:
+            try:
+                with worker_lock(store):
+                    for row in store.inspect_operations():
+                        if row['state'] == 'EMISSION_POSSIBLE' and row['operation_id'] in campaigns:
+                            store.mark_ambiguous(row['operation_id'], reason)
+            except BlockingIOError:
+                # Service exit does not establish independent worker exit
+                pass
     return status(root, store)
 
 
@@ -84,7 +118,7 @@ def backup(root, destination):
     root = Path(root)
     if destination.is_relative_to(root):
         raise IntegrityError('Sauvegarde requise hors des données sources')
-    with closing(Store(root)) as store, closing(sqlite3.connect(root / 'metadata.sqlite3')) as lock:
+    with closing(Store(root)) as store, worker_lock(store), closing(sqlite3.connect(root / 'metadata.sqlite3')) as lock:
         lock.execute('BEGIN IMMEDIATE')
         state = status(root, store)
         if state['admission'] or state['operations'].get('EMISSION_POSSIBLE', 0):
@@ -163,7 +197,8 @@ def restore(source, destination):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
+    campaign_actions = ('create-campaign', 'inspect-campaign', 'admit-campaign', 'stop-campaign', 'resume-campaign')
+    parser.add_argument('action', choices=campaign_actions + ('initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
     parser.add_argument('--data', type=Path)
     parser.add_argument('--authority', type=Path)
     parser.add_argument('--destination', type=Path)
@@ -197,6 +232,10 @@ def main(argv=None):
         elif args.action == 'initialize-preparation':
             initialize_preparation(args.data)
             result = {'state': 'PREPARATION_INITIALIZED_ADMISSION_BLOCKED'}
+        elif args.action == 'initialize-campaigns':
+            from .campaigns import initialize as initialize_campaigns
+            initialize_campaigns(args.data)
+            result = {'state': 'CAMPAIGNS_INITIALIZED'}
         elif args.action == 'verify-backup':
             result = verify_backup(args.data)
         elif args.action in ('backup', 'restore'):
@@ -205,7 +244,30 @@ def main(argv=None):
             result = (backup if args.action == 'backup' else restore)(args.data, args.destination)
         else:
             with closing(Store(args.data)) as store:
-                if args.action in ('inspect-qualification', 'approve-qualification'):
+                if args.action in campaign_actions:
+                    from . import campaigns
+                    from .storage import _fields
+                    if args.authority is None:
+                        raise ValueError('Fichier opérateur privé requis')
+                    private_path(args.authority)
+                    request = json.loads(args.authority.read_text(), object_pairs_hook=_unique_object)
+                    if args.action == 'create-campaign':
+                        _fields(request, ('manifest',), 'create-campaign')
+                        result = campaigns.create(store, request['manifest'])
+                    elif args.action == 'inspect-campaign':
+                        _fields(request, ('campaign_id',), 'inspect-campaign')
+                        result = campaigns.inspect(store, request['campaign_id'])
+                    elif args.action == 'stop-campaign':
+                        _fields(request, ('campaign_id', 'reason'), 'stop-campaign')
+                        campaigns.stop(store, request['campaign_id'], request['reason'])
+                        result = campaigns.inspect(store, request['campaign_id'])
+                    else:
+                        _fields(request, ('campaign_id', 'authority', 'evidence'), args.action)
+                        purpose = 'resume' if args.action == 'resume-campaign' else 'start'
+                        if type(request['authority']) is not dict or request['authority'].get('purpose') != purpose:
+                            raise ValueError('Autorité distincte de lancement ou reprise requise')
+                        result = campaigns.admit(store, request['campaign_id'], request['authority'], request['evidence'])
+                elif args.action in ('inspect-qualification', 'approve-qualification'):
                     from .qualification import inspect_contract, approve
                     if args.authority is None:
                         raise ValueError('Fichier opérateur privé requis')
@@ -234,10 +296,13 @@ def main(argv=None):
                     result = verify(store)
                 elif args.action == 'maintenance':
                     result = stop(args.data, store, 'MAINTENANCE')
+                elif args.action == 'quiescence':
+                    with worker_lock(store):
+                        result = status(args.data, store)
+                        if result['admission'] or result['operations'].get('EMISSION_POSSIBLE', 0):
+                            raise IntegrityError('Travaux encore actifs ou admission ouverte')
                 else:
                     result = status(args.data, store)
-                    if args.action == 'quiescence' and (result['admission'] or result['operations'].get('EMISSION_POSSIBLE', 0)):
-                        raise IntegrityError('Travaux encore actifs ou admission ouverte')
         print(encode(result))
         return 0
     except (OSError, ValueError, KeyError, sqlite3.Error):
