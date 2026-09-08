@@ -188,6 +188,10 @@ def view(store, session_id, dossier_id, revision=None):
         if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='s4_control'").fetchone():
             from .campaigns import projection
             result['campaigns'] = projection(store, connection, dossier_id)
+            if connection.execute("SELECT 1 FROM sqlite_schema WHERE name='s5_control'").fetchone():
+                from .evaluation import projection as evaluations
+                for campaign in result['campaigns']:
+                    campaign['evaluations'] = evaluations(store, connection, dossier_id, campaign['campaign_id'])
         return result
 
 
@@ -468,6 +472,10 @@ def dispatch(store, method, path, token, body, source, transport_present):
         _fields(body, ('dossier_id', 'action_id', 'request'), 'create')
         operation_id, start = submit(store, session_id, body['dossier_id'], body, source, transport_present)
         return 202, {'operation_id': operation_id, 'dossier_id': body['dossier_id']}, None, operation_id if start else None
+    proof = re.fullmatch(r'/preparation/dossiers/([A-Za-z0-9_-]{1,128})/evaluations/([A-Za-z0-9_-]{1,128})/pieces/([A-Za-z0-9_-]{1,128})', path)
+    if method == 'GET' and proof:
+        from .evaluation import piece_bytes as evaluation_piece
+        return 200, evaluation_piece(store, session_id, *proof.groups()), None, None
     match = re.fullmatch(r'/preparation/dossiers/([A-Za-z0-9_-]{1,128})(?:/(messages|validation)|/revisions/([1-9][0-9]*)(?:/pieces/([A-Za-z0-9_-]{1,128}))?)?', path)
     if not match:
         raise Denied('Ressource inaccessible')
@@ -488,6 +496,58 @@ def dispatch(store, method, path, token, body, source, transport_present):
         _fields(body, ('dossier_id', 'revision', 'package_sha256'), 'validation')
         return 200, validate(store, session_id, dossier_id, body), None, None
     raise Denied('Action inaccessible')
+
+
+def render_evaluations(evaluations, dossier_url):
+    """Inert evidence and correction history inside the owner's existing page"""
+    def text(value):
+        return escape(str(value), quote=True)
+
+    content = '<h4>Verdicts et preuves</h4><p>Évaluations fictives, par cas et tentative. '
+    content += 'Le verdict porte sur la configuration observée sous les conditions communes ; '
+    content += 'il ne prouve ni une propriété du modèle seul ni une compétence métier générale.</p>'
+    for record in evaluations:
+        eid = record['evaluation_id']
+        content += '<section id="evaluation-' + text(eid) + '"><h5>' + text(record['verdict']) + '</h5>'
+        content += '<p>' + text(record['reason']) + '</p><p>Cas ' + text(record['case_id'])
+        content += ', configuration ' + text(record['configuration_id']) + ', évaluation ' + text(eid) + '.</p>'
+        content += '<p>Responsable : ' + text(record['responsible']) + '. Date : ' + text(record['created_at']) + '.</p>'
+        previous = record['previous_evaluation_id']
+        if previous:
+            content += '<p>Correction de <a href="#evaluation-' + text(previous) + '">' + text(previous) + '</a>.</p>'
+        content += '<ul>'
+        for finding in record['findings']:
+            content += '<li>' + text(finding['criterion_id'] + ' / ' + finding['control_id'])
+            content += ' : ' + text(finding['status']) + ', attribution ' + text(finding['attribution'])
+            content += '. ' + text(finding['finding'])
+            for proof in finding['evidence']:
+                link = next(p for p in record['proof_links'] if p['piece_id'] == proof['piece_id'])
+                content += '<details><summary>Passage de ' + text(link['name']) + '</summary>'
+                content += '<pre>' + text(proof['passage']) + '</pre><p>SHA-256 : <code>' + text(proof['sha256'])
+                content += '</code></p><a href="' + text(link['href']) + '">Ouvrir la pièce exacte</a></details>'
+            content += '</li>'
+        content += '</ul><p>Pièces liées à cette évaluation, accessibles dans votre session :</p><ul>'
+        for link in record['proof_links']:
+            content += '<li><a href="' + text(link['href']) + '">' + text(link['name']) + '</a></li>'
+        content += '</ul><h6>Mesures prévues</h6><ul>'
+        for measure in record['measures']:
+            content += '<li>' + text(measure['definition']['measure']) + ' : '
+            content += text('INCONNU' if measure['status'] == 'UNKNOWN' else measure['value'])
+            content += ' ' + text(measure['unit']) + '<details><summary>Définition et preuve source</summary><pre>'
+            content += text(encode(measure)) + '</pre></details></li>'
+        content += '</ul><p>Aucune synthèse de plusieurs cas ou tentatives calculée.</p>'
+        for label, cost in (('Dépense candidate', record['candidate_cost']), ('Dépense de jugement', record['judgment']['cost'])):
+            content += '<p>' + label + ' : ' + text('INCONNU' if cost is None or cost['status'] == 'UNKNOWN' else cost['amount'] + ' ' + cost['currency'])
+            content += '. Source : ' + text(cost['source'] if cost else 'INCONNU') + '.</p>'
+        content += '<p>Limites : ' + text('; '.join(record['limits'])) + '</p>'
+        for label, value in (('Méthode et qualification du contrat exact', record['qualification']),
+                             ('Jugement, consignes, pièces vues, désaccords et arbitrages', record['judgment']),
+                             ('Liens connus entre préparation, jugement et candidat', record['configuration_links']),
+                             ('Configurations demandée et observée, sources', {k: record[k] for k in ('requested_configuration', 'observed_configuration', 'observation_sources')}),
+                             ('Portée du coût et règle d’agrégation', {k: record[k] for k in ('cost_basis', 'aggregation')})):
+            content += '<details><summary>' + label + '</summary><pre>' + text(encode(value)) + '</pre></details>'
+        content += '<p><a href="' + text(dossier_url) + '">Revenir au dossier</a></p></section>'
+    return content
 
 
 def render(value, csrf, path='/preparation', *, error=False):
@@ -643,7 +703,12 @@ def render(value, csrf, path='/preparation', *, error=False):
                         campaigns += '<p>Incident technique : ' + text(attempt['incident']) + '.</p>'
                     if attempt['attribution_incident']:
                         campaigns += '<p>Attribution non prouvée : ' + text(', '.join(attempt['attribution_incident'])) + '.</p>'
-                    campaigns += '<p>Sortie brute réservée à l’inspection opérateur. Aucun verdict de contenu produit.</p></details>'
+                    evaluations = [e for e in campaign.get('evaluations', []) if e['attempt_id'] == attempt['operation_id']]
+                    if evaluations:
+                        campaigns += render_evaluations(evaluations, url)
+                    else:
+                        campaigns += '<p>Aucune évaluation conservée. Sortie brute réservée à l’inspection opérateur.</p>'
+                    campaigns += '</details>'
                 campaigns += '</article>'
             if not value['campaigns']:
                 campaigns += '<p>Aucune campagne liée à ce dossier.</p>'

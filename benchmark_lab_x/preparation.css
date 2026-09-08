@@ -14,6 +14,7 @@ button { display: block; margin-top: 1rem; background: #164c65; color: white; cu
 :focus-visible { outline: 3px solid #8a3600; outline-offset: 4px; }
 [role="status"], [role="alert"] { border-left: 4px solid #486170; padding: .75rem; background: white; }
 code, p, li { overflow-wrap: anywhere; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 li { margin-block: .5rem; }
 details { border: 1px solid #486170; padding: .75rem; }
 summary { cursor: pointer; }
