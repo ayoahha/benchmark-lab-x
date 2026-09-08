@@ -3,6 +3,7 @@ from contextlib import closing
 from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
+import json
 from pathlib import Path
 import shutil
 import sqlite3
@@ -17,6 +18,45 @@ from tests.test_storage import PAYLOAD, operation, receipt, cost
 
 
 class ServiceStorageTests(unittest.TestCase):
+    def test_quiescence_refuses_active_qualification_and_preserves_data(self):
+        from benchmark_lab_x import preparation, qualification as q
+        from tests.test_s3_regressions import ACTOR, check, fixture, specification
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / 'private'
+            _, view, reference = fixture(root)
+            q.initialize(root)
+
+            def cli(expected_code, expected_result):
+                result = subprocess.run(
+                    [sys.executable, '-B', '-m', 'benchmark_lab_x.runtime',
+                     'quiescence', '--data', str(root)],
+                    capture_output=True, text=True, timeout=10)
+                self.assertEqual(expected_code, result.returncode, result.stderr)
+                self.assertEqual(expected_result, json.loads(result.stdout))
+
+            with closing(Store(root)) as store:
+                preparation.close_admission(store)
+                candidate = q.draft(store, 'fixture', view['revision'], specification(reference))
+                idle = status(root, store)
+                self.assertEqual({'admission', 'restore_pending', 'operations'}, set(idle))
+                cli(0, idle)
+
+                def during(contract, resources):
+                    before = list(store._connection.iterdump())
+                    pieces = {path: path.read_bytes() for path in (root / 'pieces').iterdir()}
+                    cli(78, {'state': 'HOLD', 'reason': 'OPERATION_NOT_VERIFIED'})
+                    self.assertEqual(before, list(store._connection.iterdump()))
+                    self.assertEqual(pieces, {path: path.read_bytes() for path in (root / 'pieces').iterdir()})
+                    return check(contract, resources)
+
+                result = q.qualify(store, candidate['contract_sha256'], reviewer=ACTOR, check=during)
+                self.assertEqual('QUALIFIED', result['status'])
+                before = sha256((root / 'metadata.sqlite3').read_bytes()).hexdigest()
+                cli(0, idle)
+                self.assertEqual(before, sha256((root / 'metadata.sqlite3').read_bytes()).hexdigest())
+                self.assertTrue(verify(store)['integrity_ok'])
+
     def test_reopen_corruption_and_unknown_schema_preserve_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve() / 'private'
