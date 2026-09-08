@@ -2,8 +2,8 @@
 
 Emission is a caller responsibility, after mark_emission_possible commits.
 Opening or inspecting storage never retries an operation or releases a reserve.
-Schema 1 accepts the canary, integrated S1 and explicitly initialized S2 layouts.
-S2 has its own structure identity; no implicit migration is performed.
+Schema 1 recognizes the canary, integrated S1 and explicit S2–S4 extensions.
+Each extension has its own structure identity; no implicit migration is performed.
 """
 
 from __future__ import annotations
@@ -451,21 +451,29 @@ def _check_schema(connection, allow_empty=False):
                                    ('s2_revisions', 1), ('s2_actions', 2),
                                    ('s2_validations', 1))
                for number in range(1, count + 1)]
-        s3 = None
+        s3 = s4 = None
         if any(name == 's3_control' for _, name, _, _ in rows):
             from .qualification import schema_objects
             s3 = s2 + schema_objects()
+        if s3 is not None and any(name == 's4_control' for _, name, _, _ in rows):
+            from .campaigns import schema_objects
+            s4 = s3 + schema_objects()
         layout = ('canary' if normalized(rows) == normalized(expected) else
                   's1' if normalized(rows) == normalized(extended) else
                   's2' if normalized(rows) == normalized(s2) else
-                  's3' if s3 is not None and normalized(rows) == normalized(s3) else None)
-        if layout in ('s2', 's3') and connection.execute(
+                  's3' if s3 is not None and normalized(rows) == normalized(s3) else
+                  's4' if s4 is not None and normalized(rows) == normalized(s4) else None)
+        if layout in ('s2', 's3', 's4') and connection.execute(
                 'SELECT singleton, format_identity FROM s2_control').fetchall() != [(1, PREPARATION_IDENTITY)]:
             raise SchemaError('unsupported preparation identity')
-        if layout == 's3':
+        if layout in ('s3', 's4'):
             from .qualification import FORMAT_IDENTITY
             if connection.execute('SELECT * FROM s3_control').fetchall() != [(1, FORMAT_IDENTITY)]:
                 raise SchemaError('unsupported qualification identity')
+        if layout == 's4':
+            from .campaigns import FORMAT_IDENTITY
+            if connection.execute('SELECT * FROM s4_control').fetchall() != [(1, FORMAT_IDENTITY)]:
+                raise SchemaError('unsupported campaigns identity')
         if layout is None:
             raise SchemaError("unsupported storage schema structure")
         if connection.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
@@ -536,7 +544,7 @@ def initialize_preparation(root: Path) -> None:
         connection = store._connection_checked()
         with _transaction(connection, write=True):
             layout = _check_schema(connection)
-            if layout in ('s2', 's3'):
+            if layout in ('s2', 's3', 's4'):
                 return
             if layout != 's1' or os.listdir(store._pieces_fd) or any(connection.execute(
                     'SELECT 1 FROM ' + table + ' LIMIT 1').fetchone()
@@ -802,16 +810,19 @@ class Store:
             # Inventory names only: do not follow links or remove partial/orphan bytes
             orphans = sorted('pieces/' + name for name in os.listdir(self._pieces_fd)
                              if 'pieces/' + name not in references)
-            operations = self._operations(connection) if layout in ('s1', 's2', 's3') else []
-            if layout in ('s1', 's2', 's3'):
+            operations = self._operations(connection) if layout in ('s1', 's2', 's3', 's4') else []
+            if layout in ('s1', 's2', 's3', 's4'):
                 for (budget_id,) in connection.execute('SELECT budget_id FROM budgets').fetchall():
                     self._budget(connection, budget_id, operations)
-            if layout in ('s2', 's3'):
+            if layout in ('s2', 's3', 's4'):
                 from .preparation import verify_preparation
                 verify_preparation(self, connection)
-            if layout == 's3':
+            if layout in ('s3', 's4'):
                 from .qualification import verify_qualification
                 verify_qualification(self, connection)
+            if layout == 's4':
+                from .campaigns import verify_campaigns
+                verify_campaigns(self, connection)
             return {
                 'schema_version': SCHEMA_VERSION, 'integrity_ok': intact and not broken,
                 'broken_pieces': broken, 'orphan_files': orphans,

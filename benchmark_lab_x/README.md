@@ -130,7 +130,7 @@ Les commandes `benchmark-runtime web --public … --socket …` et
 Linux. Le web expose `/healthz` et `/readyz` sans appel modèle ; le second contrôle
 interroge l'exécuteur par socket Unix et vérifie le stockage. Au démarrage,
 l'exécuteur conserve les émissions S1 sans reçu en `AMBIGUOUS`, avec leur
-réservation et un motif d'interruption. Ce processus ne fournit pas encore le moteur de campagnes S4/S5.
+réservation et un motif d'interruption. Les campagnes locales S4 utilisent le travailleur explicite décrit ci-dessous ; ce processus ne reprend aucune file candidate et ne fournit pas S5.
 
 En dehors de `/preparation`, le web sert une projection nommée par l'empreinte de son manifeste
 `publication.json`, sélectionnée par `public/active.json`. Chaque fichier servi
@@ -231,6 +231,125 @@ Pour inspecter, le fichier contient `contract_sha256`. Pour approuver, il contie
 La vue du demandeur présente séparément validation, qualification et approbation. Sur une base S3, `qualification` expose `status`, `contract_sha256`, `qualification_status` et `approval_status`. `qualified` ne remplace pas l’approbation : celle-ci est indiquée par `APPROVED`. Attente, blocage et nouvelle validation requise restent distincts ; aucune référence, sortie de contrôle ou limite privée n’est projetée. Les formulaires, les pièces autorisées et les liens de retour S2 sont réutilisés. Leur HTML ne prouve pas à lui seul le parcours clavier, le focus visible, le petit écran ou le texte agrandi : une observation sur ce candidat reste requise, distincte des preuves historiques S2 et des tests HTTP.
 
 Les régressions complémentaires sont dans [test_s3_regressions.py](../tests/test_s3_regressions.py). La découverte CI les inclut ; l’acceptation privée S3 et la suite demo restent séparées. Une évaluation empêchée par le sandbox de l’écrivain n’est pas un succès : les tests de sockets doivent être exécutés par le juge local Graph autorisé. Les preuves macOS restent distinctes d’une validation Linux. Cette construction ne réalise aucune intégration Git, migration opérationnelle, campagne ou publication.
+
+## Campagnes privées locales S4
+
+Le module [campaigns.py](campaigns.py) conserve plusieurs manifestes et leurs cellules sur les contrats approuvés S3. Il fournit l’admission, la réservation, une acquisition par callback fictif et le suivi du dossier S2. Il ne raccorde aucun fournisseur ni Pi réel. Les paramètres du prototype historique restent propres à celui-ci. La capacité locale ne produit aucun verdict de contenu, classement ou publication.
+
+L’initialisation est explicite sur une base S3 reconnue et intègre, même peuplée. Elle ajoute l’identité `benchmark-lab-x/campaigns/v1`, ses tables et contraintes, avec admission fermée pour chaque nouvelle campagne. `user_version=1`, les pièces et les lignes S1–S3 sont conservés. Répéter cette initialisation, celle de S3 ou celle de S2 ne réécrit pas une extension S4 exacte. L’ouverture et l’inspection ne migrent rien ; les anciens lecteurs refusent l’extension non reconnue. L’usage opérationnel de données existantes garde son autorité distincte.
+
+```sh
+python3 -B -m benchmark_lab_x.runtime initialize-campaigns --data /chemin/prive/benchmark
+python3 -B -m benchmark_lab_x.runtime create-campaign --data /chemin/prive/benchmark --authority /chemin/prive/manifeste.json
+python3 -B -m benchmark_lab_x.runtime inspect-campaign --data /chemin/prive/benchmark --authority /chemin/prive/inspection.json
+```
+
+Les fichiers opérateur sont des fichiers réguliers privés, sans lien symbolique ni accès groupe/autres, comme pour S3. Les entrées sont du JSON strict ; champs supplémentaires et clés répétées sont refusés. Le runtime retourne du JSON privé, code 0 à réussite ou `HOLD` et code 78 en cas de refus. L’inspection contient les reçus et sorties brutes : sa sortie doit rester privée.
+
+| Commande | Contenu exact du fichier `--authority` |
+|---|---|
+| `create-campaign` | `{manifest: objet}` |
+| `inspect-campaign` | `{campaign_id: identifiant}` |
+| `admit-campaign` | `{campaign_id, authority, evidence}`, avec `authority.purpose = "start"` |
+| `stop-campaign` | `{campaign_id, reason}` |
+| `resume-campaign` | `{campaign_id, authority, evidence}`, avec `authority.purpose = "resume"` |
+
+Ces formes décrivent les clés ; les fichiers utilisent la syntaxe JSON avec clés et textes entre guillemets. Chaque commande d’admission ou de reprise prend les mêmes options `--data` et `--authority`. Aucune de ces commandes n’émet d’appel. L’identité de campagne est unique ; modifier un manifeste exige une autre identité et conserve les campagnes précédentes.
+
+Le manifeste contient exactement `campaign_id`, `version` (entier positif), `contract_sha256`, `cases`, `panel`, `conditions`, `plan`, `attempt_policy` et `cost_basis`. Son SHA-256 porte sur le JSON UTF-8 canonique S3 : clés triées, sans espaces de séparation ni saut de ligne. Les autorités, états, réserves et observations restent hors de cette empreinte.
+
+- Chaque cas contient `id` et `package_sha256`, égal à celui du contrat S3. Cette tranche utilise le paquet exact de ce contrat pour les cas déclarés ; elle ne construit pas de nouvelles entrées de tâche.
+- Chaque configuration contient `id`, `provider`, `model`, `revision`, `access` (`direct` ou `API`), `channel_id`, `route`, `parameters` (objet), `effort` et `required_observations`. Cette dernière liste inclut au moins `revision` et `channel_id`. Une révision mobile non prouvée est refusée.
+- `conditions` contient `pi`, `packages`, `tools`, `skills`, `context_sha256`, `defaults`, `environment` et `frozen_at` (date avec fuseau). `pi` contient `package`, `version`, `sha256`, `status` (`declared`, `configured`, `active` ou `observed`) et `proof`. Ces déclarations ne prouvent pas une exécution réelle.
+- Chaque cellule de `plan` contient `cell_id`, `case_id` et `configuration_id`. `attempt_policy` contient `retries: false`, `order` (chaque cellule une seule fois) et `reason`. L’ordre est contrôlé avant émission. Aucune cellule reçue ou ambiguë ne peut être rejouée sous une seconde identité.
+- `cost_basis` est exactement la base S3 approuvée ; aucun critère n’est copié ou changé par l’acquisition.
+
+L’objet `authority` contient `actor`, `authority_id`, `purpose`, `manifest_sha256`, `execution_authority`, `candidate_authority`, `budget_authority`, `budget_id`, `allowed_cells` et `reserve_amounts`. Ayo reste l’opérateur local désigné ; ce champ ne l’authentifie pas. La frontière de confiance est l’accès opérateur privé autorisé, jamais une saisie HTTP. Les autorités `TEST_ONLY` et les identités `fictional-*` des tests ne donnent aucun droit réel.
+
+Le budget doit déjà exister dans S1 via `Store.create_budget(budget_id, limit, currency)`, sous autorité propre ; montants et réserves sont des textes décimaux non négatifs. Sa devise doit égaler l’unité contractuelle. Avant la première admission, le suivi montre l’enveloppe portant l’identifiant de campagne si elle existe, sinon `INCONNU` ; cette convention d’affichage n’accorde aucune autorité de budget. L’admission lie explicitement `budget_id`, les cellules autorisées et leurs réserves. Les montants prévus des cellules sans intention doivent tenir dans le solde disponible. Une reprise conserve l’enveloppe et les réserves des intentions existantes.
+
+L’objet `evidence` contient `pi_sha256`, `context_sha256`, `channels` et `confinement`. Chaque canal, indexé par l’identifiant de configuration, contient `available: true`, `revision`, `channel_id`, `route`, `proof` et les autres champs d’observation exigés, identiques à la demande. `confinement` contient `code_execution: false` et une preuve textuelle non vide. Cette tranche refuse les outils, paquets et skills non vides ainsi que toute exécution de code candidat : elle ne dispose pas du vérificateur de confinement nécessaire. Une déclaration opérateur ne qualifie pas un adaptateur réel.
+
+Le lanceur local de confiance utilise les interfaces Python suivantes, avec son propre transport fictif installé dans le code du lanceur :
+
+| Interface | Effet |
+|---|---|
+| `create(store, manifest)` | Manifeste conservé et `manifest_sha256`, sans appel |
+| `inspect(store, campaign_id)` / `list_campaigns(store)` | État privé, cellules, tentatives, reçus, budgets et autorités conservées |
+| `admit(store, campaign_id, authority, evidence)` | Nouvelle preuve d’admission distincte du manifeste ; aucune réservation implicite |
+| `reserve(store, campaign_id, cell_id, attempt_id)` | Identité d’exécution, intention S1 et réserve atomiques ; `operation_id = attempt_id` |
+| `execute(data, attempt_id, transport=None)` | Connexion propre, recontrôles et callback unique ; sans callback, refus avant émission |
+| `stop(store, campaign_id, reason=...)` | Admission fermée durablement ; intentions, réserves et reçus conservés |
+
+Le callback reçoit des copies de l’opération S1 persistée et de la requête : campagne, empreintes du manifeste et du contrat, cellule et cas, configuration demandée, conditions communes, paquet S3 et pièces candidates `{id, sha256, content}` relues en UTF-8. Il ne reçoit ni Store ni références réservées. Aucun champ du manifeste, fichier opérateur, chemin utilisateur, variable d’environnement ou route HTTP ne sélectionne un transport. Les empreintes des sources moteur sont conservées à la réservation et recontrôlées avant émission.
+
+La réponse contient `receipt` et `cost` au format S1. Le reçu contient `receipt_id`, `observed_configuration`, `resources_seen` et `result = {output, incident, emission}`. `output` est un texte UTF-8 exact ou `null`, `incident` un motif ou `null`, `emission` vaut `ESTABLISHED`, `UNKNOWN` ou `INCONNU`. Les observations exigées portent leurs sources dans `observed_configuration.sources`. Une valeur absente reste `INCONNU` dans le suivi, avec source absente visible ; la demande n’est jamais utilisée pour compléter l’observation. Le coût contient `status`, `amount`, `currency`, `source` ; `UNKNOWN` exige un montant `null`.
+
+Avant le callback, l’admission utilisée et la transition S1 `EMISSION_POSSIBLE` sont visibles depuis une autre connexion. Le reçu, son coût et la pièce de sortie sont ensuite reliés dans la même transaction. La sortie est conservée exactement, même erronée, avec le rôle privé `judge` de S1 pour préserver le paquet candidat S2. Ce rôle de stockage n’est pas un verdict. L’inspection vérifie aussi les empreintes des reçus, les jointures et les octets de sortie. Une interruption d’écriture peut laisser une pièce orpheline détectée par la vérification S1 ; elle n’est pas effacée automatiquement.
+
+Un coût sourcé supérieur à la prévision reste acquis. Un coût inconnu garde la réserve ; un effet ambigu, une émission non établie ou une observation exigée divergente bloque les appels dépendants, y compris sur une enveloppe partagée. Le reçu original reste conservé. Une réponse inexploitable ou une exception sans reçu vérifiable laisse la tentative ambiguë, sans coût inventé ni retry. Les journaux n’exposent pas le texte d’exception privé.
+
+Le suivi est ajouté à la page propriétaire S2, avec son lien « Actualiser cet état ». Il présente chaque campagne, la version de tâche, les configurations demandées, les conditions communes, les autorités à fournir ou renouveler, les prévisions, réserves et coûts connus. Une cellule `NOT_STARTED` n’a aucune tentative ; `INTENT_RECORDED`, `EMISSION_POSSIBLE`, `AMBIGUOUS` et `RECEIVED` décrivent la technique. Les sorties brutes et références de jugement restent réservées à l’inspection opérateur. Les sources d’observation absentes et le solde non établi sont signalés. Une session étrangère et les actions HTTP de lancement, admission, arrêt ou reprise sont refusées.
+
+Maintenance, démarrage et arrêt de l’exécuteur ferment aussi les admissions S4. Un worker indépendant garde son état actif et peut rendre son reçu après cet arrêt. `status` conserve les champs `admission`, `restore_pending` et `operations` du protocole de santé S1–S3. Son booléen `admission` tient compte des admissions S2 et S4. `quiescence` et `backup` refusent une admission ouverte, une émission possible ou un worker S4 encore actif. Le worker tient un verrou partagé sur le répertoire de données pendant toute son acquisition ; le contrôle d’arrêt et la sauvegarde exigent le verrou exclusif. La sauvegarde le conserve pendant la copie, en plus du verrou SQLite. Aucun fichier de verrou ni état de processus n’est recopié dans la sauvegarde.
+
+L’arrêt du service ne prouve pas l’arrêt des workers S4. Le rapprochement `runtime.stop(..., after_process_exit=True)` ne marque leurs émissions sans reçu ambiguës que si aucun worker ne détient encore le verrou. Après une mort forcée, le noyau libère le verrou ; le rapprochement explicite conserve alors l’ambiguïté et la réserve, et permet une sauvegarde sans autoriser le rejeu. Tant qu’un autre worker S4 reste actif dans la même base, ce rapprochement attend aussi son arrêt. Les autres opérations gardent le contrat d’arrêt de leur service. Une simple ouverture ne change pas les états. La reprise explicite nomme les cellules jamais émises et refait les contrôles ; aucune file n’est drainée au démarrage. Ne pas mélanger des workers de versions différentes sur une base active.
+
+Sauvegarde et restauration couvrent SQLite, toutes les pièces et leurs liens S4. Le marqueur `restore.json` bloque durablement l’admission, y compris pour une nouvelle campagne, car une sauvegarde ancienne ne prouve pas l’absence d’appels ultérieurs. Cette tranche ne fournit aucune commande de levée de ce blocage sans rapprochement des preuves.
+
+Les [régressions S4](../tests/test_s4_regressions.py) utilisent uniquement des données fictives et les interfaces S1–S3. Elles vérifient notamment l’intention concurrente unique, l’immutabilité des preuves, la conservation des dépenses de préparation, le contrôle d’ordre, la reprise et l’isolation du suivi. Les contrôles automatiques ne qualifient aucun modèle ni contenu métier. La revue propriétaire du candidat reste nécessaire pour les libellés, la retrouvabilité des campagnes, le clavier/focus, le petit écran et le texte agrandi ; aucune observation de navigateur S4 n’est revendiquée. Les preuves macOS restent distinctes de Linux, et la suite demo du prototype reste séparée de la découverte CI.
+
+### Validation du candidat local du 7 septembre 2026
+
+État de la première remise, avant E1 : `HOLD`. Les contrôles ci-dessous ont été exécutés sur macOS 27.0 arm64 dans le sandbox de l’écrivain, par les commandes du juge épinglé. Ils ne constituent pas une évaluation native Graph hors sandbox ni une preuve Linux. Le manifeste de préparation SHA-256 `38c9689c38d70910e70f6fa226b53c44ed423234ee33c266af43055a21915dcd` et ses 45 fichiers ont été revérifiés inchangés. À cette première remise, le fusible natif comptait une entrée `implementation`, zéro entrée `correction` ; aucun registre parallèle n’a été créé.
+
+| Commande exécutée | Résultat observé |
+|---|---|
+| `python3 -B -m unittest tests.test_s4_regressions` | 15 tests, succès |
+| `python3 -B reports/s4-preparation/judge.py witnesses` | 4 tests, succès |
+| `python3 -B reports/s4-preparation/judge.py s4` | 14 tests, un échec : coût de préparation attendu `2`, reçu conservé `3` |
+| `python3 -B reports/s4-preparation/judge.py s3` | 16 tests, une erreur : ouverture TCP locale refusée par le sandbox |
+| `python3 -B reports/s4-preparation/judge.py s2` | 13 tests, une erreur : ouverture TCP locale refusée par le sandbox |
+| `python3 -B reports/s4-preparation/judge.py storage` | 23 tests, succès |
+| `python3 -B reports/s4-preparation/judge.py services` | 2 tests, une erreur : chemin temporaire de socket Unix trop long |
+| `python3 -B reports/s4-preparation/judge.py ci` | 894 tests, deux erreurs : ouverture TCP refusée et chemin de socket Unix trop long |
+| `python3 -B reports/s4-preparation/judge.py demo` | 69 tests, succès, suite historique séparée |
+
+Le mode `ci` exécute bien `uv run --with requests --with mpmath==1.3.0 python -m unittest discover -s tests`, avec les variables offline du juge et vérification des dépendances avant/après. Syntaxe Python, liens locaux du README, absence d’import produit de tests/rapports et `git diff --check` ont aussi été vérifiés.
+
+Le défaut du critère S4 est reproductible avant toute initialisation S4 : `seeded(data)` du juge scellé appelle la fixture S3, qui reçoit `amount = "3"` de `response_for` dans `tests/test_s2_review_regressions.py`. L’inspection S1 donne alors `spent = "3"`, `reserved = "0"`, `available = "97"` sur l’enveloppe `fictional`. L’assertion de `reports/s4-preparation/acceptance.py:242` attend pourtant `"2"`. S4 conserve ce reçu et ce coût ; les diminuer pour satisfaire l’assertion contredirait la conservation des preuves S1–S3. Aucun test, juge ni critère scellé n’a été modifié ou ignoré. Ce test interrompu ne prouve pas les sous-cas placés après son assertion en échec.
+
+La coordination doit résoudre cette contradiction sous autorité et faire exécuter les contrôles réseau dans le contexte du juge Graph qualifié avant de pouvoir établir tous les critères. Aucune correction produit ne peut fabriquer le montant attendu. La revue propriétaire du code et du parcours demeure distincte, sans score qualitatif automatique. Aucun appel réel, opération Git de livraison ou action externe n’a été effectué.
+
+### Correction unique après E1
+
+État du candidat après la correction autorisée : `HOLD_EVALUATOR_FAILURE`. Le retour natif E1 porte sur le contrat Graph SHA-256 `49ec773fd55f8ca5f269175bbcd534819a1d40c81101f24f51f904dc935f7d14` et le candidat `836983652919d28932415116fd132827018644f6b7855a0868dd938cbe375729`. Le fusible natif lu pendant cette passe compte une implémentation et une correction. L’écrivain ne modifie ni ce registre ni les critères scellés et n’engage aucune autre boucle.
+
+E1 a révélé un défaut produit que les refus de sockets du sandbox écrivain empêchaient d’observer : `runtime.status()` ajoutait `campaign_admissions`, alors que `service.executor_health()` exige exactement les cinq champs de sa réponse de santé. Le lecteur rejetait la réponse, puis `/readyz` retournait 503. La correction retire ce champ supplémentaire de `status` et conserve la prise en compte des admissions S4 dans le booléen existant `admission`. Le service et ses tests existants restent inchangés.
+
+La régression `test_health_consumer_accepts_s4_status_before_during_and_after_admission` transmet le JSON du producteur réel au lecteur produit inchangé, avec seulement les entrées/sorties de socket simulées. Avant correction, ses trois états reproduisaient `ValueError: Réponse de santé invalide` à `service.py:44`. Après correction, elle passe et vérifie les états d’admission fermé, ouvert puis arrêté. Cette preuve du format échangé reste distincte des tests avec processus et sockets réels.
+
+Fichiers touchés pendant cette seule correction : [runtime.py](runtime.py), [test_s4_regressions.py](../tests/test_s4_regressions.py) et ce README. Résultats des mêmes commandes épinglées après correction :
+
+| Contrôle | Résultat dans le sandbox écrivain |
+|---|---|
+| Régressions S4 | 16 tests, succès |
+| `witnesses` | 4 tests, succès |
+| `s4` | 14 tests, un échec : `2 != 3` à l’assertion scellée de coût |
+| `s3` | 16 tests, une erreur : ouverture TCP locale refusée |
+| `s2` | 13 tests, une erreur : ouverture TCP locale refusée |
+| `storage` | 23 tests, succès |
+| `services` | 2 tests, une erreur : chemin de socket Unix trop long |
+| `ci` | 895 tests, deux erreurs : ouverture TCP refusée et chemin de socket Unix trop long |
+| `demo` | 69 tests, succès, suite historique séparée |
+
+La contradiction de coût décrite ci-dessus subsiste après l’unique correction : le juge attend `2 TEST` pour un reçu de préparation sourcé à `3 TEST`. Corriger le protocole de santé ne change pas cette dépense. Modifier le reçu, son calcul ou le juge pour obtenir un succès contournerait le contrat scellé. Ce critère restant impose l’arrêt ; aucun `READY_FOR_OWNER_REVIEW_LOCAL` ni succès natif E2 n’est revendiqué. L’exécution native du candidat corrigé, les observations Linux et la revue propriétaire du code/parcours restent des preuves distinctes. Aucun appel réel ou acte de livraison n’a été effectué.
+
+### Correction locale des constats de revue
+
+Sous `GO_CORRIGER_S4_CONSTATS_DE_REVUE_SANS_APPEL`, la durée de vie des workers S4 est vérifiée par verrou système, indépendamment de celle du service. Les appels existants de `service.py` passent par le contrôle commun corrigé ; leur code reste inchangé. L’identité moteur inclut désormais `runtime.py`, qui porte ce contrôle. Les commentaires signalés respectent la règle locale de ponctuation.
+
+Les deux nouvelles régressions lancent un vrai service local et un worker séparé à transport fictif. Elles vérifient l’arrêt puis le redémarrage du service pendant le callback, le refus de quiescence et de sauvegarde pendant l’activité, puis la réception tardive ou la mort forcée suivie du rapprochement. Elles reproduisaient le défaut avant correction et passent après correction ; les 18 régressions S4 passent également. Les preuves et juges antérieurs restent conservés. Le terminal Graph historique n’est ni repris ni réécrit. Le nouveau candidat attend sa revue, sans intégration ni appel modèle.
 
 ## Outillage des premières campagnes
 
