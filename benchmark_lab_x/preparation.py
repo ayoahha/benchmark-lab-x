@@ -10,10 +10,22 @@ import os
 from pathlib import Path
 import re
 import secrets
+from urllib.parse import urlsplit, urlencode, parse_qsl
 
 from .storage import (Store, SchemaError, IntegrityError, ConflictError, BudgetError,
                       _transaction, _strict_json as encode, _fields, _text,
                       _identity, _money, _sum_money, _unique_object, _payload_json)
+
+
+COMPARISON_FOCUS_SCRIPT = """document.addEventListener('click', event => {
+  const link = event.target.closest('tr[id] a[href]');
+  if (!link || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  history.replaceState({...history.state, comparisonFocus: link.closest('tr').id}, '');
+});
+window.addEventListener('pageshow', () => {
+  const row = document.getElementById(history.state?.comparisonFocus);
+  if (row) row.focus({preventScroll: true});
+});"""
 
 
 class Denied(ValueError):
@@ -461,6 +473,32 @@ def dispatch(store, method, path, token, body, source, transport_present):
                                             (session_id,)).fetchall()
         return 200, {'csrf_token': csrf, 'dossiers': [{'dossier_id': d, 'revision': r} for d, r in rows]}, token, None
     session_id, csrf, _ = session(store, token)
+    if method == 'GET':
+        from . import restitution
+        parsed = urlsplit(path)
+        preview_route = re.fullmatch(
+            r'/preparation/dossiers/([A-Za-z0-9_-]{1,128})/campaigns/([A-Za-z0-9_-]{1,128})/preview', parsed.path)
+        if preview_route:
+            pairs = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True, errors='strict')
+            if parsed.scheme or parsed.netloc or parsed.fragment or any(key != 'piece' for key, _ in pairs):
+                raise ValueError('Sélection de pièces requise sur un chemin local')
+            value = restitution.preview_view(store, session_id, *preview_route.groups(), piece_ids=[pid for _, pid in pairs])
+            return 200, value, None, None
+        comparison_route = re.fullmatch(
+            r'/preparation/dossiers/([A-Za-z0-9_-]{1,128})/campaigns/([A-Za-z0-9_-]{1,128})'
+            r'(?:/attempts/([A-Za-z0-9_-]{1,128}))?', parsed.path)
+        if comparison_route:
+            if parsed.scheme or parsed.netloc or parsed.fragment:
+                raise ValueError('Chemin local requis')
+            dossier_id, campaign_id, attempt_id = comparison_route.groups()
+            query = restitution.query_parameters(parsed.query)
+            if attempt_id is None:
+                value = restitution.comparison(store, session_id, dossier_id, campaign_id, query=query)
+            else:
+                value = restitution.detail(store, session_id, dossier_id, campaign_id, attempt_id, query=query)
+            return 200, value, None, None
+        if path == '/preparation/catalogue':
+            return 200, restitution.catalogue(store, session_id), None, None
     if method == 'POST':
         if type(body) is not dict:
             raise ValueError('Formulaire requis')
@@ -486,6 +524,8 @@ def dispatch(store, method, path, token, body, source, transport_present):
         if piece_id:
             return 200, piece_bytes(store, session_id, dossier_id, revision, piece_id), None, None
         result = view(store, session_id, dossier_id, revision)
+        from .restitution import catalogue
+        result['task_index'] = next(t for t in catalogue(store, session_id)['tasks'] if t['dossier_id'] == dossier_id)
         # The CSRF token travels independently in HTML rendering through the web's session query
         return 200, result, None, None
     if method == 'POST' and action == 'messages':
@@ -550,8 +590,134 @@ def render_evaluations(evaluations, dossier_url):
     return content
 
 
+def render_task_index(task):
+    def text(value):
+        return escape(str(value), quote=True)
+
+    content = '<p><a href="' + text(task['href']) + '">' + text(task['need']) + '</a></p>'
+    content += '<p>Dossier ' + text(task['dossier_id']) + '. Consultation privée, sans admission au catalogue public.</p>'
+    content += '<p>Révisions du dossier : ' + ' · '.join(
+        '<a href="' + text(task['href']) + '/revisions/' + str(revision) + '">' + str(revision) + '</a>'
+        for revision in task['revisions']) + '.</p>'
+    for version in task['versions']:
+        content += '<section id="contract-' + text(version['contract_sha256']) + '"><h3>Version d’épreuve '
+        content += text(version['version']) + '</h3><p>Contrat : <code>' + text(version['contract_sha256']) + '</code>.</p>'
+        content += '<p><a href="' + text(task['href']) + '/revisions/' + str(version['revision']) + '">Ouvrir le dossier associé</a></p><ul>'
+        for campaign in version['campaigns']:
+            content += '<li><a href="' + text(campaign['href']) + '">Comparer la campagne ' + text(campaign['campaign_id']) + '</a></li>'
+        content += '</ul>' if version['campaigns'] else '</ul><p>Aucune campagne pour cette version.</p>'
+        content += '</section>'
+    if not task['versions']:
+        content += '<p>Aucune version d’épreuve contractuelle conservée.</p>'
+    return content
+
+
+def render_comparison(value):
+    def text(value):
+        return escape(str(value), quote=True)
+
+    def data(label, value):
+        return '<details><summary>' + text(label) + '</summary><pre>' + text(encode(value)) + '</pre></details>'
+
+    def metric(value):
+        source = 'INCONNU' if value['value'] is None else value['value']
+        content = '<span class="source-value">' + text(source) + ' ' + text(value['unit']) + '</span>'
+        if value['rank'] is None:
+            return content + '<p>Sans rang : ' + text(value['reason']) + '</p>'
+        return content + '<p>Rang ' + text(value['rank']) + '</p>'
+
+    base, query = value['href'], value['filter_scope']
+    content = '<nav aria-label="Parcours"><a href="/preparation/catalogue">Mes tâches</a> · '
+    content += '<a href="' + text(value['dossier_href']) + '">Dossier, versions et campagnes</a></nav>'
+    content += '<p><a href="' + text(base + '/preview') + '">Examiner un aperçu privé de la projection</a></p>'
+    content += '<p>Consultation privée · version d’épreuve ' + text(value['task']['version'])
+    content += ' · campagne ' + text(value['campaign_id']) + '.</p>'
+    content += '<h2>' + text(value['need']) + '</h2><p>' + text(value['reformulation']) + '</p>'
+    content += '<p>Résultat attendu : ' + text(value['result_expected']) + '</p>'
+    content += '<p>Travail humain restant : ' + text(value['human_work']) + '</p>'
+    content += '<p>' + text(value['conclusion']['text']) + '</p><p>' + text(value['conclusion']['attribution']) + '</p>'
+    content += '<p>Limites : ' + text('; '.join(value['conclusion']['limits'])) + '</p>'
+    coverage = value['coverage']
+    content += '<p role="status">Campagne entière : ' + text(coverage['planned_cells']) + ' cellules prévues, '
+    content += text(coverage['attempted_cells']) + ' tentées, ' + text(coverage['evaluated_attempts']) + ' tentatives évaluées, '
+    content += text(coverage['not_started']) + ' non lancées. Comparaison économique : ' + text(value['economic_status']) + '.</p>'
+    content += '<p>Les coûts et mesures restent par cas et tentative. Aucun total multi-cas ni choix automatique.</p>'
+    content += data('Population entière utilisée pour les rangs, conservée après filtrage', value['population'])
+    content += data('Cellules prévues et couverture manquante', value['cells'])
+    content += data('Conditions communes et date de gel', value['conditions'])
+    content += data('Contrat et portée exacte de la conclusion', value['conclusion']['scope'])
+    content += data('Base de coût et conversion prévue', value['cost_basis'])
+    content += '<section aria-labelledby="filters"><h2 id="filters">Tris et filtres</h2>'
+    content += '<p id="filter-help">Chaque bouton applique le champ choisi et conserve les autres sélections. '
+    content += 'Les filtres changent seulement les lignes visibles. Les rangs et la couverture gardent la population entière.</p>'
+    content += '<p>Ordre actuel : ' + text(query.get('sort', 'descriptif, sans préférence'))
+    content += (', ' + ('décroissant' if query.get('direction') == 'desc' else 'croissant') if 'sort' in query else '') + '.</p>'
+    options = {
+        'case': ('Cas', [(v['id'], v['id']) for v in value['cases']]),
+        'sort': ('Critère de tri', [(v['id'], 'Coût observé' if 'criterion_id' not in v else v['definition']['measure']) for v in value['columns']]),
+        'direction': ('Ordre d’affichage', [('asc', 'Croissant'), ('desc', 'Décroissant')]),
+        'verdict': ('Verdict', [(v, v) for v in ('SATISFAIT', 'NE SATISFAIT PAS', 'INDETERMINE')]),
+        'obligation': ('Constat par obligation', [(v['id'] + ':' + s, v['id'] + ' : ' + s)
+                        for v in value['obligations'] for s in ('PASS', 'FAIL', 'INDETERMINE')]),
+        'configuration': ('Configuration', [(v['id'], v['model'] + ' · ' + v['id']) for v in value['panel']]),
+    }
+    if query:
+        content += '<ul aria-label="Sélections actives">'
+        for key, val in query.items():
+            remaining = {k: v for k, v in query.items() if k != key}
+            target = base + ('?' + urlencode(remaining) if remaining else '') + '#filters'
+            content += '<li>' + text(options[key][0] + ' : ' + val) + ' · <a href="' + text(target)
+            content += '">Enlever ' + text(options[key][0].lower()) + '</a></li>'
+        content += '</ul>'
+    else:
+        content += '<p>Aucun filtre ni tri appliqué.</p>'
+    content += '<div class="filter-grid">'
+    for key, (label, values) in options.items():
+        if not values:
+            continue
+        content += '<form method="get" action="' + text(base) + '" aria-describedby="filter-help">'
+        for k, v in query.items():
+            if k != key:
+                content += '<input type="hidden" name="' + text(k) + '" value="' + text(v) + '">'
+        content += '<label for="filter-' + key + '">' + label + '</label><select id="filter-' + key + '" name="' + key + '">'
+        for val, title in values:
+            content += '<option value="' + text(val) + '"' + (' selected' if query.get(key) == val else '') + '>' + text(title) + '</option>'
+        content += '</select><button type="submit">Appliquer : ' + label.lower() + '</button></form>'
+    content += '</div><p><a href="' + text(base) + '#filters">Enlever tous les filtres et le tri</a></p></section>'
+    content += '<h2>Observations visibles</h2><p>' + text(len(value['rows'])) + ' ligne(s) affichée(s) sur '
+    content += text(len(value['population'])) + ' tentatives évaluées. Valeurs sources exactes, sans arrondi de calcul. '
+    content += 'Rangs de compétition par cas : 1, 2, 2, 4 ; les égalités sont conservées. '
+    content += 'Le sens favorable reste contractuel dans les deux ordres d’affichage.</p>'
+    for column in value['columns']:
+        content += data('Définition, unité, sens favorable et preuve : ' + column['id'], column)
+    if not value['rows']:
+        content += '<p role="status">' + ('Aucune ligne ne correspond aux filtres ; les observations de la campagne restent conservées.'
+                     if value['population'] else 'Aucune tentative évaluée dans cette campagne.') + '</p>'
+    for case in value['cases']:
+        rows = [r for r in value['rows'] if r['case_id'] == case['id']]
+        if not rows:
+            continue
+        content += '<section><h3>Cas ' + text(case['id']) + '</h3>'
+        content += '<div class="table-scroll" role="region" tabindex="0" aria-label="Observations du cas ' + text(case['id']) + '">'
+        content += '<table><caption>Cas ' + text(case['id']) + ' · valeurs par tentative, sans agrégation</caption><thead><tr>'
+        for title in ('Configuration et tentative', 'Verdict et motif', 'Coût observé', 'Mesures prévues', 'Preuves'):
+            content += '<th scope="col">' + title + '</th>'
+        content += '</tr></thead><tbody>'
+        for row in rows:
+            content += '<tr id="attempt-' + text(row['attempt_id']) + '" tabindex="-1"><th scope="row">'
+            content += text(row['requested_configuration']['model']) + '<p>' + text(row['configuration_id']) + '</p><p>' + text(row['attempt_id']) + '</p>'
+            content += data('Demandée, observée et sources', {k: row[k] for k in ('requested_configuration', 'observed_configuration', 'observation_sources')}) + '</th>'
+            content += '<td><strong>' + text(row['verdict']) + '</strong><p>' + text(row['reason']) + '</p>'
+            content += '<p>Incident : ' + text(row['incident'] or 'Aucun déclaré') + '</p></td><td>' + metric(row['cost']) + '</td><td>'
+            for measure in row['measures']:
+                content += '<p>' + text(measure['criterion_id']) + ' · ' + text(measure['definition']['measure']) + '</p>' + metric(measure)
+            content += '</td><td><a href="' + text(row['detail_href']) + '">Détail et preuves de ' + text(row['attempt_id']) + '</a></td></tr>'
+        content += '</tbody></table></div></section>'
+    return content
+
+
 def render(value, csrf, path='/preparation', *, error=False):
-    """Native HTML forms: no script, no untrusted HTML and no external resources."""
+    """Native HTML forms, inert evidence and a fixed comparison focus script"""
     def text(value):
         return escape(str(value), quote=True)
 
@@ -571,6 +737,40 @@ def render(value, csrf, path='/preparation', *, error=False):
     title = 'Préparer un exemple fictif'
     if error:
         content = '<p role="alert">' + text(value['error']) + '</p><p><a href="/preparation">Retrouver mes dossiers</a></p>'
+    elif value.get('kind') == 'catalogue':
+        title = 'Mes tâches'
+        content = '<p>Index privé de cette session. Aucune admission au catalogue public.</p>'
+        content += ''.join('<section><h2>Dossier ' + text(task['dossier_id']) + '</h2>' + render_task_index(task) + '</section>' for task in value['tasks'])
+        if not value['tasks']:
+            content += '<p>Aucune tâche dans cette session.</p>'
+    elif value.get('kind') == 'comparison':
+        title = 'Comparer la campagne ' + value['campaign_id']
+        content = render_comparison(value) + '<script>' + COMPARISON_FOCUS_SCRIPT + '</script>'
+    elif value.get('kind') == 'projection_preview':
+        from .restitution import _projection_body
+        title = 'Aperçu privé · NON APPROUVÉ'
+        content = '<p role="status">Aperçu privé · NON APPROUVÉ. Aucune activation ni publication.</p>'
+        content += '<p><a href="' + text(value['comparison']['href']) + '">Revenir à la comparaison</a></p>'
+        content += '<p>Choisissez les pièces à inclure. Aucune pièce cochée : page et styles seulement. '
+        content += 'L’aperçu porte sur la campagne entière, sans les filtres de consultation.</p>'
+        content += '<form method="get" action="' + text(value['comparison']['href'] + '/preview') + '">'
+        content += '<fieldset><legend>Pièces proposées pour la projection</legend>'
+        for piece in value['pieces']:
+            pid = piece['piece_id']
+            content += '<label><input type="checkbox" name="piece" value="' + text(pid) + '"'
+            content += (' checked' if pid in value['selected_links'] else '') + '> ' + text(piece['name']) + ' · ' + text(pid) + '</label>'
+        content += '</fieldset><button type="submit">Actualiser l’aperçu</button></form>'
+        content += '<p>Empreinte du paquet proposé : <code>' + text(value['projection_sha256']) + '</code>.</p>'
+        content += '<p>Cette vue privée reprend le contenu de la projection avec des liens privés vers les seules pièces '
+        content += 'sélectionnées. Son habillage n’est pas un fichier approuvé. Le reçu fictif devra porter sur les octets du paquet.</p>'
+        content += '<hr>' + _projection_body(value['comparison'], value['selected_links'])
+    elif value.get('kind') == 'attempt_detail':
+        title = 'Détail de la tentative ' + value['history'][-1]['attempt_id']
+        content = '<nav aria-label="Retour"><a href="' + text(value['back_href']) + '">Revenir à la comparaison avec ses filtres</a> · '
+        content += '<a href="/preparation/catalogue">Mes tâches</a></nav><p>' + text(value['need']) + '</p>'
+        content += '<p>Consultation privée. Campagne ' + text(value['campaign_id']) + ', version ' + text(value['task']['version']) + '.</p>'
+        content += '<p>Les pièces exactes et leurs passages restent inertes. Historique conservé ; la dernière évaluation est affichée en premier.</p>'
+        content += render_evaluations(list(reversed(value['history'])), value['back_href'])
     elif 'dossiers' in value:
         content = section('Mes dossiers dans ce navigateur', '<ul>' + ''.join(
             f'<li><a href="/preparation/dossiers/{text(d["dossier_id"])}">Dossier {text(d["dossier_id"])} — révision {d["revision"]}</a></li>'
@@ -598,6 +798,8 @@ def render(value, csrf, path='/preparation', *, error=False):
             content += f'<p><a href="{text(url)}/revisions/{revision - 1}">Consulter la révision précédente</a></p>'
         payload = value['payload']
         content += section('Besoin conservé', '<p>' + text(payload['request']) + '</p>')
+        if value.get('task_index'):
+            content += section('Versions d’épreuve et campagnes', render_task_index(value['task_index']))
         if value.get('message') and 'message' in value['message']:
             content += section('Message à l’origine de cette révision', '<p>' + text(value['message']['message']) + '</p>')
         content += section('Précisions et accords conservés', listing(payload['clarifications']) +
@@ -650,6 +852,8 @@ def render(value, csrf, path='/preparation', *, error=False):
             for campaign in value['campaigns']:
                 task = campaign['task']
                 campaigns += '<article><h3>Campagne ' + text(campaign['campaign_id']) + '</h3>'
+                if 'evaluations' in campaign:
+                    campaigns += '<p><a href="' + text(url) + '/campaigns/' + text(campaign['campaign_id']) + '">Comparer les observations de cette campagne</a></p>'
                 campaigns += '<p>Tâche ' + text(task['dossier_id']) + ', version ' + text(task['version'])
                 campaigns += ', révision du dossier ' + text(task['revision']) + '.</p>'
                 for label, digest in (('Manifeste', campaign['manifest_sha256']), ('Contrat', campaign['contract_sha256']),

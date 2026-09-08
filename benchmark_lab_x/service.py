@@ -1,4 +1,5 @@
 """Processus Linux du produit, sans admission ni appel implicite au démarrage."""
+from base64 import b64encode
 from contextlib import closing
 import fcntl
 from hashlib import sha256
@@ -145,14 +146,17 @@ def serve_web(address, port, public, socket_path, source):
             # Les URL peuvent contenir une saisie privée ; ne pas les journaliser
             pass
 
-        def respond(self, code, value, media_type='application/json', headers=None):
+        def respond(self, code, value, media_type='application/json', headers=None, *, script=None):
             raw = value if isinstance(value, bytes) else encode(value).encode()
             self.send_response(code)
             self.send_header('Content-Type', media_type)
             self.send_header('Content-Length', str(len(raw)))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
-            self.send_header('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+            policy = "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+            if script is not None:
+                policy += "; script-src 'sha256-" + b64encode(sha256(script.encode()).digest()).decode() + "'"
+            self.send_header('Content-Security-Policy', policy)
             self.send_header('Referrer-Policy', 'no-referrer')
             for name, value in (headers or {}).items():
                 self.send_header(name, value)
@@ -214,7 +218,8 @@ def serve_web(address, port, public, socket_path, source):
                             result = preparation_request(socket_path, 'GET', target, token)
                             view_path = target
                     page = preparation.render(result['value'], csrf, view_path, error=result['status'] >= 400)
-                    self.respond(result['status'], page, 'text/html; charset=utf-8', headers)
+                    script = preparation.COMPARISON_FOCUS_SCRIPT if result['value'].get('kind') == 'comparison' else None
+                    self.respond(result['status'], page, 'text/html; charset=utf-8', headers, script=script)
             except (ValueError, TypeError, KeyError, CookieError):
                 value = {'error': 'Formulaire invalide. Aucun nouvel appel admis.'}
                 self.respond(400, value if wants_json else preparation.render(value, '', error=True),
@@ -248,22 +253,48 @@ def serve_web(address, port, public, socket_path, source):
                 except (OSError, ValueError):
                     self.respond(503, {'web': 'ok', 'executor': 'unavailable', 'storage': 'unknown', 'source_sha': source})
                 return
+            if self.path.startswith('/publications/'):
+                from . import restitution
+                match = re.fullmatch(r'/publications/([0-9a-f]{64})/([A-Za-z0-9_-]+\.(?:html|css|txt))', self.path)
+                if not match:
+                    self.respond(404, {'error': 'NOT_FOUND'})
+                    return
+                identity, name = match.groups()
+                try:
+                    raw = restitution.public_bytes(public, identity, name)
+                    media = {'.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
+                             '.txt': 'text/plain; charset=utf-8'}[Path(name).suffix]
+                    self.respond(200, raw, media, {'X-Benchmark-Publication': 'APPROVED_FICTIONAL_S6',
+                                                 'X-Benchmark-Projection-SHA256': identity})
+                except (OSError, ValueError, KeyError, TypeError):
+                    self.respond(404, {'error': 'NO_VERIFIED_PUBLICATION'})
+                return
             # Seuls les fichiers d'une projection approuvée sont consultables
             name = 'index.html' if self.path == '/' else self.path.removeprefix('/')
             if not re.fullmatch(r'[a-zA-Z0-9_-]+\.(html|css|png|jpg|txt|json)', name):
                 self.respond(404, {'error': 'NOT_FOUND'})
                 return
             try:
+                if (public / 'active.json').is_symlink():
+                    raise ValueError('Pointeur lié interdit')
                 publication = json.loads((public / 'active.json').read_text())['directory']
                 if not isinstance(publication, str) or not re.fullmatch('[0-9a-f]{64}', publication):
                     raise ValueError('Projection invalide')
                 resolved = public / publication
                 if resolved.is_symlink():
                     raise ValueError('Projection liée interdite')
+                if (resolved / 'publication.json').is_symlink():
+                    raise ValueError('Manifeste lié interdit')
                 manifest_bytes = (resolved / 'publication.json').read_bytes()
                 if sha256(manifest_bytes).hexdigest() != publication:
                     raise ValueError('Manifeste public altéré')
                 manifest = json.loads(manifest_bytes)
+                from . import restitution
+                if manifest.get('schema_version') == restitution.SCHEMA:
+                    restitution.public_bytes(public, publication, name)
+                    self.respond(303, b'', 'text/plain; charset=utf-8',
+                                 {'Location': '/publications/' + publication + '/' + name})
+                    return
                 expected = manifest['files'][name]
                 path = resolved / name
                 if path.is_symlink() or not path.is_file():
