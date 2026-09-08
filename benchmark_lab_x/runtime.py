@@ -198,7 +198,7 @@ def restore(source, destination):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     campaign_actions = ('create-campaign', 'inspect-campaign', 'admit-campaign', 'stop-campaign', 'resume-campaign')
-    parser.add_argument('action', choices=campaign_actions + ('initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
+    parser.add_argument('action', choices=campaign_actions + ('initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
     parser.add_argument('--data', type=Path)
     parser.add_argument('--authority', type=Path)
     parser.add_argument('--destination', type=Path)
@@ -236,6 +236,10 @@ def main(argv=None):
             from .campaigns import initialize as initialize_campaigns
             initialize_campaigns(args.data)
             result = {'state': 'CAMPAIGNS_INITIALIZED'}
+        elif args.action == 'initialize-evaluations':
+            from .evaluation import initialize as initialize_evaluations
+            initialize_evaluations(args.data)
+            result = {'state': 'EVALUATIONS_INITIALIZED_REAL_JUDGMENT_CLOSED'}
         elif args.action == 'verify-backup':
             result = verify_backup(args.data)
         elif args.action in ('backup', 'restore'):
@@ -267,6 +271,15 @@ def main(argv=None):
                         if type(request['authority']) is not dict or request['authority'].get('purpose') != purpose:
                             raise ValueError('Autorité distincte de lancement ou reprise requise')
                         result = campaigns.admit(store, request['campaign_id'], request['authority'], request['evidence'])
+                elif args.action == 'inspect-evaluation':
+                    from .evaluation import inspect
+                    from .storage import _fields
+                    if args.authority is None:
+                        raise ValueError('Fichier opérateur privé requis')
+                    private_path(args.authority)
+                    request = json.loads(args.authority.read_text(), object_pairs_hook=_unique_object)
+                    _fields(request, ('evaluation_id',), 'inspect-evaluation')
+                    result = inspect(store, request['evaluation_id'])
                 elif args.action in ('inspect-qualification', 'approve-qualification'):
                     from .qualification import inspect_contract, approve
                     if args.authority is None:

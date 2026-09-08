@@ -130,7 +130,7 @@ def initialize(data):
         connection = store._connection_checked()
         with _transaction(connection, write=True):
             layout = storage._check_schema(connection)
-            if layout == 's4':
+            if layout in ('s4', 's5'):
                 return
             if layout != 's3':
                 raise SchemaError('Extension explicite sur une base S3 requise')
