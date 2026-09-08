@@ -310,7 +310,10 @@ def main(argv=None):
                 elif args.action == 'maintenance':
                     result = stop(args.data, store, 'MAINTENANCE')
                 elif args.action == 'quiescence':
-                    with worker_lock(store):
+                    with worker_lock(store), closing(sqlite3.connect(args.data / 'metadata.sqlite3', timeout=0)) as lock:
+                        # S3 writers hold SQLite without the shared worker lock
+                        # Closing rolls back the probe and releases it even on refusal
+                        lock.execute('BEGIN IMMEDIATE')
                         result = status(args.data, store)
                         if result['admission'] or result['operations'].get('EMISSION_POSSIBLE', 0):
                             raise IntegrityError('Travaux encore actifs ou admission ouverte')

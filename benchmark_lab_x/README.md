@@ -115,6 +115,8 @@ python3 -B -m benchmark_lab_x.runtime verify-backup --data /chemin/prive/sauvega
 python3 -B -m benchmark_lab_x.runtime restore --data /chemin/prive/sauvegarde-neuve --destination /chemin/prive/restauration-neuve
 ```
 
+`quiescence` exige aussi le verrou d’écriture SQLite, sans attente, pendant la lecture de l’état. Une transaction active, notamment pendant le callback de qualification S3, provoque le refus existant 78 / `HOLD` / `OPERATION_NOT_VERIFIED`. Le contrôle libère ses verrous au succès comme au refus, sans écrire de données ni ajouter de champ au protocole de santé. Ce contrôle ponctuel ne crée aucune barrière persistante : l’opérateur doit suspendre les futurs lancements et les publications avant une maintenance.
+
 La sauvegarde bloque les écrivains SQLite pendant la copie des pièces et vérifie leurs liens. La restauration préserve la source et toute cible existante. Elle crée le marqueur privé `restore.json`, conservé par les sauvegardes suivantes et exposé par `restore_pending`. Aucun effacement ni reprise n’est fourni : le rapprochement des effets postérieurs à la sauvegarde doit être réalisé avant toute future ouverture des appels. Une copie de données vérifiée ne prouve pas la restauration d’un service Linux ni une récupération PBS.
 
 `tools/build_runtime.py` construit une archive déterministe depuis les seuls fichiers suivis d’un commit complet. Il ignore les modifications du worktree et refuse une source dépourvue des interfaces runtime. La sortie JSON relie le commit, l’arbre, les blobs Git et l’empreinte de l’archive. Le build n’installe aucune dépendance et n’exécute pas la source construite :
