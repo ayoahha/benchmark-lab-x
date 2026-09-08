@@ -7,6 +7,7 @@ h1 { font-size: 2rem; }
 h2 { font-size: 1.3rem; }
 section { margin-block: 2rem; }
 a { color: #064e83; text-underline-offset: .2em; }
+fieldset { min-width: 0; overflow-wrap: anywhere; }
 label { display: block; font-weight: 650; margin-block: 1rem .4rem; }
 textarea, select, button { font: inherit; border: 1px solid #486170; border-radius: .25rem; padding: .7rem; }
 textarea, select { box-sizing: border-box; width: 100%; max-width: 100%; background: white; color: #172c39; }
@@ -20,3 +21,17 @@ details { border: 1px solid #486170; padding: .75rem; }
 summary { cursor: pointer; }
 .skip { position: absolute; top: -10rem; }
 .skip:focus { position: static; display: block; }
+.filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 1rem; }
+.filter-grid form { min-width: 0; padding: .75rem; background: white; border: 1px solid #486170; }
+.table-scroll { overflow-x: auto; border: 1px solid #486170; background: white; }
+table { border-collapse: collapse; width: 100%; min-width: 48rem; }
+caption { text-align: left; padding: .75rem; font-weight: 650; }
+th, td { padding: .75rem; text-align: left; vertical-align: top; border: 1px solid #b5c3cc; overflow-wrap: anywhere; }
+thead th { background: #e5edf2; }
+tbody th { font-weight: 400; }
+td p, th p { margin-block: .5rem; }
+table details { max-width: 24rem; }
+.source-value { font-variant-numeric: tabular-nums; }
+tr:target { outline: 3px solid #8a3600; outline-offset: -3px; }
+button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 30rem) { body { padding: .75rem; } h1 { font-size: 1.6rem; } }
