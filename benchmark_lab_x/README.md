@@ -93,7 +93,7 @@ Le workflow [GitHub Pages](../.github/workflows/pages.yml) publie `pages/` lors 
 
 ## Interfaces locales du service Linux en construction
 
-Le module `benchmark_lab_x.runtime` fournit une initialisation privée, la vérification de SQLite et des pièces, la maintenance, une sauvegarde cohérente et une restauration vers un nouvel emplacement. Ces interfaces sont distinctes du moteur historique ci-dessus. Les processus web et exécuteur sont fournis ci-dessous. Le candidat local ajoute le parcours fictif S2 décrit plus bas. Les appels assistés réels et le traitement des campagnes restent à construire.
+Le module `benchmark_lab_x.runtime` fournit une initialisation privée, la vérification de SQLite et des pièces, la maintenance, une sauvegarde cohérente et une restauration vers un nouvel emplacement. Ces interfaces sont distinctes du moteur historique ci-dessus. Les processus web et exécuteur sont fournis ci-dessous. Le candidat local ajoute le parcours fictif S2 décrit plus bas. Le raccordement local Z.AI de préparation est décrit ci-dessous ; ses essais réels restent à autoriser et vérifier.
 
 Avec Python 3.12 ou supérieur, le répertoire parent des données doit exister. L’initialisation crée son emplacement privé ou utilise le répertoire vide préparé par Ansible sous le compte de service. Elle refuse tout emplacement contenant déjà des données :
 
@@ -105,7 +105,7 @@ python3 -B -m benchmark_lab_x.runtime status --data /chemin/prive/benchmark
 
 Ces commandes n’émettent aucun appel modèle. Les pièces et les révisions de dossier sont immuables. Une empreinte divergente, une pièce orpheline, une référence dangereuse ou un schéma inconnu provoque un refus. La bibliothèque S1 conserve les montants en texte décimal exact, les intentions, les réservations et les reçus. Elle persiste l’état `EMISSION_POSSIBLE` avant le transport. Elle ne fournit pas encore le transport ni l’interface publique d’autorisation.
 
-Le runtime ne possède aucun transport réel. Sur une base S1 seule, `admission` reste faux. L’extension explicite S2 permet une admission opérateur ; `maintenance` la ferme durablement. Même avec cette admission configurée, l’absence de transport interdit tout appel. `quiescence` et `backup` refusent les opérations S1 encore en `EMISSION_POSSIBLE`. Après arrêt du processus, les effets inconnus sont conservés en `AMBIGUOUS` ; ils restent sauvegardables et bloquent les nouveaux appels dépendants dans S1 :
+Sans sélection opérateur de l’assistant, le runtime ne fournit aucun transport. Sur une base S1 seule, `admission` reste faux. L’extension explicite S2 permet une admission opérateur ; `maintenance` la ferme durablement. Même avec cette admission configurée, l’absence de transport interdit tout appel. `quiescence` et `backup` refusent les opérations S1 encore en `EMISSION_POSSIBLE`. Après arrêt du processus, les effets inconnus sont conservés en `AMBIGUOUS` ; ils restent sauvegardables et bloquent les nouveaux appels dépendants dans S1 :
 
 ```sh
 python3 -B -m benchmark_lab_x.runtime maintenance --data /chemin/prive/benchmark
@@ -150,7 +150,7 @@ donnée et ne déploie aucun service.
 
 ## Parcours fictif de préparation S2
 
-Le module fournit `/preparation` : saisie du besoin, clarification, consultation des pièces, correction et validation du dossier, de sa révision et de l’empreinte exacte du paquet. Ce parcours utilise les services locaux et un transport fictif de test. L’assistant réel, l’ouverture du service et la publication gardent leurs qualifications et autorités distinctes.
+Le module fournit `/preparation` : saisie du besoin, clarification, consultation des pièces, correction et validation du dossier, de sa révision et de l’empreinte exacte du paquet. Les preuves historiques de ce parcours utilisent les services locaux et un transport fictif de test. L’assistant réel, l’ouverture du service et la publication gardent leurs qualifications et autorités distinctes.
 
 L’exécuteur existant porte les sessions et les opérations ; le web relaie les actions par sa socket Unix et rend des formulaires HTML natifs, sans script ni dépendance ajoutée. Un GET ne lance aucun travail. Après un envoi, le lien vers le dossier permet de consulter l’attente puis le résultat. Les erreurs de révision imposent de consulter la version courante. Les anciennes révisions, pièces et validations restent consultables ; tout nouveau paquet exige un nouvel accord. Le besoin et les réponses restent dans le payload S1, les corrections dans les actions attribuées. Les paramètres fictifs ne deviennent pas des accords. La validation du besoin ne qualifie pas la référence et n’approuve aucun contrat, appel, budget ou publication.
 
@@ -170,7 +170,7 @@ L’opérateur peut enregistrer une admission depuis un fichier privé contenant
 python3 -B -m benchmark_lab_x.runtime admit-preparation --data /chemin/prive/benchmark --authority /chemin/prive/autorite.json
 ```
 
-Cette commande ne fournit aucun transport. Le seul point d’injection est `serve_executor(data, socket_path, source, *, transport=None)` ; seul le lanceur de test fournit la fonction fictive `transport(operation, request)`. Aucun paramètre HTTP, fichier utilisateur ou variable d’environnement ne peut la sélectionner. La valeur par défaut refuse tout appel. Les valeurs fictives des tests ne prouvent aucun coût réel : coûts réels et tarifs de l’implémentation sur abonnement restent inconnus, `UNMEASURED`.
+Cette commande d’admission ne fournit aucun transport. Le point d’injection reste `serve_executor(data, socket_path, source, *, transport=None)`. Le lanceur peut sélectionner explicitement l’assistant Z.AI décrit ci-dessous ; les tests historiques injectent leur fonction fictive `transport(operation, request)`. Aucun paramètre HTTP ni fichier utilisateur ne sélectionne le transport. La valeur par défaut refuse tout appel. Les valeurs fictives des tests ne prouvent aucun coût réel ; les preuves historiques sur abonnement gardent leur statut `UNMEASURED`.
 
 L’action, son contexte exact, l’intention S1 et la réserve sont persistés avant accusé de réception. L’admission et le marqueur de restauration sont revérifiés dans la transaction qui précède l’émission. Le travailleur possède sa connexion SQLite et laisse le gestionnaire de santé disponible. Un doublon aux mêmes données retrouve son opération ; une identité réutilisée avec un autre contenu est refusée. Un reçu publié conserve les coûts sourcés, y compris `UNKNOWN`, puis les pièces vérifiées et le nouveau pointeur deviennent visibles ensemble. Si le reçu S1 est valide mais le résultat applicatif inutilisable, le reçu et le coût originaux sont conservés avec une révision suspendue et l’admission fermée, dans une seule transaction. Aucun paquet ni accord ne sont inventés. Un effet sans reçu S1 valide reste ambigu ; une interruption ne relance aucun travail, même une intention jamais émise. Démarrage, maintenance et restauration ferment l’admission. Le marqueur `restore_pending` ne peut être supprimé par le navigateur ou `admit-preparation`.
 
@@ -195,6 +195,63 @@ La commande CI est `uv run --with requests --with mpmath==1.3.0 python -m unitte
 La vérification manuelle du 7 septembre 2026 utilise macOS 27.0 (26A5425a) et Chrome 152.0.7977.83 installé. Saisie, clarification, consultation de la pièce textuelle, retour à l’aperçu, validation et correction ont été effectués au clavier, avec focus visible. Le texte de la pièce a été effectivement affiché ; la correction conserve les accords antérieurs et exige une nouvelle validation. Le zoom Chrome à 200 % a été observé sur l’aperçu, ses limites et son lien de pièce. Le contrôle antérieur à 320 × 720 dans le navigateur Codex a vérifié l’absence de débordement horizontal de la page ; il reste une preuve distincte.
 
 Le 7 septembre 2026, Ayo a retiré l’exigence de qualification au lecteur d’écran du périmètre produit. Le contrôle VoiceOver a été interrompu sans verdict de réussite ; il ne conditionne plus la fusion S2. La [CI Ubuntu de la PR #199](https://github.com/ayoahha/benchmark-lab-x/actions/runs/34130571182) a exécuté 870 tests et construit le runtime de `009ae3293ba89955db47a1af3448d987ac23dabc`, avec les fichiers de préparation inclus. Elle ne lance ni les huit parcours HTTP du complément local ni la suite demo ; ces preuves restent acquises séparément sur macOS. Le test HTTP relaie explicitement le cookie Secure ; la qualification HTTPS et d’exploitation reste distincte de la preuve logicielle.
+
+## Assistant de préparation Z.AI, candidat local
+
+[Le transport](zai_preparation.py) raccorde `glm-5.3-flash` à l’exécuteur S2 avec la bibliothèque standard. La [fiche officielle Flash](https://docs.z.ai/guides/vlm/glm-5.3-flash) confirme cet identifiant, le raisonnement obligatoire, le JSON et les paramètres recommandés. L’[API Chat Completion](https://docs.z.ai/api-reference/llm/chat-completion) documente `POST https://api.z.ai/api/paas/v4/chat/completions`. Ce raccordement utilise l’API à consommation ; aucun abonnement Coding Plan n’est substitué.
+
+Après intégration et autorisation d’essai distinctes, l’opérateur pourra sélectionner :
+
+```sh
+python3 -B -m benchmark_lab_x.runtime executor --data /chemin/prive/benchmark --socket /chemin/prive/executor.sock --preparation-assistant glm-5.3-flash
+```
+
+`ZAI_API_KEY` doit être injectée uniquement dans l’environnement de ce processus, par le mécanisme privé de l’opérateur. Ne pas la placer dans la commande, le fichier d’autorité, le navigateur ou l’environnement du web. Le lanceur la retire de son environnement après lecture et la garde dans le transport. Absente ou invalide, elle provoque `HOLD` / code 78 sans connexion fournisseur. Sans option d’assistant, le transport reste absent. Le démarrage ferme toujours l’admission ; la sélection seule n’autorise aucun appel.
+
+Paramètres fixes de ce candidat : `temperature=1`, `top_p=0.95`, `reasoning_effort=max`, `thinking.type=enabled`, `thinking.clear_thinking=false`, `max_tokens=8192`, `stream=false`, `response_format={"type":"json_object"}`. Chaque opération envoie le contexte S2 conservé en un message utilisateur, précédé de la consigne système ; elle ne rejoue pas les blocs de raisonnement précédents. Le réglage `clear_thinking=false` ne prouve donc aucun bénéfice de « preserved thinking ». Aucun outil n’est fourni, exécuté ni redirigé. Aucun retry, proxy d’environnement ou changement d’endpoint n’est utilisé.
+
+Le corps de requête est limité à 65 536 octets UTF-8, la réponse conservée à 2 Mio, et l’attente réseau à 120 secondes par opération de socket. Ce délai n’est pas une garantie de durée totale face à un serveur envoyant très lentement. Une réponse tronquée reste signalée comme partielle. Les limites de taille bornent la mémoire et le dossier textuel visé ; elles ne sont pas un décompte de tokens. Un JSON invalide, une identité divergente, une sortie coupée ou une demande d’outil ne produit aucun paquet. Le reçu obtenu reste conservé ; une exception sans reçu laisse l’émission ambiguë. Aucun redémarrage ne la rejoue.
+
+L’enveloppe S1 de l’essai doit être unique, en USD, avec un plafond total de 100 USD couvrant clarification, génération et corrections. Elle est créée par l’opérateur autorisé avec `Store.create_budget`, puis liée au fichier d’admission S2 existant : `authority_id` réel de l’essai, `budget_id` de cette enveloppe, `reserve_amount="0.154096"`, `requested_configuration` exactement égal à `zai_preparation.configuration()`. Cette fonction retourne uniquement des paramètres publics, la méthode économique et l’empreinte de consigne ; l’importer n’émet aucun appel. La sélection du transport vérifie cette identité, la devise, le plafond et la réserve avant émission. La validation du corps complet intervient dans la transaction de soumission. Une divergence ou une taille excessive annule cette transaction : aucun dossier nouveau, action, intention ou réservation ne subsiste ; l’admission reste inchangée. Une petite demande peut ensuite être admise sous la même enveloppe. Les gardes d’admission, de restauration et de budget sont revérifiés avant émission.
+
+La prévision par opération est volontairement large : contexte annoncé de 1 000 000 tokens au tarif non caché, plus 8 192 tokens de sortie, soit `(1000000 × 0.15 + 8192 × 0.50) / 1000000 = 0.154096 USD`. Elle ne convertit pas les octets en tokens. Quatre réponses pour le scénario prévu donnent une prévision de 0,616384 USD, sous réserve que ces quatre échanges suffisent. Un échange supplémentaire réserve le même montant sous l’enveloppe existante. Ni cette réserve ni le contrôle local ne garantissent un plafond absolu de facturation fournisseur.
+
+Les [tarifs officiels](https://docs.z.ai/guides/overview/pricing), vérifiés le 9 septembre 2026, sont 0,15 USD/Mtok en entrée, 0,03 en entrée cachée et 0,50 en sortie ; le stockage du cache est annoncé temporairement gratuit. Ils doivent être revérifiés avant l’essai. Le reçu conserve `usage` brut, ces tarifs datés, leur source et la formule décimale exacte :
+
+```text
+((prompt_tokens - cached_tokens) × 0.15
+ + cached_tokens × 0.03 + completion_tokens × 0.50) / 1000000
+```
+
+Le périmètre des compteurs vient de la lecture croisée de l’API, des [paramètres fondamentaux](https://docs.z.ai/guides/overview/concept-param), du [raisonnement](https://docs.z.ai/guides/capabilities/thinking) et du [cache](https://docs.z.ai/guides/capabilities/cache). L’API nomme les tokens de sortie ; les paramètres les définissent comme tout le texte généré ; le raisonnement consomme des tokens et son exemple conserve un compteur de sortie unique. L’inclusion du raisonnement est une déduction de ces définitions, sans phrase explicite « reasoning included in completion_tokens » dans les pages relues. L’exemple de taux de cache utilise `cached_tokens / prompt_tokens`.
+
+Un usage complet, cohérent et attribuable donne `KNOWN`, sourcé « calcul sur usage observé », et libère la réserve au profit de ce montant. Ce montant mesure cette base de coût et ne constitue pas une facture finale. `total_tokens` doit égaler entrée plus sortie ; le cache doit être présent et compris dans l’entrée. Un détail de raisonnement reçu doit rester compris dans la sortie. Un compteur absent, négatif, incohérent, un type ou détail inconnu, des outils ou une réponse HTTP partielle empêchant l’attribution donnent `UNKNOWN`, avec réserve conservée et blocage des appels dépendants. Aucun compteur absent ne devient zéro. Une sortie applicative inutilisable peut garder un coût connu si son usage est complet.
+
+Dès l’acceptation de la soumission, la seconde entrée de `operation.resources` conserve le corps HTTP exact, sans en-tête d’authentification. Le service transmet son transport à `dispatch` puis `submit` ; `execute` émet ce corps conservé après ses recontrôles. Le reçu privé conserve les octets de réponse en base64 et leur SHA-256, le statut HTTP, les dates, la durée locale, l’usage et le résultat interprété. Une clé reflétée détectée est remplacée par un marqueur ; cette exception de confidentialité est déclarée dans le reçu. La réponse brute n’est jamais rendue par le web. Le modèle demandé et le champ `/model` reçu restent distincts ; révision, route interne, paramètres et effort non observables restent `null`. L’endpoint contacté ne prouve ni la révision interne ni l’accès futur du compte.
+
+Les pièces candidates sont les seules présentées dans le paquet S2. La référence reste réservée au jugement. Les réponses ne peuvent ajouter de champ d’autorité, de validation ou d’approbation. Les contrôles de structure précèdent l’écriture des fichiers ; ils ne qualifient pas la vérité de la référence. La consigne demande de conserver les accords et les notes non touchées ; leur respect effectif par GLM reste à examiner dans l’essai réel.
+
+Les [tests HTTP simulés](../tests/test_zai_preparation.py) couvrent le scénario des notes de réunion, les quatre échanges sous la même enveloppe, le coût inconnu, les réponses inutilisables, les limites réseau et l’absence de rejeu. Le parcours HTTP utilise de vrais processus locaux web/exécuteur avec HTTP fournisseur simulé ; le cookie Secure est transmis explicitement par la fixture. Ces preuves macOS ne qualifient ni l’accès du compte, ni la qualité de GLM, ni le déploiement Linux. Les preuves historiques S2 restent inchangées.
+
+## Tarifs indicatifs OpenRouter pour l’opérateur
+
+La commande ponctuelle ci-dessous consulte l’[API Models](https://openrouter.ai/docs/guides/overview/models) et les [endpoints du modèle](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model), sans clé ni appel d’inférence. Elle sert à examiner une prévision avant de fixer une enveloppe ; elle ne lit ni ne modifie le stockage du produit.
+
+```sh
+python3 -B -m benchmark_lab_x.runtime forecast-prices \
+  --model z-ai/glm-5.3-flash --input-tokens 1000000 --output-tokens 8192 \
+  --cached-input-tokens 0
+```
+
+Les quantités décrivent une requête hypothétique. L’entrée comprend le cache ; `--cached-input-tokens`, zéro par défaut, indique la part supposée déjà en cache. La sortie comprend tous les tokens supposés générés, raisonnement inclus. Ces nombres sont des hypothèses opérateur, sans conversion de caractères en tokens ni preuve de faisabilité de l’appel.
+
+Le JSON conserve l’identité exacte du modèle, son slug canonique déclaré, les URL consultées, la date UTC de chaque lecture et le SHA-256 de chaque réponse. Chaque endpoint garde son fournisseur, son tag, sa quantification, son statut déclaré et ses tarifs bruts. Les prix normalisés ont une unité explicite en USD par token, requête ou autre unité documentée. Le prix résumé du modèle reste identifié comme celui du fournisseur principal non nommé dans ce résumé ; il n’est jamais appliqué aux autres endpoints. Un statut déclaré ne prouve pas l’accès du compte.
+
+Les sous-totaux entrée hors cache, lecture du cache et sortie sont calculés séparément avec les tarifs de chaque endpoint. Une composante absente reste `null` sans masquer les autres ; seule une quantité de tokens explicitement nulle donne une composante nulle sans tarif. La somme des trois composantes reste inconnue si l’une des composantes nécessaires manque. Les conditions tarifaires supplémentaires non résolues sont conservées et empêchent d’appliquer automatiquement le tarif de base. Le calcul porte explicitement `API_VALUES_BEFORE_DISCOUNT_APPLICATION` : il multiplie les quantités par les prix retournés avant toute application du champ `discount`. Le [schéma officiel OpenRouter](https://github.com/OpenRouterTeam/terraform-provider-openrouter/blob/main/docs/data-sources/model.md#nested-schema-for-datapricing) décrit la formule `price * (1 - discount)`. La remise reste non résolue lorsqu’elle est absente ou non nulle ; sa valeur, sa formule et sa source sont exposées, sans annoncer de prix net applicable.
+
+Le résultat est un sous-total indicatif de tokens. `total_usd` reste inconnu : frais par requête, supplément de raisonnement, écriture de cache, outils, médias, taxes et financement ne sont pas couverts par ce calcul. Les tarifs manquants ne deviennent jamais zéro. Même si l’endpoint est nommé Z.AI, ses tarifs décrivent le canal OpenRouter ; le coût observé, la méthode Z.AI directe et la réserve du raccordement de préparation restent inchangés.
+
+La commande effectue deux lectures HTTPS bornées à 20 secondes par opération réseau et 2 Mio par réponse, sans redirection ni retry. Une identité divergente, une réponse invalide ou un échec réseau donne le refus opérateur existant `78 / HOLD`. Aucun catalogue, synchronisation, sélection de route ou garde d’admission n’est ajouté. Les [tests de consultation et calcul](../tests/test_openrouter_prices.py) utilisent des réponses HTTP simulées ; les lectures publiques ponctuelles restent distinctes des essais d’inférence.
 
 ## Qualification et approbation locales S3
 

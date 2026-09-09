@@ -78,7 +78,7 @@ def serve_executor(data, socket_path, source, *, transport=None):
                             try:
                                 code, value, cookie, start = preparation.dispatch(
                                     store, message['method'], message['path'], message['token'], message['body'],
-                                    source, transport is not None)
+                                    source, transport)
                                 if start:
                                     threading.Thread(target=preparation.execute, args=(data, start, transport), daemon=True).start()
                                 result = {'status': code, 'value': value.hex() if isinstance(value, bytes) else value,
