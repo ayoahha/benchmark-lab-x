@@ -1,4 +1,4 @@
-"""Private fictional preparation on S1. No product transport is installed here."""
+"""Private fictional preparation on S1 with an operator-injected transport."""
 from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -215,7 +215,7 @@ def piece_bytes(store, session_id, dossier_id, revision, piece_id):
     return store.read_piece(piece_id)
 
 
-def submit(store, session_id, dossier_id, body, source, transport_present):
+def submit(store, session_id, dossier_id, body, source, transport):
     connection = connection_for(store)
     identifier(dossier_id)
     identifier(body['action_id'])
@@ -249,7 +249,7 @@ def submit(store, session_id, dossier_id, body, source, transport_present):
             if body['revision'] != existing[1]:
                 raise ConflictError('Révision périmée')
         authority = admission(store, connection)
-        if not authority or not transport_present or os.path.lexists(store._root / 'restore.json'):
+        if not authority or not transport or os.path.lexists(store._root / 'restore.json'):
             raise Denied('Admission fermée ou transport absent')
         # S2 admits one effect at a time; no restart drains a durable queue
         if connection.execute("SELECT 1 FROM s2_actions a JOIN operations o USING(operation_id) "
@@ -279,6 +279,15 @@ def submit(store, session_id, dossier_id, body, source, transport_present):
                          dossier_id=dossier_id, revision=revision, authority=authority['authority_id'],
                          engine_version=source, requested_configuration=authority['requested_configuration'], resources=resources)
         store._reserve_intent(connection, operation, authority['budget_id'], authority['reserve_amount'])
+        if callable(getattr(transport, 'prepare', None)):
+            # A refused body rolls back the dossier, intention and reserve together
+            operation = store._operation_for_update(connection, operation_id, ('INTENT_RECORDED',))
+            budget = store._budget(connection, authority['budget_id'], store._operations(connection))
+            wire = transport.prepare(deepcopy(operation), deepcopy(request), deepcopy(budget))
+            _text(wire, 'prepared request')
+            operation['resources'].append(wire)
+            connection.execute('UPDATE operations SET resources_json=? WHERE operation_id=?',
+                               (encode(operation['resources']), operation_id))
         connection.execute('INSERT INTO s2_actions VALUES (?,?,?,?,?,?)',
                            (dossier_id, body['action_id'], revision, kind, request_json, operation_id))
         return operation_id, True
@@ -364,6 +373,8 @@ def execute(data, operation_id, transport):
             # Never log request/response/exception text, which may contain private data
             if emitted:
                 store.mark_ambiguous(operation_id, 'PREPARATION_RESULT_NOT_VERIFIED')
+            else:
+                close_admission(store)
 
 
 def publish(store, operation, request, response):
@@ -385,6 +396,30 @@ def publish(store, operation, request, response):
     payload['reformulation'] = result['reformulation']
     payload['fictional_parameters'] = result['fictional_parameters']
     _payload_json(payload)
+    # Reject malformed model output before creating immutable piece files
+    if result['package'] is not None:
+        package = result['package']
+        _fields(package, ('instruction', 'deliverables', 'criteria', 'acceptable_ambiguities',
+                          'human_work', 'limits', 'pieces'), 'package')
+        for field in ('instruction', 'human_work'):
+            _text(package[field], field)
+        for field in ('deliverables', 'criteria', 'acceptable_ambiguities', 'limits'):
+            if type(package[field]) is not list:
+                raise ValueError('Liste requise')
+            for value in package[field]:
+                _text(value, field)
+        if not package['deliverables'] or not package['criteria'] or type(package['pieces']) is not list:
+            raise ValueError('Paquet incomplet')
+        roles = set()
+        for piece in package['pieces']:
+            _fields(piece, ('name', 'role', 'content'), 'piece')
+            _text(piece['name'], 'name')
+            if type(piece['content']) is not str or piece['role'] not in ('candidate', 'judge'):
+                raise ValueError('Pièce invalide')
+            piece['content'].encode('utf-8')
+            roles.add(piece['role'])
+        if roles != {'candidate', 'judge'}:
+            raise ValueError('Pièces candidates et référence distincte requises')
     connection = connection_for(store)
     with _transaction(connection, write=True):
         current = connection.execute('SELECT current_revision FROM s2_dossiers WHERE dossier_id=?', (dossier_id,)).fetchone()[0]
@@ -465,7 +500,7 @@ def verify_preparation(store, connection):
         encode(json.loads(raw, object_pairs_hook=_unique_object))
 
 
-def dispatch(store, method, path, token, body, source, transport_present):
+def dispatch(store, method, path, token, body, source, transport):
     """Executor-side authorization: HTTP fields can never claim an operator role."""
     if method == 'GET' and path == '/preparation':
         session_id, csrf, token = session(store, token, create=True)
@@ -508,7 +543,7 @@ def dispatch(store, method, path, token, body, source, transport_present):
         body = {key: value for key, value in body.items() if key != 'csrf_token'}
     if method == 'POST' and path == '/preparation/dossiers':
         _fields(body, ('dossier_id', 'action_id', 'request'), 'create')
-        operation_id, start = submit(store, session_id, body['dossier_id'], body, source, transport_present)
+        operation_id, start = submit(store, session_id, body['dossier_id'], body, source, transport)
         return 202, {'operation_id': operation_id, 'dossier_id': body['dossier_id']}, None, operation_id if start else None
     proof = re.fullmatch(r'/preparation/dossiers/([A-Za-z0-9_-]{1,128})/evaluations/([A-Za-z0-9_-]{1,128})/pieces/([A-Za-z0-9_-]{1,128})', path)
     if method == 'GET' and proof:
@@ -530,7 +565,7 @@ def dispatch(store, method, path, token, body, source, transport_present):
         return 200, result, None, None
     if method == 'POST' and action == 'messages':
         _fields(body, ('action_id', 'revision', 'kind', 'message'), 'message')
-        operation_id, start = submit(store, session_id, dossier_id, body, source, transport_present)
+        operation_id, start = submit(store, session_id, dossier_id, body, source, transport)
         return 202, {'operation_id': operation_id, 'dossier_id': dossier_id}, None, operation_id if start else None
     if method == 'POST' and action == 'validation':
         _fields(body, ('dossier_id', 'revision', 'package_sha256'), 'validation')

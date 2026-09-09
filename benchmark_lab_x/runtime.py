@@ -1,4 +1,4 @@
-"""Commandes locales d'exploitation sans appel fournisseur."""
+"""Commandes locales ; assistance fournisseur uniquement sur sélection explicite."""
 import argparse
 from collections import Counter
 from contextlib import closing, contextmanager
@@ -198,7 +198,7 @@ def restore(source, destination):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     campaign_actions = ('create-campaign', 'inspect-campaign', 'admit-campaign', 'stop-campaign', 'resume-campaign')
-    parser.add_argument('action', choices=campaign_actions + ('initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
+    parser.add_argument('action', choices=campaign_actions + ('forecast-prices', 'initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
     parser.add_argument('--data', type=Path)
     parser.add_argument('--authority', type=Path)
     parser.add_argument('--destination', type=Path)
@@ -206,9 +206,20 @@ def main(argv=None):
     parser.add_argument('--public', type=Path)
     parser.add_argument('--listen', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
+    parser.add_argument('--preparation-assistant', choices=('glm-5.3-flash',))
+    parser.add_argument('--model')
+    parser.add_argument('--input-tokens', type=int)
+    parser.add_argument('--output-tokens', type=int)
+    parser.add_argument('--cached-input-tokens', type=int, default=0)
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
+        if args.preparation_assistant and args.action != 'executor':
+            raise ValueError('Assistant réservé à l’exécuteur')
+        if args.action == 'forecast-prices':
+            from .openrouter_prices import forecast
+            print(encode(forecast(args.model, args.input_tokens, args.output_tokens, args.cached_input_tokens)))
+            return 0
         if args.action in ('web', 'executor'):
             from .service import release_identity, serve_executor, serve_web
             if args.socket is None:
@@ -220,7 +231,11 @@ def main(argv=None):
             else:
                 if args.data is None:
                     raise ValueError('Données requises')
-                serve_executor(args.data, args.socket, release_identity())
+                transport = None
+                if args.preparation_assistant:
+                    from .zai_preparation import ZaiPreparation
+                    transport = ZaiPreparation(os.environ.pop('ZAI_API_KEY', ''))
+                serve_executor(args.data, args.socket, release_identity(), transport=transport)
             return 0
         if args.data is None:
             raise ValueError('Données requises')
