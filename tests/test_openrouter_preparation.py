@@ -26,6 +26,7 @@ ESTIMATE = {'channel': 'OpenRouter', 'model_id': assistant.MODEL, 'context_lengt
                               'retrieved_at': '2026-09-10T00:00:00+00:00', 'body_sha256': 'b' * 64}
                         for key, path in [('model', 'model/' + assistant.MODEL),
                                           ('endpoints', 'models/' + assistant.MODEL + '/endpoints')]},
+            'model_summary': {'pricing_raw': {'prompt': '0.0000002', 'completion': '0.0000008'}},
             'endpoints': [{'model_id': assistant.MODEL, 'tag': tag, 'provider_name': provider,
                            'supported_parameters': ['temperature', 'top_p', 'reasoning', 'max_tokens', 'response_format'],
                            'pricing_raw': {'prompt': '0.0000002', 'completion': '0.0000008'}}
@@ -125,7 +126,7 @@ class OpenRouterPreparationTests(unittest.TestCase):
         prep.execute(self.data, operation, self.transport)
         return next(op for op in self.store.inspect_operations() if op['operation_id'] == operation), prep.view(self.store, self.session, 'd')
 
-    def test_exact_wire_is_durable_before_http_and_unknown_cost_blocks_next_call(self):
+    def test_exact_wire_is_durable_before_http_and_unknown_cost_keeps_reserve(self):
         def at_request(method, path, *, body, headers):
             with closing(storage.Store(self.data)) as reader:
                 operation = reader.inspect_operations()[0]
@@ -178,8 +179,8 @@ class OpenRouterPreparationTests(unittest.TestCase):
         self.assertEqual(RESERVE, budget['reserved'])
         self.assertEqual('0.000202', budget['spent'])
         self.assertEqual([unknown['operation_id']], budget['unknown_cost_operations'])
-        with self.assertRaises(storage.BudgetError):
-            self.submit(action_id='next', revision=later['revision'], kind='clarify', message=CLARIFICATION)
+        self.submit(action_id='next', revision=later['revision'], kind='clarify', message=CLARIFICATION)
+        self.assertEqual([unknown['operation_id']], self.store.inspect_budget('fixture')['unknown_cost_operations'])
         prep.execute(self.data, unknown['operation_id'], self.transport)
         self.assertEqual(2, self.http.request.call_count)
         self.assertEqual(2, self.connection.call_count)
@@ -313,24 +314,21 @@ class OpenRouterPreparationTests(unittest.TestCase):
         self.assertEqual(self.authority, prep.admission(self.store))
         self.http.request.assert_not_called()
 
-    def test_reservation_uses_public_text_prices_and_rejects_missing_required_price(self):
-        self.assertEqual('0.2065536', RESERVE)
+    def test_reservation_uses_model_prices_without_provider_price_requirements(self):
         estimate = deepcopy(ESTIMATE)
-        estimate['endpoints'][0]['pricing_raw'].update({'discount': 0.5, 'request': None, 'image': None})
+        for endpoint in estimate['endpoints']:
+            endpoint['pricing_raw'] = None
         self.assertEqual(RESERVE, assistant.reservation(estimate))
-        estimate['endpoints'][0]['pricing_raw']['overrides'] = [{'image': '1'}]
-        self.assertEqual(RESERVE, assistant.reservation(estimate))
-        estimate['endpoints'][0]['pricing_raw']['overrides'] = [{'prompt': '1', 'min_prompt_tokens': 10}]
-        with self.assertRaises(ValueError): assistant.reservation(estimate)
-        estimate = deepcopy(ESTIMATE)
-        del estimate['endpoints'][0]['pricing_raw']['completion']
-        self.authority['requested_configuration']['reservation_estimate'] = estimate
+        estimate['model_summary']['pricing_raw'] = None
+        self.assertIsNone(assistant.reservation(estimate))
+        self.authority['requested_configuration'] = assistant.configuration(estimate)
         prep.admit(self.store, self.authority)
-        with self.assertRaisesRegex(ValueError, 'prompt ou completion'):
-            self.submit()
-        self.assertEqual([], self.store.inspect_operations())
-        self.assertEqual('0', self.store.inspect_budget('fixture')['reserved'])
-        self.http.request.assert_not_called()
+        operation, view = self.execute()
+        self.assertEqual('preview', view['stage'])
+        self.assertIsNone(view['indicative_cost'])
+        self.assertEqual(RESERVE, operation['reserved_amount'])
+        self.assertEqual('KNOWN', operation['observed_cost']['status'])
+
 
     def test_native_fallback_after_429_is_accepted_without_another_http_call(self):
         self.http.getresponse.return_value.read.return_value = http_body(openrouter_metadata={**ROUTE, 'strategy': 'fallback', 'attempt': 2,
@@ -469,7 +467,118 @@ class OpenRouterPreparationTests(unittest.TestCase):
         self.assertEqual(1, len(self.store.inspect_operations()))
         code, _ = call('/preparation/dossiers/d/messages', dict(csrf_token=self.csrf, action_id='next', revision=2,
                                                               kind='clarify', message=CLARIFICATION))
-        self.assertEqual(409, code)
+        self.assertEqual(202, code)
+
+    def test_indicative_model_cost_is_distinct_from_charge_and_missing_data(self):
+        usage = {'prompt_tokens': 1000, 'completion_tokens': 200,
+                 'completion_tokens_details': {'reasoning_tokens': 150},
+                 'prompt_tokens_details': {'cached_tokens': 400}, 'cost': '0.009'}
+        self.http.getresponse.return_value.read.return_value = http_body(usage=usage)
+        operation, view = self.execute()
+        estimate = view['indicative_cost']
+        self.assertEqual('0.0003600', estimate['token_subtotal_usd'])
+        self.assertEqual({'prompt': 1000, 'completion': 200}, estimate['quantities'])
+        self.assertEqual(ESTIMATE['sources']['model'], estimate['source'])
+        self.assertEqual('0.009', operation['observed_cost']['amount'])
+        self.assertEqual('0.009', self.store.inspect_budget('fixture')['spent'])
+        page = prep.render(view, self.csrf).decode()
+        self.assertIn('Estimation indicative', page)
+        self.assertIn('ce montant n’est pas une facture', page)
+        self.assertIn('0.0003600 USD', page)
+        self.assertIn('0.009 USD', page)
+        for invalid in (None, {}, {'prompt_tokens': 0},
+                        {'prompt_tokens': False, 'completion_tokens': 1},
+                        {'prompt_tokens': -1, 'completion_tokens': 1},
+                        {'prompt_tokens': '1000', 'completion_tokens': 1}):
+            self.assertIsNone(assistant.openrouter_prices.indication(ESTIMATE, invalid))
+        for pricing in (None, {}, {'prompt': '0'}, {'prompt': '-1', 'completion': '0'},
+                        {'prompt': 'NaN', 'completion': '0'}):
+            estimate = deepcopy(ESTIMATE)
+            estimate['model_summary']['pricing_raw'] = pricing
+            self.assertIsNone(assistant.openrouter_prices.indication(estimate, usage))
+        empty = assistant.openrouter_prices.indication(ESTIMATE, {'prompt_tokens': 0, 'completion_tokens': 0})
+        self.assertEqual('0', empty['token_subtotal_usd'])
+
+    def test_received_unknowns_allow_new_exchanges_without_rewriting_or_replay(self):
+        response = self.http.getresponse.return_value
+        response.status = 429
+        response.read.return_value = b'{"error":{"code":429}}'
+        original, view = self.execute()
+        frozen = storage._strict_json(original)
+        self.assertEqual('suspended', view['stage'])
+        self.assertNotIn('indicative_cost', view)
+        self.assertEqual('UNKNOWN', original['observed_cost']['status'])
+        self.assertIsNone(prep.admission(self.store))
+        with self.assertRaises(prep.Denied):
+            self.submit(action_id='closed', revision=2, kind='clarify', message=CLARIFICATION)
+        prep.admit(self.store, self.authority)
+        response.status = 200
+        response.read.return_value = http_body(result('clarification'), usage={'prompt_tokens': 1000, 'completion_tokens': 200})
+        second, view = self.execute(action_id='new', revision=2, kind='clarify', message=CLARIFICATION)
+        self.assertEqual('UNKNOWN', second['observed_cost']['status'])
+        self.assertEqual('0.0003600', view['indicative_cost']['token_subtotal_usd'])
+        response.read.return_value = http_body(usage=None)
+        third, view = self.execute(action_id='correct', revision=3, kind='correct', message=CORRECTION)
+        self.assertEqual('preview', view['stage'])
+        self.assertIsNone(view['indicative_cost'])
+        budget = self.store.inspect_budget('fixture')
+        self.assertEqual(storage._sum_money([storage._money(RESERVE)] * 3), storage._money(budget['reserved']))
+        self.assertEqual('0', budget['spent'])
+        self.assertEqual({original['operation_id'], second['operation_id'], third['operation_id']}, set(budget['unknown_cost_operations']))
+        self.assertEqual(frozen, storage._strict_json(next(row for row in self.store.inspect_operations() if row['operation_id'] == original['operation_id'])))
+        self.assertEqual((original['operation_id'], False), prep.submit(self.store, self.session, 'd',
+                         dict(action_id='create', request=NEED), 'a' * 40, self.transport))
+        prep.execute(self.data, original['operation_id'], self.transport)
+        self.assertEqual(3, self.http.request.call_count)
+        # The shared reservation path stays strict for candidate and judgment work
+        candidate = {key: third[key] for key in storage._OPERATION_KEYS}
+        candidate.update(operation_id='candidate-fixture', phase='acquisition')
+        with self.assertRaises(storage.BudgetError):
+            self.store.reserve_intent(candidate, 'fixture', RESERVE)
+        candidate.update(operation_id='judgment-fixture', phase='judgment')
+        with self.assertRaises(storage.BudgetError):
+            self.store.reserve_intent(candidate, 'fixture', RESERVE)
+        candidate.update(operation_id='other-budget', phase='preparation')
+        self.store.create_budget('separate-fixture', RESERVE, 'USD')
+        self.store.reserve_intent(candidate, 'separate-fixture', RESERVE)
+        candidate['operation_id'] = 'exhausted-fixture'
+        with self.assertRaises(storage.BudgetError):
+            self.store.reserve_intent(candidate, 'separate-fixture', RESERVE)
+        self.assertEqual(budget, self.store.inspect_budget('fixture'))
+
+    def test_ambiguous_effects_block_reservation_and_emission_after_unknown(self):
+        self.http.getresponse.return_value.read.return_value = http_body(usage=None)
+        original, _ = self.execute()
+        pending = self.submit(action_id='pending', revision=2, kind='correct', message=CORRECTION)
+        extra = {key: original[key] for key in storage._OPERATION_KEYS}
+        extra.update(operation_id='separate-effect', dossier_id='other-dossier')
+        self.store.save_dossier('other-dossier', 1, self.store.get_dossier('d', 1))
+        self.store.reserve_intent(extra, 'fixture', RESERVE)
+        self.store.mark_emission_possible(extra['operation_id'])
+        for state in ('EMISSION_POSSIBLE', 'AMBIGUOUS'):
+            if state == 'AMBIGUOUS':
+                self.store.mark_ambiguous(extra['operation_id'], 'FICTIONAL_INTERRUPTION')
+            another = {**extra, 'operation_id': 'another-effect'}
+            with self.assertRaises(storage.BudgetError):
+                self.store.reserve_intent(another, 'fixture', RESERVE)
+            prep.execute(self.data, pending, self.transport)
+            self.assertEqual(1, self.http.request.call_count)
+            operation = next(row for row in self.store.inspect_operations() if row['operation_id'] == pending)
+            self.assertEqual('INTENT_RECORDED', operation['state'])
+        self.assertEqual('UNKNOWN', next(row for row in self.store.inspect_operations() if row['operation_id'] == original['operation_id'])['observed_cost']['status'])
+
+    def test_null_historical_observation_remains_readable_and_has_no_estimate(self):
+        operation = self.submit()
+        receipt = {'receipt_id': 'fictional-null-observation', 'observed_configuration': None,
+                   'resources_seen': [], 'result': result('clarification')}
+        cost = {'status': 'UNKNOWN', 'amount': None, 'currency': 'USD', 'source': 'Fictional historical receipt'}
+        prep.execute(self.data, operation, lambda op, request: {'receipt': receipt, 'cost': cost})
+        view = prep.view(self.store, self.session, 'd')
+        self.assertEqual('clarification', view['stage'])
+        self.assertNotIn('indicative_cost', view)
+        self.assertIsNone(self.store.inspect_operations()[0]['receipt']['observed_configuration'])
+        self.assertIn('Coût observé', prep.render(view, self.csrf).decode())
+        self.assertTrue(self.store.verify_storage()['integrity_ok'])
 
     def test_killed_executor_restarts_closed_with_durable_ambiguous_request(self):
         context = multiprocessing.get_context('spawn')
