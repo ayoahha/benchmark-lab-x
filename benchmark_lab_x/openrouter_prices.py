@@ -96,7 +96,7 @@ def forecast(model, input_tokens, output_tokens, cached_input_tokens=0):
         row.update(price_row(endpoint.get('pricing'), quantities))
         endpoints.append(row)
     return {'kind': 'OPENROUTER_INDICATIVE_FORECAST', 'channel': 'OpenRouter',
-            'model_id': model, 'canonical_slug': summary.get('canonical_slug'),
+            'model_id': model, 'context_length': summary.get('context_length'), 'canonical_slug': summary.get('canonical_slug'),
             'sources': {'model': summary_source, 'endpoints': endpoint_source},
             'model_summary': {'scope': 'TOP_PROVIDER_UNIDENTIFIED_NOT_ALL_ENDPOINTS',
                               'pricing_raw': summary.get('pricing')},
@@ -105,5 +105,5 @@ def forecast(model, input_tokens, output_tokens, cached_input_tokens=0):
                             'output_scope': 'All output tokens assumed by operator, including reasoning',
                             'exclusions': 'Request fees, extra reasoning charges, cache writes, tools, media, taxes and funding fees',
                             'zero_components': 'Only an explicitly zero token quantity implies a zero component',
-                            'applicability': 'OpenRouter reference only; not Z.AI direct cost, reservation or admission'},
+                            'applicability': 'Indicative OpenRouter reference; not observed expenditure or admission'},
             'endpoints': endpoints}

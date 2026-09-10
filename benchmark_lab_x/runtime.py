@@ -214,11 +214,16 @@ def main(argv=None):
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
-        if args.preparation_assistant and args.action != 'executor':
+        if args.preparation_assistant and args.action not in ('executor', 'forecast-prices'):
             raise ValueError('Assistant réservé à l’exécuteur')
         if args.action == 'forecast-prices':
             from .openrouter_prices import forecast
-            print(encode(forecast(args.model, args.input_tokens, args.output_tokens, args.cached_input_tokens)))
+            result = forecast(args.model, args.input_tokens, args.output_tokens, args.cached_input_tokens)
+            if args.preparation_assistant:
+                from .openrouter_preparation import configuration
+                configured = configuration(result)
+                result['preparation'] = {'requested_configuration': configured, 'reserve_amount': configured['reserve_usd']}
+            print(encode(result))
             return 0
         if args.action in ('web', 'executor'):
             from .service import release_identity, serve_executor, serve_web
@@ -233,8 +238,8 @@ def main(argv=None):
                     raise ValueError('Données requises')
                 transport = None
                 if args.preparation_assistant:
-                    from .zai_preparation import ZaiPreparation
-                    transport = ZaiPreparation(os.environ.pop('ZAI_API_KEY', ''))
+                    from .openrouter_preparation import OpenRouterPreparation
+                    transport = OpenRouterPreparation(os.environ.pop('OPENROUTER_API_KEY', ''))
                 serve_executor(args.data, args.socket, release_identity(), transport=transport)
             return 0
         if args.data is None:

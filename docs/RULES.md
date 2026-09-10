@@ -26,7 +26,7 @@ Ces règles préservent les contrats historiques et n'autorisent aucune exécuti
 
 ## 3. Périmètre produit
 
-**Accès direct ou API.** Le produit compare des modèles accessibles directement ou par API.
+**Canal API unique.** Tous les appels modèles du produit passent par OpenRouter, selon l’[ARD](ARD.md#3-pi-comme-frontière-constante). Aucun accès direct aux API propres des fournisseurs ni substitution de canal pour un modèle indisponible n’est permis. Les contrats historiques restent inchangés.
 
 **Pi obligatoire.** Pi est le harnais commun de chaque comparaison candidate. Son choix n'est pas rouvert par une revue de configuration. Cette contrainte ne choisit pas le transport de l’assistance de préparation ou de jugement.
 

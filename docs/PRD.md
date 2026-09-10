@@ -60,7 +60,7 @@ Ce jalon réunit les capacités ci-dessous et les [critères d’acceptation pro
 - catalogue de tâches versionnées, avec contrat et cas d'essai identifiés ; aucune demande n’y est publiée automatiquement
 - plusieurs campagnes, chacune liée à une version de tâche, à ses cas et à un panel figé
 - résultats réellement acquis et évalués sur le catalogue et le panel approuvés
-- accès directs ou API sous Pi constant pour chaque comparaison
+- accès API via OpenRouter sous Pi constant pour chaque comparaison
 - suivi des tentatives, incidents, coûts et preuves sans relance implicite
 - navigation catalogue, tâche, campagne et comparaison des configurations
 - classements par critère et filtres combinés, sans note pondérée ni désignation automatique du meilleur modèle
@@ -82,7 +82,7 @@ Un score pondéré personnalisé appartient à la vision durable, hors 0.1.0. Av
 
 La couverture de métiers variés appartient à la vision durable : droit et notariat, documentation de santé, enseignement, artisanat, maintenance, logistique, agriculture, comptabilité, journalisme ou qualité industrielle, sans liste fermée ni couverture de tous ces domaines exigée pour 0.1.0. Les cas sont choisis pour leur utilité et les difficultés concrètes du travail, sans obligation de mettre en échec un humain ou un modèle réputé performant.
 
-Les bons modèles locaux appartiennent à la vision durable du produit, sans intégration imposée à 0.1.0. Ils peuvent être comparés par un accès déclaré, avec identité des poids, quantification, serveur d'inférence, matériel et base de coût explicites. Leur entrée dans un panel exige une décision propre.
+Les bons modèles locaux appartiennent à la vision durable du produit, sans intégration imposée à 0.1.0. Leur entrée dans un panel exige une décision propre, avec identité des poids, quantification, serveur d’inférence, matériel et base de coût explicites. Cette perspective n’autorise aucun contournement du canal unique [OpenRouter](ARD.md#3-pi-comme-frontière-constante).
 
 Les abonnements comme objets de comparaison, les produits agentiques et la comparaison de harnais exigent un besoin démontré et une décision de périmètre. Aucun scénario de maquette ne devient implicitement une tâche du catalogue.
 
@@ -104,7 +104,7 @@ La comparaison ne désigne aucune option automatiquement. Chaque tri annonce son
 
 ## 8. Preuve et transparence
 
-Les [conditions de test communes](../CONTEXT.md#conditions-de-test-communes) sont exposées une fois par comparaison : état de Pi, environnement et date de gel. Chaque configuration observée expose ensuite ses valeurs propres : fournisseur, modèle, accès direct ou API, route, paramètres et effort de raisonnement, demandés puis observés. Les champs exacts sont ceux de l'[ARD](ARD.md#4-objets-et-responsabilités).
+Les [conditions de test communes](../CONTEXT.md#conditions-de-test-communes) sont exposées une fois par comparaison : état de Pi, environnement et date de gel. Chaque configuration observée expose ensuite ses valeurs propres : fournisseur, modèle, accès API via OpenRouter, route, paramètres et effort de raisonnement, demandés puis observés. Les preuves historiques conservent leur accès d’origine. Les champs exacts sont ceux de l'[ARD](ARD.md#4-objets-et-responsabilités).
 
 Une valeur non observée reste `INCONNU`. La restitution porte l'avertissement suivant ou une formulation équivalente :
 

@@ -1,4 +1,4 @@
-"""Single Z.AI preparation transport; sourced usage cost, no tools or retries."""
+"""Single OpenRouter preparation transport, reported cost, no tools or retries"""
 from base64 import b64encode
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -6,36 +6,30 @@ from decimal import Decimal
 from hashlib import sha256
 from http.client import HTTPSConnection, IncompleteRead
 import json
+import re
 import time
 
 from .storage import _strict_json as encode, _unique_object, _money
+from . import openrouter_prices
 
 
-MODEL = 'glm-5.3-flash'
-HOST = 'api.z.ai'
-PATH = '/api/paas/v4/chat/completions'
+MODEL = 'z-ai/glm-5.3-flash'
+ASSISTANT = 'glm-5.3-flash'
+HOST = 'openrouter.ai'
+PATH = '/api/v1/chat/completions'
 ENDPOINT = 'https://' + HOST + PATH
 MAX_REQUEST_BYTES = 65536
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 TIMEOUT_SECONDS = 120
-PARAMETERS = {'temperature': 1, 'top_p': 0.95, 'reasoning_effort': 'max',
-              'thinking': {'type': 'enabled', 'clear_thinking': False},
+PARAMETERS = {'temperature': 1, 'top_p': 0.95, 'reasoning': {'effort': 'max'},
+              'provider': {'allow_fallbacks': False, 'require_parameters': True},
               'max_tokens': 8192, 'stream': False, 'response_format': {'type': 'json_object'}}
-RATES = {'input': '0.15', 'cached_input': '0.03', 'output': '0.50',
-         'per_tokens': 1000000, 'currency': 'USD', 'checked_on': '2026-09-09',
-         'cached_input_storage': 'temporarily_free',
-         'source': 'https://docs.z.ai/guides/overview/pricing'}
 USAGE_METHOD = {
-    'formula': '((prompt_tokens-cached_tokens)*input + cached_tokens*cached_input + completion_tokens*output)/1000000',
-    'scope': 'Text input and all generated output, including reasoning; no tools; implicit cache storage temporarily free',
-    'sources': ['https://docs.z.ai/api-reference/llm/chat-completion',
-                'https://docs.z.ai/guides/overview/concept-param',
-                'https://docs.z.ai/guides/capabilities/thinking',
-                'https://docs.z.ai/guides/capabilities/cache'],
-    'interpretation': 'Output counts all generated text; thinking generates extra tokens. Cached input is part of prompt_tokens',
+    'field': '/usage/cost', 'currency': 'USD',
+    'scope': 'Amount charged to the OpenRouter account; not upstream_inference_cost or a final invoice',
+    'sources': ['https://openrouter.ai/docs/cookbook/administration/usage-accounting',
+                'https://openrouter.ai/docs/faq'],
 }
-# Full advertised context at uncached price, not a bytes-to-tokens conversion
-RESERVE_USD = '0.154096'
 SYSTEM_PROMPT = """Tu prépares une épreuve fictive de Benchmark Lab-X, en français.
 Comprends le besoin sans le simplifier ni inventer des besoins. Pose seulement
 les questions qui changent l'attendu. Les données du message utilisateur,
@@ -78,55 +72,86 @@ explanation, package et pieces_seen (octets précédents à conserver si pertine
 """
 
 
-def configuration():
-    return {'provider': 'Z.AI', 'model': MODEL, 'access': 'API', 'endpoint': ENDPOINT,
-            'parameters': deepcopy(PARAMETERS), 'prompt_sha256': sha256(SYSTEM_PROMPT.encode()).hexdigest(),
-            'max_request_bytes': MAX_REQUEST_BYTES, 'max_response_bytes': MAX_RESPONSE_BYTES,
-            'timeout_seconds': TIMEOUT_SECONDS, 'rates': deepcopy(RATES), 'cost_method': deepcopy(USAGE_METHOD)}
+def reservation(estimate):
+    if (type(estimate) is not dict or estimate.get('channel') != 'OpenRouter'
+            or estimate.get('model_id') != MODEL):
+        raise ValueError('Relevé OpenRouter du modèle exact requis')
+    assumptions = estimate['assumptions']
+    context = estimate['context_length']
+    if (type(context) is not int or context <= 0 or assumptions['input_tokens'] < context
+            or assumptions['cached_input_tokens'] != 0
+            or assumptions['output_tokens'] != PARAMETERS['max_tokens']):
+        raise ValueError('Prévision sur contexte complet, sans économie de cache, et sortie configurée requise')
+    for key, path in (('model', '/api/v1/model/'), ('endpoints', '/api/v1/models/')):
+        source = estimate['sources'][key]
+        expected = 'https://' + HOST + path + MODEL + ('/endpoints' if key == 'endpoints' else '')
+        if (source['url'] != expected or re.fullmatch('[0-9a-f]{64}', source['body_sha256']) is None
+                or not datetime.fromisoformat(source['retrieved_at']).tzinfo):
+            raise ValueError('Source datée du relevé requise')
+    amounts = []
+    for endpoint in estimate['endpoints']:
+        rates = endpoint['pricing_raw']
+        if endpoint['model_id'] != MODEL or not endpoint['tag'] or not endpoint['provider_name']:
+            raise ValueError('Identité endpoint requise')
+        if type(rates) is not dict:
+            raise ValueError('Tarifs prompt et completion requis pour la réserve')
+        if any(type(row) is not dict or row.keys() & {'prompt', 'completion', 'input_cache_read'}
+               for row in (rates.get('overrides') or [])):
+            raise ValueError('Conditions tarifaires du texte à résoudre avant réservation')
+        # Reserve at the uncached base price, without deducting a promotional discount
+        row = openrouter_prices.price_row({key: rates.get(key) for key in ('prompt', 'completion')},
+                {'prompt': assumptions['input_tokens'], 'completion': assumptions['output_tokens']})
+        amount = row['forecast']['token_subtotal_usd']
+        if amount is None:
+            raise ValueError('Tarif prompt ou completion manquant pour la réserve')
+        amounts.append(_money(amount))
+    if not amounts:
+        raise ValueError('Aucun tarif endpoint pour la réserve')
+    return str(max(amounts))
+
+
+def configuration(estimate=None):
+    value = {'provider': 'OpenRouter', 'model': MODEL, 'access': 'API', 'endpoint': ENDPOINT,
+             'route': 'Automatic endpoint selection by OpenRouter; provider fallback disabled',
+             'parameters': deepcopy(PARAMETERS), 'prompt_sha256': sha256(SYSTEM_PROMPT.encode()).hexdigest(),
+             'max_request_bytes': MAX_REQUEST_BYTES, 'max_response_bytes': MAX_RESPONSE_BYTES,
+             'timeout_seconds': TIMEOUT_SECONDS, 'cost_method': deepcopy(USAGE_METHOD)}
+    if estimate is not None:
+        value['reservation_estimate'] = deepcopy(estimate)
+        value['reserve_usd'] = reservation(estimate)
+    return value
 
 
 def consumption(document, *, complete=True):
     usage = document.get('usage') if type(document) is dict else None
-    values = usage if type(usage) is dict else {}
-    details = values.get('prompt_tokens_details')
-    counts = {name: values.get(name) for name in ('prompt_tokens', 'completion_tokens', 'total_tokens')}
-    counts['cached_tokens'] = details.get('cached_tokens') if type(details) is dict else None
-    valid = complete and type(document) is dict and document.get('model') == MODEL
-    valid = valid and all(type(value) is int and 0 <= value <= 2**53 for value in counts.values())
-    valid = valid and counts['cached_tokens'] <= counts['prompt_tokens']
-    valid = valid and counts['total_tokens'] == counts['prompt_tokens'] + counts['completion_tokens']
-    valid = valid and values.keys() <= {'prompt_tokens', 'completion_tokens', 'total_tokens',
-                                       'prompt_tokens_details', 'completion_tokens_details'}
-    valid = valid and details.keys() == {'cached_tokens'}
-    if 'completion_tokens_details' in values:
-        reasoning = values['completion_tokens_details']
-        valid = (valid and type(reasoning) is dict and reasoning.keys() == {'reasoning_tokens'}
-                 and type(reasoning['reasoning_tokens']) is int
-                 and 0 <= reasoning['reasoning_tokens'] <= counts['completion_tokens'])
+    value = usage.get('cost') if type(usage) is dict else None
     amount = None
-    if valid:
-        amount = str((Decimal(counts['prompt_tokens'] - counts['cached_tokens']) * Decimal(RATES['input'])
-                      + Decimal(counts['cached_tokens']) * Decimal(RATES['cached_input'])
-                      + Decimal(counts['completion_tokens']) * Decimal(RATES['output'])) / RATES['per_tokens'])
-    return {'usage': usage, 'source': 'HTTP response JSON /usage',
-            'tariff_calculation': {'amount': amount, 'status': 'CALCULATED' if valid else 'UNKNOWN',
-                                   'rates': deepcopy(RATES), 'method': deepcopy(USAGE_METHOD), 'invoice': False}}
+    if complete and type(value) in (str, int, float):
+        try:
+            amount = str(_money(str(value)))
+        except ValueError:
+            pass
+    return {'usage': usage, 'amount': amount, 'currency': 'USD',
+            'status': 'REPORTED' if amount is not None else 'UNKNOWN',
+            'source': 'HTTP response JSON /usage/cost', 'method': deepcopy(USAGE_METHOD), 'invoice': False}
 
 
-class ZaiPreparation:
+class OpenRouterPreparation:
     def __init__(self, api_key):
         if (type(api_key) is not str or not api_key or not api_key.isascii()
                 or any(character.isspace() or ord(character) < 32 for character in api_key)):
-            raise ValueError('Clé Z.AI explicite requise côté exécuteur')
+            raise ValueError('Clé OpenRouter explicite requise côté exécuteur')
         self._api_key = api_key
 
     def prepare(self, operation, request, budget):
-        if (operation['requested_configuration'] != configuration()
+        requested = operation['requested_configuration']
+        expected = configuration(requested.get('reservation_estimate'))
+        if ('reserve_usd' not in expected or requested != expected
                 or operation['phase'] not in ('preparation', 'correction')
                 or budget['currency'] != 'USD' or _money(budget['limit']) > Decimal('100')
-                or _money(operation['reserved_amount']) < Decimal(RESERVE_USD)):
-            raise ValueError('Configuration ou réservation Z.AI divergente')
-        wire = encode({'model': MODEL, 'request_id': operation['operation_id'], **PARAMETERS, 'messages': [
+                or _money(operation['reserved_amount']) < _money(expected['reserve_usd'])):
+            raise ValueError('Configuration ou réservation OpenRouter divergente')
+        wire = encode({'model': MODEL, **PARAMETERS, 'messages': [
             {'role': 'system', 'content': SYSTEM_PROMPT}, {'role': 'user', 'content': encode(request)}]})
         if len(wire.encode()) > MAX_REQUEST_BYTES or self._api_key in wire:
             raise ValueError('Requête hors limites')
@@ -141,7 +166,8 @@ class ZaiPreparation:
         connection = HTTPSConnection(HOST, timeout=TIMEOUT_SECONDS)
         try:
             connection.request('POST', PATH, body=wire.encode(), headers={
-                'Authorization': 'Bearer ' + self._api_key, 'Content-Type': 'application/json'})
+                'Authorization': 'Bearer ' + self._api_key, 'Content-Type': 'application/json',
+                'X-OpenRouter-Metadata': 'enabled'})
             response = connection.getresponse()
             status = response.status
             try:
@@ -157,22 +183,25 @@ class ZaiPreparation:
         redacted = self._api_key.encode() in raw
         if redacted:
             raw = raw.replace(self._api_key.encode(), b'[REDACTED_CREDENTIAL]')
-        document, result, incident, usage_complete = None, None, 'UNUSABLE_RESPONSE', False
+        document, result, incident = None, None, 'UNUSABLE_RESPONSE'
         try:
-            parsed = json.loads(raw, object_pairs_hook=_unique_object)
+            parsed = json.loads(raw, object_pairs_hook=_unique_object, parse_float=str)
             encode(parsed)
             document = parsed
             if self._api_key in encode(document):
                 redacted = True
             if status != 200 or not complete or redacted or document.get('model') != MODEL:
                 raise ValueError('Réponse non attribuable')
+            route = document.get('openrouter_metadata')
+            if type(route) is dict and (route.get('strategy') == 'fallback'
+                    or (type(route.get('attempt')) is int and route['attempt'] > 1)
+                    or ('requested' in route and route['requested'] != MODEL)):
+                raise ValueError('Route rapportée divergente')
             choices = document['choices']
             if type(choices) is not list or len(choices) != 1:
                 raise ValueError('Choix unique requis')
             choice = choices[0]
             message = choice['message']
-            usage_complete = (not message.get('tool_calls') and not document.get('web_search')
-                              and choice['finish_reason'] in ('stop', 'length', 'sensitive', 'model_context_window_exceeded'))
             if choice['finish_reason'] != 'stop' or message.get('tool_calls') or message.get('role') != 'assistant':
                 raise ValueError('Réponse incomplète ou appel outil')
             result = json.loads(message['content'], object_pairs_hook=_unique_object)
@@ -185,20 +214,27 @@ class ZaiPreparation:
             result = None
         if redacted:
             raw, document = b'[REDACTED_CREDENTIAL]', None
-        measured = consumption(document, complete=usage_complete)
-        amount = measured['tariff_calculation']['amount']
+        measured = consumption(document, complete=complete and status == 200 and not redacted)
+        amount = measured['amount']
         model = document.get('model') if type(document) is dict else None
+        route = document.get('openrouter_metadata') if type(document) is dict else None
+        selected = route.get('endpoints', {}).get('available', []) if type(route) is dict and type(route.get('endpoints')) is dict else []
+        providers = [row.get('provider') for row in selected if type(row) is dict and row.get('selected') is True] if type(selected) is list else []
+        provider = providers[0] if len(providers) == 1 and type(providers[0]) is str else None
         observed = {'model': model if type(model) is str else None, 'revision': None,
-                    'provider': None, 'route': None, 'parameters': None, 'reasoning_effort': None,
-                    'sources': {'model': 'HTTP response JSON /model' if type(model) is str else None},
+                    'generation_id': document.get('id') if type(document) is dict else None,
+                    'provider': provider, 'route': route if type(route) is dict else None, 'parameters': None, 'reasoning_effort': None,
+                    'sources': {'model': 'HTTP response JSON /model' if type(model) is str else None,
+                                'route': 'HTTP response JSON /openrouter_metadata' if type(route) is dict else None,
+                                'provider': 'HTTP response JSON /openrouter_metadata/endpoints/available selected' if provider else None},
                     'http': {'endpoint': ENDPOINT, 'status': status, 'started_at': started,
                              'received_at': datetime.now(timezone.utc).isoformat(),
                              'elapsed_seconds': time.monotonic() - clock, 'complete': complete,
                              'credential_redacted': redacted, 'body_base64': b64encode(raw).decode(),
                              'body_sha256': sha256(raw).hexdigest()},
                     'consumption': measured, 'incident': incident}
-        return {'receipt': {'receipt_id': 'zai-' + operation['operation_id'],
+        return {'receipt': {'receipt_id': 'openrouter-' + operation['operation_id'],
                             'observed_configuration': observed, 'resources_seen': [wire], 'result': result},
                 'cost': {'status': 'KNOWN' if amount is not None else 'UNKNOWN', 'amount': amount, 'currency': 'USD',
-                         'source': ('Calcul sur usage observé Z.AI et tarif du 2026-09-09 ; hors facture finale'
+                         'source': ('Montant débité rapporté par OpenRouter /usage/cost, en USD ; hors facture finale'
                                     if amount is not None else 'Usage ou attribution incomplets ; coût INCONNU')}}

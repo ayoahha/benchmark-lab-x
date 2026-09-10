@@ -16,10 +16,22 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from benchmark_lab_x import preparation as prep, runtime, service, storage
-from benchmark_lab_x import zai_preparation as zai
+from benchmark_lab_x import openrouter_preparation as assistant
 
 
 KEY = 'fixture-key-never-a-credential'
+ESTIMATE = {'channel': 'OpenRouter', 'model_id': assistant.MODEL, 'context_length': 1000000,
+            'assumptions': {'input_tokens': 1000000, 'cached_input_tokens': 0, 'output_tokens': 8192},
+            'sources': {key: {'url': 'https://openrouter.ai/api/v1/' + path,
+                              'retrieved_at': '2026-09-10T00:00:00+00:00', 'body_sha256': 'b' * 64}
+                        for key, path in [('model', 'model/' + assistant.MODEL),
+                                          ('endpoints', 'models/' + assistant.MODEL + '/endpoints')]},
+            'endpoints': [{'model_id': assistant.MODEL, 'tag': 'fixture/fp8', 'provider_name': 'Fixture provider',
+                           'pricing_raw': {'prompt': '0.0000002', 'completion': '0.0000008'}}]}
+RESERVE = assistant.reservation(ESTIMATE)
+ROUTE = {'requested': assistant.MODEL, 'strategy': 'direct', 'attempt': 1,
+         'endpoints': {'available': [{'provider': 'Fixture provider', 'model': assistant.MODEL, 'selected': True}]}}
+
 NEED = 'Je passe trop de temps à retrouver ce qui a été décidé en réunion et qui doit faire quoi. Je voudrais comparer des modèles pour m’aider.'
 CLARIFICATION = 'Association entièrement fictive organisant un événement ; notes françaises ; décisions, actions, responsables, échéances et informations à confirmer.'
 CORRECTION = 'Garde les mêmes notes et distingue clairement les propositions des décisions validées. Pour les responsables absents, indique à confirmer.'
@@ -53,10 +65,10 @@ def result(stage='preview'):
 
 
 def http_body(value=None, **updates):
-    return storage._strict_json({'id': 'fixture-provider-id', 'model': zai.MODEL,
+    return storage._strict_json({'id': 'fixture-provider-id', 'model': assistant.MODEL,
         'choices': [{'finish_reason': 'stop', 'message': {'role': 'assistant',
                     'content': storage._strict_json(value if value is not None else result())}}],
-        'usage': {'prompt_tokens': 1000, 'completion_tokens': 200, 'total_tokens': 1200,
+        'openrouter_metadata': ROUTE, 'usage': {'cost': 0.000202, 'prompt_tokens': 1000, 'completion_tokens': 200, 'total_tokens': 1200,
                   'prompt_tokens_details': {'cached_tokens': 400}}, **updates}).encode()
 
 
@@ -71,15 +83,15 @@ def executor_process(data, sock, entered=None):
             while True:
                 time.sleep(1)
         connection.getresponse.side_effect = interrupted_response
-    with patch.dict(os.environ, {'ZAI_API_KEY': KEY}), patch.object(zai, 'HTTPSConnection', return_value=connection), \
+    with patch.dict(os.environ, {'OPENROUTER_API_KEY': KEY}), patch.object(assistant, 'HTTPSConnection', return_value=connection), \
             patch.object(service, 'release_identity', return_value='a' * 40):
         runtime.main(['executor', '--data', str(data), '--socket', str(sock),
-                      '--preparation-assistant', zai.MODEL])
+                      '--preparation-assistant', assistant.ASSISTANT])
 
 
-class ZaiPreparationTests(unittest.TestCase):
+class OpenRouterPreparationTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix='zai-fixture-')
+        temporary = tempfile.TemporaryDirectory(prefix='openrouter-fixture-')
         self.addCleanup(temporary.cleanup)
         self.home = Path(temporary.name).resolve()
         self.data = self.home / 'private'
@@ -89,16 +101,16 @@ class ZaiPreparationTests(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.store.create_budget('fixture', '100', 'USD')
         self.authority = dict(authority_id='FICTIONAL_HTTP_ONLY', budget_id='fixture',
-                              reserve_amount=zai.RESERVE_USD, requested_configuration=zai.configuration())
+                              reserve_amount=RESERVE, requested_configuration=assistant.configuration(ESTIMATE))
         prep.admit(self.store, self.authority)
         self.session, self.csrf, self.token = prep.session(self.store, None, create=True)
-        self.transport = zai.ZaiPreparation(KEY)
+        self.transport = assistant.OpenRouterPreparation(KEY)
         self.http = Mock()
         self.http.getresponse.return_value.status = 200
         self.http.getresponse.return_value.length = 0
         self.raw = http_body()
         self.http.getresponse.return_value.read.return_value = self.raw
-        patched = patch.object(zai, 'HTTPSConnection', return_value=self.http)
+        patched = patch.object(assistant, 'HTTPSConnection', return_value=self.http)
         self.connection = patched.start()
         self.addCleanup(patched.stop)
 
@@ -117,14 +129,20 @@ class ZaiPreparationTests(unittest.TestCase):
                 operation = reader.inspect_operations()[0]
                 self.assertEqual('EMISSION_POSSIBLE', operation['state'])
                 self.assertEqual(body, operation['resources'][1].encode())
-                self.assertEqual(zai.RESERVE_USD, reader.inspect_budget('fixture')['reserved'])
-            self.assertEqual(('POST', zai.PATH), (method, path))
+                self.assertEqual(RESERVE, reader.inspect_budget('fixture')['reserved'])
+            self.assertEqual(('POST', assistant.PATH), (method, path))
             self.assertEqual('Bearer ' + KEY, headers['Authorization'])
             self.assertNotIn(KEY.encode(), body)
             sent = json.loads(body)
-            self.assertEqual(zai.MODEL, sent['model'])
-            self.assertEqual(zai.PARAMETERS, {k: sent[k] for k in zai.PARAMETERS})
+            self.assertEqual(assistant.MODEL, sent['model'])
+            self.assertEqual(assistant.PARAMETERS, {k: sent[k] for k in assistant.PARAMETERS})
             self.assertNotIn('tools', sent)
+            self.assertNotIn('thinking', sent)
+            self.assertNotIn('request_id', sent)
+            self.assertEqual({'effort': 'max'}, sent['reasoning'])
+            self.assertFalse(sent['provider']['allow_fallbacks'])
+            self.assertTrue(sent['provider']['require_parameters'])
+            self.assertEqual('enabled', headers['X-OpenRouter-Metadata'])
         self.http.request.side_effect = at_request
         operation_id = self.submit()
         accepted = self.store.inspect_operations()[0]
@@ -136,10 +154,13 @@ class ZaiPreparationTests(unittest.TestCase):
         view = prep.view(self.store, self.session, 'd')
         observed = operation['receipt']['observed_configuration']
         self.assertEqual(self.raw, b64decode(observed['http']['body_base64']))
-        self.assertEqual(zai.MODEL, observed['model'])
+        self.assertEqual(assistant.MODEL, observed['model'])
         self.assertIsNone(observed['parameters'])
-        self.assertEqual('0.000202', observed['consumption']['tariff_calculation']['amount'])
-        self.assertFalse(observed['consumption']['tariff_calculation']['invoice'])
+        self.assertEqual(ROUTE, observed['route'])
+        self.assertEqual('Fixture provider', observed['provider'])
+        self.assertEqual('OpenRouter', operation['requested_configuration']['provider'])
+        self.assertEqual('0.000202', observed['consumption']['amount'])
+        self.assertFalse(observed['consumption']['invoice'])
         self.assertEqual('KNOWN', operation['observed_cost']['status'])
         self.assertEqual('preview', view['stage'])
         self.assertEqual([NOTES.encode()], [prep.piece_bytes(self.store, self.session, 'd', view['revision'], p['id'])
@@ -150,7 +171,7 @@ class ZaiPreparationTests(unittest.TestCase):
         self.http.getresponse.return_value.read.return_value = http_body(usage=None)
         unknown, later = self.execute(action_id='unknown', revision=2, kind='correct', message=CORRECTION)
         budget = self.store.inspect_budget('fixture')
-        self.assertEqual(zai.RESERVE_USD, budget['reserved'])
+        self.assertEqual(RESERVE, budget['reserved'])
         self.assertEqual('0.000202', budget['spent'])
         self.assertEqual([unknown['operation_id']], budget['unknown_cost_operations'])
         with self.assertRaises(storage.BudgetError):
@@ -158,7 +179,7 @@ class ZaiPreparationTests(unittest.TestCase):
         prep.execute(self.data, unknown['operation_id'], self.transport)
         self.assertEqual(2, self.http.request.call_count)
         self.assertEqual(2, self.connection.call_count)
-        self.connection.assert_called_with(zai.HOST, timeout=zai.TIMEOUT_SECONDS)
+        self.connection.assert_called_with(assistant.HOST, timeout=assistant.TIMEOUT_SECONDS)
         self.assertNotIn(KEY, storage._strict_json(operation))
 
     def test_full_scenario_same_budget_preserves_notes_agreements_and_validation(self):
@@ -217,14 +238,14 @@ class ZaiPreparationTests(unittest.TestCase):
         for status, raw in [(200, b'not json'), (200, b'{"usage":NaN}'), (200, b'{"model":"x","model":"y"}'), (200, http_body(model='glm-5.3')),
                             (200, http_body(choices=choices)), (200, http_body(choices=tools)),
                             (429, b'{"error":"rate limit"}'), (302, b'redirect'),
-                            (200, b' ' * (zai.MAX_RESPONSE_BYTES + 1))]:
+                            (200, b' ' * (assistant.MAX_RESPONSE_BYTES + 1))]:
             with self.subTest(status=status, raw_size=len(raw)):
                 self.http.reset_mock()
                 self.http.getresponse.return_value.status = status
                 self.http.getresponse.return_value.read.return_value = raw
                 response = self.transport(operation, request)
                 self.assertIsNone(response['receipt']['result'])
-                self.assertEqual('KNOWN' if raw == http_body(choices=choices) else 'UNKNOWN', response['cost']['status'])
+                self.assertEqual('KNOWN' if raw in (http_body(choices=choices), http_body(choices=tools), http_body(model='glm-5.3')) else 'UNKNOWN', response['cost']['status'])
                 self.assertEqual(1, self.http.request.call_count)
 
         self.http.getresponse.return_value.status = 200
@@ -235,14 +256,24 @@ class ZaiPreparationTests(unittest.TestCase):
         self.assertIsNone(response['receipt']['result'])
         self.assertFalse(response['receipt']['observed_configuration']['http']['complete'])
 
-    def test_missing_or_invalid_usage_never_becomes_zero_or_wrong_model_price(self):
-        for usage in [None, {}, {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2},
-                      {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2, 'prompt_tokens_details': {'cached_tokens': 2}},
-                      {'prompt_tokens': True, 'completion_tokens': 1, 'total_tokens': 2, 'prompt_tokens_details': {'cached_tokens': 0}}]:
-            calculation = zai.consumption({'model': zai.MODEL, 'usage': usage})['tariff_calculation']
-            self.assertIsNone(calculation['amount'])
-            self.assertEqual('UNKNOWN', calculation['status'])
-        self.assertIsNone(zai.consumption(json.loads(http_body(model='glm-5.3')))['tariff_calculation']['amount'])
+    def test_reported_cost_is_exact_and_missing_cost_has_no_tariff_fallback(self):
+        for usage in [None, {}, {'cost': None}, {'cost': -1}, {'cost': True}, {'cost': 'NaN'},
+                      {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2}]:
+            measured = assistant.consumption({'usage': usage})
+            self.assertIsNone(measured['amount'])
+            self.assertEqual('UNKNOWN', measured['status'])
+        self.assertEqual('0', assistant.consumption({'usage': {'cost': 0}})['amount'])
+        self.assertEqual('0.123456789012345678901', assistant.consumption({'usage': {'cost': '0.123456789012345678901'}})['amount'])
+        # A reported debit is independent from optional token breakdowns and upstream cost
+        measured = assistant.consumption({'usage': {'cost': '0.02', 'cost_details': {'upstream_inference_cost': 99}}})
+        self.assertEqual('0.02', measured['amount'])
+        self.assertEqual('USD', measured['currency'])
+        self.http.getresponse.return_value.read.return_value = http_body(openrouter_metadata=None)
+        operation, _ = self.execute()
+        observed = operation['receipt']['observed_configuration']
+        self.assertIsNone(observed['route'])
+        self.assertIsNone(observed['provider'])
+        self.assertEqual('KNOWN', operation['observed_cost']['status'])
 
     def test_timeout_keeps_intention_reserve_and_no_replay_after_restart(self):
         self.http.getresponse.side_effect = TimeoutError('private provider error ' + KEY)
@@ -253,20 +284,20 @@ class ZaiPreparationTests(unittest.TestCase):
         runtime.stop(self.data, self.store, 'FIXTURE_RESTART', after_process_exit=True)
         prep.execute(self.data, operation['operation_id'], self.transport)
         self.assertEqual(1, self.http.request.call_count)
-        self.assertEqual(zai.RESERVE_USD, self.store.inspect_budget('fixture')['reserved'])
+        self.assertEqual(RESERVE, self.store.inspect_budget('fixture')['reserved'])
         self.assertNotIn(KEY, storage._strict_json(self.store.inspect_operations()))
 
     def test_configuration_budget_and_size_refuse_before_emission(self):
         for change in ['model', 'reserve', 'currency', 'limit', 'size']:
             with self.subTest(change=change):
-                operation = {'operation_id': 'fixture', 'requested_configuration': zai.configuration(), 'phase': 'preparation', 'reserved_amount': zai.RESERVE_USD}
+                operation = {'operation_id': 'fixture', 'requested_configuration': assistant.configuration(ESTIMATE), 'phase': 'preparation', 'reserved_amount': RESERVE}
                 request = {'message': 'x'}
                 budget = {'currency': 'USD', 'limit': '100'}
                 if change == 'model': operation['requested_configuration']['model'] = 'glm-5.3'
                 if change == 'reserve': operation['reserved_amount'] = '0'
                 if change == 'currency': budget['currency'] = 'TEST'
                 if change == 'limit': budget['limit'] = '101'
-                if change == 'size': request['message'] *= zai.MAX_REQUEST_BYTES
+                if change == 'size': request['message'] *= assistant.MAX_REQUEST_BYTES
                 with self.assertRaises(ValueError):
                     self.transport.prepare(operation, request, budget)
         self.authority['requested_configuration']['model'] = 'glm-5.3'
@@ -278,12 +309,41 @@ class ZaiPreparationTests(unittest.TestCase):
         self.assertEqual(self.authority, prep.admission(self.store))
         self.http.request.assert_not_called()
 
+    def test_reservation_uses_public_text_prices_and_rejects_missing_required_price(self):
+        self.assertEqual('0.2065536', RESERVE)
+        estimate = deepcopy(ESTIMATE)
+        estimate['endpoints'][0]['pricing_raw'].update({'discount': 0.5, 'request': None, 'image': None})
+        self.assertEqual(RESERVE, assistant.reservation(estimate))
+        estimate['endpoints'][0]['pricing_raw']['overrides'] = [{'image': '1'}]
+        self.assertEqual(RESERVE, assistant.reservation(estimate))
+        estimate['endpoints'][0]['pricing_raw']['overrides'] = [{'prompt': '1', 'min_prompt_tokens': 10}]
+        with self.assertRaises(ValueError): assistant.reservation(estimate)
+        estimate = deepcopy(ESTIMATE)
+        del estimate['endpoints'][0]['pricing_raw']['completion']
+        self.authority['requested_configuration']['reservation_estimate'] = estimate
+        prep.admit(self.store, self.authority)
+        with self.assertRaisesRegex(ValueError, 'prompt ou completion'):
+            self.submit()
+        self.assertEqual([], self.store.inspect_operations())
+        self.assertEqual('0', self.store.inspect_budget('fixture')['reserved'])
+        self.http.request.assert_not_called()
+
+    def test_reported_fallback_is_not_accepted_as_the_requested_route(self):
+        self.http.getresponse.return_value.read.return_value = http_body(openrouter_metadata={**ROUTE, 'attempt': 2})
+        operation, view = self.execute()
+        self.assertEqual('suspended', view['stage'])
+        self.assertEqual(2, operation['receipt']['observed_configuration']['route']['attempt'])
+        self.assertEqual('KNOWN', operation['observed_cost']['status'])
+        self.assertIsNone(prep.admission(self.store))
+        self.assertEqual(1, self.http.request.call_count)
+
     def test_key_absent_default_transport_and_reflected_key(self):
-        with patch.dict(os.environ, {}, clear=True), patch.object(service, 'serve_executor') as executor, \
+        with patch.dict(os.environ, {'ZAI_API_KEY': KEY}, clear=True), patch.object(service, 'serve_executor') as executor, \
                 patch.object(service, 'release_identity', return_value='a' * 40), redirect_stdout(io.StringIO()):
             arguments = ['executor', '--data', str(self.data), '--socket', str(self.home / 'executor.sock')]
-            self.assertEqual(78, runtime.main(arguments + ['--preparation-assistant', zai.MODEL]))
+            self.assertEqual(78, runtime.main(arguments + ['--preparation-assistant', assistant.ASSISTANT]))
             executor.assert_not_called()
+            self.http.request.assert_not_called()
             self.assertEqual(0, runtime.main(arguments))
             self.assertIsNone(executor.call_args.kwargs['transport'])
         reflected = result()
@@ -399,7 +459,7 @@ class ZaiPreparationTests(unittest.TestCase):
         self.assertEqual(2, len(after['resources']))
         self.assertIsNone(after['receipt'])
         self.assertIsNone(prep.admission(self.store))
-        self.assertEqual(zai.RESERVE_USD, self.store.inspect_budget('fixture')['reserved'])
+        self.assertEqual(RESERVE, self.store.inspect_budget('fixture')['reserved'])
         self.assertEqual('suspended', prep.view(self.store, self.session, 'd')['stage'])
 
 
