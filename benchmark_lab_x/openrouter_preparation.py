@@ -231,6 +231,9 @@ class OpenRouterPreparation:
             if self._api_key in encode(result):
                 redacted = True
                 raise ValueError('Réponse confidentielle')
+            if type(result) is dict:
+                result = {key: value for key, value in result.items() if value is not None or key in (
+                    'stage', 'explanation', 'reformulation', 'fictional_parameters', 'package')}
             incident = None
         except (ValueError, TypeError, KeyError, AttributeError):
             result = None

@@ -233,6 +233,54 @@ class OpenRouterPreparationTests(unittest.TestCase):
         self.assertEqual(http_body(broken), b64decode(operation['receipt']['observed_configuration']['http']['body_base64']))
         self.assertEqual([], self.store.verify_storage()['orphan_files'])
 
+    def test_only_extra_null_root_fields_are_ignored_before_strict_publication(self):
+        valid = result()
+        variants = [(dict(valid, package_note=None, authority=None), True),
+                    (dict(result('clarification'), package_note=None), True)]
+        for value in ('instruction', False, 0, '', [], {}):
+            variants.append((dict(valid, package_note=value), False))
+        for field in valid:
+            missing = deepcopy(valid)
+            del missing[field]
+            variants.append((dict(missing, package_note=None), False))
+            if field != 'package':
+                variants.append((dict(valid, **{field: None}, package_note=None), False))
+        variants.append((dict(valid, package=None, package_note=None), False))
+        for path in ('package', 'piece'):
+            nested = deepcopy(valid)
+            target = nested['package'] if path == 'package' else nested['package']['pieces'][0]
+            target['package_note'] = None
+            variants.append((dict(nested, package_note=None), False))
+        variants.extend([(dict(valid, stage='invalid', package_note=None), False), ([], False)])
+        for index, (value, accepted) in enumerate(variants):
+            with self.subTest(index=index):
+                prep.admit(self.store, self.authority)
+                dossier = 'null-field-' + str(index)
+                raw = http_body(value)
+                self.http.getresponse.return_value.read.return_value = raw
+                op_id, started = prep.submit(self.store, self.session, dossier,
+                    dict(action_id='create', request=NEED), 'a' * 40, self.transport)
+                self.assertTrue(started)
+                prep.execute(self.data, op_id, self.transport)
+                view = prep.view(self.store, self.session, dossier)
+                op = next(row for row in self.store.inspect_operations() if row['operation_id'] == op_id)
+                self.assertEqual(value['stage'] if accepted else 'suspended', view['stage'])
+                self.assertEqual(raw, b64decode(op['receipt']['observed_configuration']['http']['body_base64']))
+                self.assertEqual('KNOWN', op['observed_cost']['status'])
+                self.assertIsNone(view['validation'])
+                self.assertFalse(view['qualified'])
+                if accepted:
+                    expected = {key: value[key] for key in valid}
+                    self.assertEqual(expected, op['receipt']['result'])
+                    if value['package']:
+                        piece = view['package']['pieces'][0]
+                        self.assertEqual(NOTES.encode(), prep.piece_bytes(self.store, self.session, dossier, view['revision'], piece['id']))
+                else:
+                    self.assertIsNone(prep.admission(self.store))
+                    self.assertIsNone(view['package'])
+        self.assertEqual(len(variants), self.http.request.call_count)
+        self.assertTrue(self.store.verify_storage()['integrity_ok'])
+
     def test_empty_length_response_preserves_reasoning_usage_without_retry(self):
         usage = {'prompt_tokens': 1000, 'completion_tokens': 8192,
                  'completion_tokens_details': {'reasoning_tokens': 8155}, 'cost': '0.004'}
