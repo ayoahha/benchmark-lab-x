@@ -20,7 +20,7 @@ L’architecture relie des contrats figés, des observations attribuables et des
 
 Pi est le harnais commun des comparaisons. Sa constance réduit une source de variation entre configurations ; elle ne prouve pas que Pi est neutre ou que le modèle seul cause le résultat. Pi, ses paquets et l'environnement sont présentés une fois comme conditions de test communes, jamais comme propriétés répétées de chaque modèle.
 
-Cette frontière concerne les comparaisons candidates. Elle ne choisit ni le modèle ni le transport de l’assistance de préparation ou de jugement.
+Pi est la frontière des comparaisons candidates ; il ne choisit pas les modèles de préparation ou de jugement. Par décision d’Ayo, OpenRouter est le canal API unique de tous les appels modèles du produit : préparation, correction, jugement et candidats. Pi reste le harnais des candidats et doit être configuré via OpenRouter. Aucun accès direct aux API propres des fournisseurs ni repli implicite n’est permis ; un modèle indisponible via OpenRouter reste indisponible. Le secret est réservé à l’exécuteur ; choix du modèle, budget et autorité d’appel restent distincts. Cette règle produit ne s’applique pas aux outils de développement Graph ou Codex et ne requalifie aucun contrat historique.
 
 ### 3.1 Identité de l'environnement d'exécution
 
@@ -60,7 +60,7 @@ Responsabilité : conserver tout ce qui borne l’attribution de la sortie :
 
 - fournisseur
 - modèle et révision exacte exigée par le contrat
-- accès direct ou API
+- accès API via OpenRouter pour les appels courants ; accès d’origine conservé dans les preuves historiques
 - route demandée et route observée
 - paramètres demandés et observés
 - effort de raisonnement demandé et observé

@@ -8,11 +8,11 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
-from benchmark_lab_x import openrouter_prices as prices, runtime, zai_preparation as zai
+from benchmark_lab_x import openrouter_prices as prices, runtime, openrouter_preparation as assistant
 
 
 MODEL = 'z-ai/glm-5.3-flash'
-SUMMARY = {'id': MODEL, 'canonical_slug': MODEL + '-20260826', 'pricing': {'prompt': '0.00000001'}}
+SUMMARY = {'id': MODEL, 'canonical_slug': MODEL + '-20260826', 'context_length': 1000, 'pricing': {'prompt': '0.00000001'}}
 ENDPOINT = {'model_id': MODEL, 'provider_name': 'Fixture provider', 'tag': 'fixture/fp8', 'status': 0,
             'pricing': {'prompt': '0.000001', 'completion': '0.000002', 'input_cache_read': '0.0000001'}}
 
@@ -36,14 +36,14 @@ class OpenRouterPricesTests(unittest.TestCase):
         other = {**ENDPOINT, 'provider_name': 'Other fixture', 'tag': 'other',
                  'pricing': {'prompt': '0.000002', 'completion': '0.000003'}}
         self.responses([ENDPOINT, other])
-        before = zai.configuration()
+        before = assistant.configuration()
         with redirect_stdout(io.StringIO()) as output, patch.object(runtime, 'Store') as store, \
-                patch.object(zai, 'HTTPSConnection') as inference:
+                patch.object(assistant, 'HTTPSConnection') as inference:
             self.assertEqual(0, runtime.main(['forecast-prices', '--model', MODEL, '--input-tokens', '1000',
                                               '--cached-input-tokens', '200', '--output-tokens', '50']))
         store.assert_not_called()
         inference.assert_not_called()
-        self.assertEqual(before, zai.configuration())
+        self.assertEqual(before, assistant.configuration())
         result = json.loads(output.getvalue())
         first, second = result['endpoints']
         self.assertEqual({'prompt': '0.000800', 'input_cache_read': '0.0000200', 'completion': '0.000100'},
@@ -66,6 +66,18 @@ class OpenRouterPricesTests(unittest.TestCase):
             self.assertEqual({'headers': {'Accept': 'application/json'}}, call.kwargs)
         self.connection.assert_called_with('openrouter.ai', timeout=20)
         self.assertEqual(2, self.http.close.call_count)
+
+    def test_runtime_prepares_s2_configuration_from_the_public_forecast(self):
+        self.responses()
+        with redirect_stdout(io.StringIO()) as output, patch.object(runtime, 'Store') as store:
+            self.assertEqual(0, runtime.main(['forecast-prices', '--model', MODEL, '--input-tokens', '1000',
+                                              '--output-tokens', '8192', '--preparation-assistant', assistant.ASSISTANT]))
+        value = json.loads(output.getvalue())['preparation']
+        self.assertEqual('0.017384', value['reserve_amount'])
+        self.assertEqual(MODEL, value['requested_configuration']['model'])
+        self.assertEqual('OpenRouter', value['requested_configuration']['provider'])
+        self.assertIn('reservation_estimate', value['requested_configuration'])
+        store.assert_not_called()
 
     def test_missing_prices_do_not_hide_known_components_and_zero_is_explicit(self):
         self.responses([{**ENDPOINT, 'pricing': {'prompt': '0', 'completion': '0.000002'}}])

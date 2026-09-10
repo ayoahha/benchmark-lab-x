@@ -12,7 +12,7 @@ Ce glossaire fixe les termes du domaine. Il ne porte ni statut de livraison des 
 Objet produit mis en avant. Un verdict sur un modèle reste borné à la configuration dans laquelle il a été observé.
 
 ### Accès direct ou API
-Mode d’accès déclaré au modèle, notamment OAuth ou API directe. Il décrit le canal utilisé ; un produit agentique sous abonnement n’est pas pour autant l’objet comparé.
+Mode d’accès déclaré au modèle. Les appels courants du produit utilisent exclusivement l’API OpenRouter, selon l’[ARD](docs/ARD.md#3-pi-comme-frontière-constante). Les preuves historiques conservent leurs modes d’origine, notamment OAuth ou API directe ; un produit agentique sous abonnement n’est pas pour autant l’objet comparé.
 
 ### Configuration demandée
 Cible figée du panel de campagne : modèle, fournisseur, accès, route, paramètres et effort requis, avec les identités exactes attendues. Sa présence dans un manifeste ne prouve ni disponibilité ni exécution.

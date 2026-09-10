@@ -20,7 +20,7 @@ class RuntimeBundleTests(unittest.TestCase):
             package = repo / 'benchmark_lab_x'
             package.mkdir()
             source_package = Path(__file__).resolve().parents[1] / 'benchmark_lab_x'
-            for name in ('__init__.py', 'storage.py', 'preparation.py', 'runtime.py', 'service.py', 'zai_preparation.py', 'openrouter_prices.py', 'benchmark-runtime'):
+            for name in ('__init__.py', 'storage.py', 'preparation.py', 'runtime.py', 'service.py', 'openrouter_preparation.py', 'openrouter_prices.py', 'benchmark-runtime'):
                 shutil.copy2(source_package / name, package / name)
             (repo / 'tools').mkdir()
             shutil.copyfile(source_package.parent / 'tools/build_runtime.py', repo / 'tools/build_runtime.py')
@@ -46,7 +46,7 @@ class RuntimeBundleTests(unittest.TestCase):
             result = subprocess.run([sys.executable, str(unpacked / 'benchmark_lab_x/benchmark-runtime'), 'verify', '--data', str(root / 'private')], cwd=root, check=True, capture_output=True, text=True)
             self.assertTrue(json.loads(result.stdout)['integrity_ok'])
             subprocess.run([sys.executable, '-c', 'from benchmark_lab_x.service import serve_executor, serve_web'], cwd=unpacked, check=True)
-            subprocess.run([sys.executable, '-c', 'from benchmark_lab_x.openrouter_prices import forecast; from benchmark_lab_x.zai_preparation import configuration; assert configuration()["model"] == "glm-5.3-flash"'], cwd=unpacked, check=True)
+            subprocess.run([sys.executable, '-c', 'from benchmark_lab_x.openrouter_prices import forecast; from benchmark_lab_x.openrouter_preparation import configuration; assert configuration()["model"] == "z-ai/glm-5.3-flash"'], cwd=unpacked, check=True)
 
 
 if __name__ == '__main__':
