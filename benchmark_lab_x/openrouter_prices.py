@@ -90,7 +90,7 @@ def forecast(model, input_tokens, output_tokens, cached_input_tokens=0):
     for endpoint in detail['endpoints']:
         if type(endpoint) is not dict or endpoint.get('model_id') != model:
             raise ValueError('Identité endpoint divergente')
-        row = {key: endpoint.get(key) for key in ('model_id', 'provider_name', 'tag', 'name', 'quantization', 'status')}
+        row = {key: endpoint.get(key) for key in ('model_id', 'provider_name', 'tag', 'name', 'quantization', 'status', 'supported_parameters')}
         if any(type(row[key]) is not str or not row[key] for key in ('provider_name', 'tag')):
             raise ValueError('Identité fournisseur requise')
         row.update(price_row(endpoint.get('pricing'), quantities))

@@ -21,8 +21,10 @@ ENDPOINT = 'https://' + HOST + PATH
 MAX_REQUEST_BYTES = 65536
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 TIMEOUT_SECONDS = 120
+PROVIDERS = {'modal/fp8': 'Modal', 'coreweave/fp8': 'CoreWeave', 'novita/fp8': 'Novita'}
 PARAMETERS = {'temperature': 1, 'top_p': 0.95, 'reasoning': {'effort': 'max'},
-              'provider': {'allow_fallbacks': False, 'require_parameters': True},
+              'provider': {'only': list(PROVIDERS), 'order': list(PROVIDERS),
+                           'allow_fallbacks': True, 'require_parameters': True},
               'max_tokens': 8192, 'stream': False, 'response_format': {'type': 'json_object'}}
 USAGE_METHOD = {
     'field': '/usage/cost', 'currency': 'USD',
@@ -88,8 +90,15 @@ def reservation(estimate):
         if (source['url'] != expected or re.fullmatch('[0-9a-f]{64}', source['body_sha256']) is None
                 or not datetime.fromisoformat(source['retrieved_at']).tzinfo):
             raise ValueError('Source datée du relevé requise')
-    amounts = []
+    amounts, seen = [], set()
     for endpoint in estimate['endpoints']:
+        if endpoint['tag'] not in PROVIDERS:
+            continue
+        if endpoint['tag'] in seen or endpoint['provider_name'] != PROVIDERS[endpoint['tag']]:
+            raise ValueError('Endpoint autorisé absent ou répété')
+        seen.add(endpoint['tag'])
+        if not {'temperature', 'top_p', 'reasoning', 'max_tokens', 'response_format'} <= set(endpoint['supported_parameters']):
+            raise ValueError('Paramètres requis non annoncés par cet endpoint')
         rates = endpoint['pricing_raw']
         if endpoint['model_id'] != MODEL or not endpoint['tag'] or not endpoint['provider_name']:
             raise ValueError('Identité endpoint requise')
@@ -105,20 +114,23 @@ def reservation(estimate):
         if amount is None:
             raise ValueError('Tarif prompt ou completion manquant pour la réserve')
         amounts.append(_money(amount))
-    if not amounts:
-        raise ValueError('Aucun tarif endpoint pour la réserve')
+    if seen != PROVIDERS.keys():
+        raise ValueError('Relevé des trois endpoints autorisés requis')
     return str(max(amounts))
 
 
 def configuration(estimate=None):
     value = {'provider': 'OpenRouter', 'model': MODEL, 'access': 'API', 'endpoint': ENDPOINT,
-             'route': 'Automatic endpoint selection by OpenRouter; provider fallback disabled',
+             'route': 'Native OpenRouter fallback within the three explicit endpoint slugs, in configured order',
+             'reserve_basis': 'Most expensive full completion among permitted endpoints; failed-charge exceptions remain unknown, no invoice cap',
              'parameters': deepcopy(PARAMETERS), 'prompt_sha256': sha256(SYSTEM_PROMPT.encode()).hexdigest(),
              'max_request_bytes': MAX_REQUEST_BYTES, 'max_response_bytes': MAX_RESPONSE_BYTES,
              'timeout_seconds': TIMEOUT_SECONDS, 'cost_method': deepcopy(USAGE_METHOD)}
     if estimate is not None:
         value['reservation_estimate'] = deepcopy(estimate)
         value['reserve_usd'] = reservation(estimate)
+        canonical = estimate.get('canonical_slug')
+        value['model_identities'] = [MODEL] + ([canonical] if type(canonical) is str and canonical and canonical != MODEL else [])
     return value
 
 
@@ -161,6 +173,8 @@ class OpenRouterPreparation:
         if operation['state'] != 'EMISSION_POSSIBLE' or len(operation['resources']) != 2:
             raise ValueError('Intention HTTP persistée requise')
         wire = operation['resources'][1]
+        expected_models = operation['requested_configuration']['model_identities']
+        named_providers = {row['provider_name'] for row in operation['requested_configuration']['reservation_estimate']['endpoints']}
         started = datetime.now(timezone.utc).isoformat()
         clock = time.monotonic()
         connection = HTTPSConnection(HOST, timeout=TIMEOUT_SECONDS)
@@ -170,6 +184,12 @@ class OpenRouterPreparation:
                 'X-OpenRouter-Metadata': 'enabled'})
             response = connection.getresponse()
             status = response.status
+            safe_headers = {}
+            for name, pattern in (('X-Generation-Id', r'gen-[A-Za-z0-9_-]{1,200}'),
+                                  ('Retry-After', r'[0-9]{1,10}|[A-Za-z]{3}, [0-9]{2} [A-Za-z]{3} [0-9]{4} [0-9:]{8} GMT')):
+                value = response.getheader(name)
+                if type(value) is str and re.fullmatch(pattern, value) and self._api_key not in value:
+                    safe_headers[name] = value
             try:
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
                 complete = response.length in (None, 0)
@@ -190,13 +210,25 @@ class OpenRouterPreparation:
             document = parsed
             if self._api_key in encode(document):
                 redacted = True
-            if status != 200 or not complete or redacted or document.get('model') != MODEL:
+            if status != 200 or not complete or redacted or document.get('model') not in expected_models:
                 raise ValueError('Réponse non attribuable')
             route = document.get('openrouter_metadata')
-            if type(route) is dict and (route.get('strategy') == 'fallback'
-                    or (type(route.get('attempt')) is int and route['attempt'] > 1)
-                    or ('requested' in route and route['requested'] != MODEL)):
-                raise ValueError('Route rapportée divergente')
+            if type(route) is dict:
+                if 'requested' in route and route['requested'] != MODEL:
+                    raise ValueError('Modèle demandé rapporté divergent')
+                attempted = route.get('attempts', [])
+                endpoints = route.get('endpoints', {})
+                selected = endpoints.get('available', []) if type(endpoints) is dict else []
+                rows = attempted if type(attempted) is list else []
+                if type(selected) is list:
+                    rows = rows + [row for row in selected if type(row) is dict and row.get('selected') is True]
+                for row in rows:
+                    if type(row) is dict and (('provider' in row and row['provider'] is not None and row['provider'] in named_providers and row['provider'] not in PROVIDERS.values())
+                            or ('model' in row and row['model'] is not None and row['model'] not in expected_models)
+                            or ('tag' in row and row['tag'] is not None and row['tag'] not in PROVIDERS)):
+                        raise ValueError('Fournisseur, endpoint ou modèle rapporté hors autorisation')
+            if safe_headers.get('X-Generation-Id') and document.get('id') and document['id'] != safe_headers['X-Generation-Id']:
+                raise ValueError('Identifiants de génération divergents')
             choices = document['choices']
             if type(choices) is not list or len(choices) != 1:
                 raise ValueError('Choix unique requis')
@@ -220,14 +252,17 @@ class OpenRouterPreparation:
         route = document.get('openrouter_metadata') if type(document) is dict else None
         selected = route.get('endpoints', {}).get('available', []) if type(route) is dict and type(route.get('endpoints')) is dict else []
         providers = [row.get('provider') for row in selected if type(row) is dict and row.get('selected') is True] if type(selected) is list else []
-        provider = providers[0] if len(providers) == 1 and type(providers[0]) is str else None
+        provider = providers[0] if len(providers) == 1 and type(providers[0]) is str and providers[0] in PROVIDERS.values() else None
         observed = {'model': model if type(model) is str else None, 'revision': None,
-                    'generation_id': document.get('id') if type(document) is dict else None,
-                    'provider': provider, 'route': route if type(route) is dict else None, 'parameters': None, 'reasoning_effort': None,
+                    'generation_id': (document.get('id') if type(document) is dict else None) or safe_headers.get('X-Generation-Id'),
+                    'provider': provider, 'route': route if type(route) is dict else None,
+                    'routing_limit': ('Reported internal attempt exceeds the number of permitted providers; no internal retry cap is documented'
+                                      if type(route) is dict and type(route.get('attempt')) is int and route['attempt'] > len(PROVIDERS) else None),
+                    'parameters': None, 'reasoning_effort': None,
                     'sources': {'model': 'HTTP response JSON /model' if type(model) is str else None,
                                 'route': 'HTTP response JSON /openrouter_metadata' if type(route) is dict else None,
                                 'provider': 'HTTP response JSON /openrouter_metadata/endpoints/available selected' if provider else None},
-                    'http': {'endpoint': ENDPOINT, 'status': status, 'started_at': started,
+                    'http': {'endpoint': ENDPOINT, 'status': status, 'response_headers': safe_headers, 'started_at': started,
                              'received_at': datetime.now(timezone.utc).isoformat(),
                              'elapsed_seconds': time.monotonic() - clock, 'complete': complete,
                              'credential_redacted': redacted, 'body_base64': b64encode(raw).decode(),

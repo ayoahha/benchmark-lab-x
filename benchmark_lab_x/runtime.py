@@ -198,7 +198,7 @@ def restore(source, destination):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     campaign_actions = ('create-campaign', 'inspect-campaign', 'admit-campaign', 'stop-campaign', 'resume-campaign')
-    parser.add_argument('action', choices=campaign_actions + ('forecast-prices', 'initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
+    parser.add_argument('action', choices=campaign_actions + ('initialize-reconciliation', 'reconcile-cost', 'inspect-cost', 'forecast-prices', 'initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
     parser.add_argument('--data', type=Path)
     parser.add_argument('--authority', type=Path)
     parser.add_argument('--destination', type=Path)
@@ -268,7 +268,27 @@ def main(argv=None):
             result = (backup if args.action == 'backup' else restore)(args.data, args.destination)
         else:
             with closing(Store(args.data)) as store:
-                if args.action in campaign_actions:
+                if args.action in ('initialize-reconciliation', 'reconcile-cost', 'inspect-cost'):
+                    with worker_lock(store):
+                        verify(store)
+                        if args.action == 'initialize-reconciliation':
+                            result = store.initialize_reconciliation()
+                        else:
+                            if args.authority is None:
+                                raise ValueError('Preuve ou identité opérateur privée requise')
+                            private_path(args.authority)
+                            with args.authority.open('rb') as stream:
+                                raw = stream.read(2 * 1024 * 1024 + 1)
+                            if len(raw) > 2 * 1024 * 1024:
+                                raise ValueError('Preuve opérateur hors limites')
+                            proof = json.loads(raw, object_pairs_hook=_unique_object)
+                            if args.action == 'reconcile-cost':
+                                result = store.reconcile_cost(proof)
+                            else:
+                                from .storage import _fields
+                                _fields(proof, ('operation_id',), 'inspect-cost')
+                                result = store.inspect_cost(proof['operation_id'])
+                elif args.action in campaign_actions:
                     from . import campaigns
                     from .storage import _fields
                     if args.authority is None:

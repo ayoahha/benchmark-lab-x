@@ -171,12 +171,20 @@ def view(store, session_id, dossier_id, revision=None):
                       fictional=True, validation=binding(dossier_id, revision, digest) if validated else None,
                       qualified=False, changes=json.loads(changes), checks=json.loads(checks))
         result['rechecked'] = result['checks'].get('fields', [])
-        completed = connection.execute('SELECT a.request_json,o.observed_cost_json FROM s2_actions a '
+        completed = connection.execute('SELECT a.request_json,o.observed_cost_json,o.operation_id FROM s2_actions a '
                                        'JOIN operations o USING(operation_id) WHERE a.dossier_id=? '
                                        'AND a.input_revision=? AND o.state=?',
                                        (dossier_id, revision - 1, 'RECEIVED')).fetchone()
         result['message'] = None if completed is None else json.loads(completed[0])
         result['observed_cost'] = None if completed is None else json.loads(completed[1])
+        if completed is not None:
+            operation = store._operation_for_update(connection, completed[2], ('RECEIVED',))
+            reconciliation = store._reconciliation(connection, operation)
+            result['effective_cost'] = store._effective_cost(connection, operation)
+            result['cost_reconciliation'] = None if reconciliation is None else {
+                'sha256': reconciliation['sha256'], 'actor': reconciliation['proof']['actor'],
+                'source': reconciliation['proof']['source']['name'],
+                'observed_at': reconciliation['proof']['source']['observed_at']}
         # Historic views are stable; only the current view projects an unfinished action
         if revision == current:
             pending = connection.execute('SELECT o.state FROM s2_actions a JOIN operations o USING(operation_id) '
@@ -861,6 +869,11 @@ def render(value, csrf, path='/preparation', *, error=False):
                 'INCONNU' if cost['status'] == 'UNKNOWN' else cost['amount'] + ' ' + cost['currency']) + '. Source : ' + text(cost['source']) + '.</p>'
         else:
             content += '<p>Coût observé : INCONNU en l’absence de reçu de coût.</p>'
+        if value.get('cost_reconciliation'):
+            proof, cost = value['cost_reconciliation'], value['effective_cost']
+            content += '<p>Coût rapproché : ' + text(cost['amount'] + ' ' + cost['currency']) + '. Source : ' + text(
+                proof['source']) + ', attestée par ' + text(proof['actor']) + ' le ' + text(proof['observed_at']) + \
+                '. Le reçu original reste inchangé.</p>'
         if value['validation']:
             content += '<p role="status">Votre validation est enregistrée pour ce dossier, cette révision et cette empreinte.</p>'
         else:
