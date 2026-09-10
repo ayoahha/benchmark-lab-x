@@ -313,7 +313,11 @@ def serve_web(address, port, public, socket_path, source):
                 media_type = {'.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg'}[path.suffix]
                 self.respond(200, raw, media_type)
             except (OSError, ValueError, KeyError):
-                self.respond(404, {'error': 'NO_VERIFIED_PUBLICATION'})
+                if name == 'index.html' and 'text/html' in self.headers.get('Accept', '') and 'application/json' not in self.headers.get('Accept', ''):
+                    from . import preparation
+                    self.respond(404, preparation.render({'kind': 'publication_unavailable'}, ''), 'text/html; charset=utf-8')
+                else:
+                    self.respond(404, {'error': 'NO_VERIFIED_PUBLICATION'})
 
     # Le proxy termine TLS ; le pare-feu réserve ce port aux deux proxys
     with HTTPServer((address, port), Handler) as server:

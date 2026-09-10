@@ -190,6 +190,8 @@ def _comparison(store, connection, session_id, dossier_id, campaign_id, query):
                 cases=campaign['cases'], panel=campaign['panel'], conditions=campaign['conditions'],
                 obligations=spec['obligations'], cost_basis=basis, cells=campaign['cells'],
                 campaign_state=campaign['state'], history=records, href=base,
+                acquisition_dates=[a['received_at'] for a in campaign['attempts'] if a['received_at']],
+                stop_reason=campaign['stop_reason'],
                 dossier_href=f'/preparation/dossiers/{dossier_id}/revisions/{contract["revision"]}')
 
 
@@ -205,6 +207,12 @@ def detail(store, session_id, dossier_id, campaign_id, attempt_id, *, query=None
     history = [r for r in value['history'] if r['attempt_id'] == attempt_id]
     if not history:
         raise p.Denied('Tentative évaluée inaccessible')
+    for record in history:
+        record['proof_contents'] = {
+            link['piece_id']: e.piece_bytes(store, session_id, dossier_id,
+                                           record['evaluation_id'], link['piece_id']).decode('utf-8')
+            for link in record['proof_links']
+        }
     return dict(kind='attempt_detail', campaign_id=campaign_id, task=value['task'],
                 need=value['need'], conclusion=value['conclusion'], history=history,
                 filter_scope=value['filter_scope'], dossier_href=value['dossier_href'],
