@@ -22,10 +22,10 @@ MAX_REQUEST_BYTES = 65536
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 TIMEOUT_SECONDS = 120
 PROVIDERS = {'modal/fp8': 'Modal', 'coreweave/fp8': 'CoreWeave', 'novita/fp8': 'Novita'}
-PARAMETERS = {'temperature': 1, 'top_p': 0.95, 'reasoning': {'effort': 'max'},
+PARAMETERS = {'temperature': 1, 'top_p': 0.95, 'reasoning': {'effort': 'low'},
               'provider': {'only': list(PROVIDERS), 'order': list(PROVIDERS),
                            'allow_fallbacks': True, 'require_parameters': True},
-              'max_tokens': 8192, 'stream': False, 'response_format': {'type': 'json_object'}}
+              'max_tokens': 16384, 'stream': False, 'response_format': {'type': 'json_object'}}
 USAGE_METHOD = {
     'field': '/usage/cost', 'currency': 'USD',
     'scope': 'Amount charged to the OpenRouter account; not upstream_inference_cost or a final invoice',

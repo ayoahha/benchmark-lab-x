@@ -21,7 +21,7 @@ from benchmark_lab_x import openrouter_preparation as assistant
 
 KEY = 'fixture-key-never-a-credential'
 ESTIMATE = {'channel': 'OpenRouter', 'model_id': assistant.MODEL, 'context_length': 1000000, 'canonical_slug': assistant.MODEL + '-20260826',
-            'assumptions': {'input_tokens': 1000000, 'cached_input_tokens': 0, 'output_tokens': 8192},
+            'assumptions': {'input_tokens': 1000000, 'cached_input_tokens': 0, 'output_tokens': 16384},
             'sources': {key: {'url': 'https://openrouter.ai/api/v1/' + path,
                               'retrieved_at': '2026-09-10T00:00:00+00:00', 'body_sha256': 'b' * 64}
                         for key, path in [('model', 'model/' + assistant.MODEL),
@@ -142,7 +142,9 @@ class OpenRouterPreparationTests(unittest.TestCase):
             self.assertNotIn('tools', sent)
             self.assertNotIn('thinking', sent)
             self.assertNotIn('request_id', sent)
-            self.assertEqual({'effort': 'max'}, sent['reasoning'])
+            self.assertEqual({'effort': 'low'}, sent['reasoning'])
+            self.assertEqual(16384, sent['max_tokens'])
+            self.assertNotIn('max_tokens', sent['reasoning'])
             self.assertTrue(sent['provider']['allow_fallbacks'])
             self.assertEqual(list(assistant.PROVIDERS), sent['provider']['only'])
             self.assertEqual(sent['provider']['only'], sent['provider']['order'])
@@ -230,6 +232,24 @@ class OpenRouterPreparationTests(unittest.TestCase):
         self.assertIsNone(prep.admission(self.store))
         self.assertEqual(http_body(broken), b64decode(operation['receipt']['observed_configuration']['http']['body_base64']))
         self.assertEqual([], self.store.verify_storage()['orphan_files'])
+
+    def test_empty_length_response_preserves_reasoning_usage_without_retry(self):
+        usage = {'prompt_tokens': 1000, 'completion_tokens': 8192,
+                 'completion_tokens_details': {'reasoning_tokens': 8155}, 'cost': '0.004'}
+        raw = http_body(choices=[{'finish_reason': 'length',
+                        'message': {'role': 'assistant', 'content': ''}}], usage=usage)
+        self.http.getresponse.return_value.read.return_value = raw
+        operation, view = self.execute()
+        self.assertEqual('suspended', view['stage'])
+        self.assertIsNone(prep.admission(self.store))
+        self.assertEqual('RECEIVED', operation['state'])
+        self.assertEqual('0.004', operation['observed_cost']['amount'])
+        observed = operation['receipt']['observed_configuration']
+        self.assertEqual(usage, observed['consumption']['usage'])
+        self.assertEqual(raw, b64decode(observed['http']['body_base64']))
+        self.assertNotIn('indicative_cost', view)
+        prep.execute(self.data, operation['operation_id'], self.transport)
+        self.assertEqual(1, self.http.request.call_count)
 
     def test_truncation_wrong_model_tools_non_json_and_http_errors_are_not_retried(self):
         operation_id = self.submit()

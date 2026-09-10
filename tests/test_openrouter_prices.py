@@ -74,9 +74,9 @@ class OpenRouterPricesTests(unittest.TestCase):
                        summary={**SUMMARY, 'pricing': {'prompt': '0.000001', 'completion': '0.000002'}})
         with redirect_stdout(io.StringIO()) as output, patch.object(runtime, 'Store') as store:
             self.assertEqual(0, runtime.main(['forecast-prices', '--model', MODEL, '--input-tokens', '1000',
-                                              '--output-tokens', '8192', '--preparation-assistant', assistant.ASSISTANT]))
+                                              '--output-tokens', '16384', '--preparation-assistant', assistant.ASSISTANT]))
         value = json.loads(output.getvalue())['preparation']
-        self.assertEqual('0.017384', value['reserve_amount'])
+        self.assertEqual('0.033768', value['reserve_amount'])
         self.assertEqual(MODEL, value['requested_configuration']['model'])
         self.assertEqual('OpenRouter', value['requested_configuration']['provider'])
         self.assertIn('reservation_estimate', value['requested_configuration'])
