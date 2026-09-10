@@ -2,6 +2,7 @@
 from contextlib import closing
 from copy import deepcopy
 from datetime import datetime, timezone
+from decimal import Decimal
 from hashlib import sha256
 import hmac
 from html import escape
@@ -53,6 +54,39 @@ def admission(store, connection=None):
     result = json.loads(raw, object_pairs_hook=_unique_object)
     check_authority(result)
     return result
+
+
+def availability(store, transport):
+    """Read-only projection of preparation gates, without configuration or secrets"""
+    connection = connection_for(store)
+    with _transaction(connection):
+        authority = admission(store, connection)
+        configured = bool(transport)
+        reason = 'open'
+        pending = connection.execute(
+            "SELECT o.state FROM s2_actions a JOIN operations o USING(operation_id) "
+            "WHERE o.state != 'RECEIVED'").fetchall()
+        if os.path.lexists(store._root / 'restore.json'):
+            reason = 'restore'
+        elif any(row[0] == 'AMBIGUOUS' for row in pending):
+            reason = 'interrupted'
+        elif pending:
+            reason = 'waiting' if authority and configured else 'interrupted'
+        elif authority is None:
+            reason = 'closed'
+        elif not configured:
+            reason = 'unconfigured'
+        else:
+            operations = store._operations(connection)
+            budget = store._budget(connection, authority['budget_id'], operations)
+            if (store._blocking_costs(operations, budget, 'preparation') or any(
+                    row['budget_id'] == authority['budget_id'] and row['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS')
+                    for row in operations)):
+                reason = 'unresolved'
+            elif _money(authority['reserve_amount']) > Decimal(budget['available']):
+                reason = 'budget'
+        return {'assistant_configured': configured, 'admission_open': authority is not None,
+                'can_submit': reason == 'open', 'reason': reason}
 
 
 def check_authority(value):
@@ -170,6 +204,8 @@ def view(store, session_id, dossier_id, revision=None):
                       stage=stage, explanation=explanation, package=package, package_sha256=digest,
                       fictional=True, validation=binding(dossier_id, revision, digest) if validated else None,
                       qualified=False, changes=json.loads(changes), checks=json.loads(checks))
+        result['example_contents'] = {piece['id']: store.read_piece(piece['id']).decode('utf-8')
+                                      for piece in (package or {}).get('pieces', [])}
         result['rechecked'] = result['checks'].get('fields', [])
         completed = connection.execute('SELECT a.request_json,o.observed_cost_json,o.operation_id FROM s2_actions a '
                                        'JOIN operations o USING(operation_id) WHERE a.dossier_id=? '
@@ -525,7 +561,9 @@ def dispatch(store, method, path, token, body, source, transport):
         session_id, csrf, token = session(store, token, create=True)
         rows = connection_for(store).execute('SELECT dossier_id,current_revision FROM s2_dossiers WHERE session_id=? ORDER BY dossier_id',
                                             (session_id,)).fetchall()
-        return 200, {'csrf_token': csrf, 'dossiers': [{'dossier_id': d, 'revision': r} for d, r in rows]}, token, None
+        return 200, {'csrf_token': csrf, 'availability': availability(store, transport),
+                     'dossiers': [{'dossier_id': d, 'revision': r,
+                                   'need': store.get_dossier(d, r)['request']} for d, r in rows]}, token, None
     session_id, csrf, _ = session(store, token)
     if method == 'GET':
         from . import restitution
@@ -578,6 +616,8 @@ def dispatch(store, method, path, token, body, source, transport):
         if piece_id:
             return 200, piece_bytes(store, session_id, dossier_id, revision, piece_id), None, None
         result = view(store, session_id, dossier_id, revision)
+        result['current_revision'] = owner(connection_for(store), session_id, dossier_id)
+        result['availability'] = availability(store, transport)
         from .restitution import catalogue
         result['task_index'] = next(t for t in catalogue(store, session_id)['tasks'] if t['dossier_id'] == dossier_id)
         # The CSRF token travels independently in HTML rendering through the web's session query
@@ -782,15 +822,39 @@ def render(value, csrf, path='/preparation', *, error=False):
         return (f'<form method="post" action="{text(url)}">' + hidden('csrf_token', csrf)
                 + ''.join(hidden(k, v) for k, v in fields.items()) + content + '</form>')
 
-    def section(title, content):
-        return f'<section><h2>{text(title)}</h2>{content}</section>'
+    def section(title, content, anchor=None):
+        target = '' if anchor is None else f' id="{text(anchor)}"'
+        return f'<section{target}><h2>{text(title)}</h2>{content}</section>'
 
     def listing(values):
         return '<ul>' + ''.join(f'<li>{text(v)}</li>' for v in values) + '</ul>'
 
-    title = 'Préparer un exemple fictif'
+    state = value.get('availability', {})
+    can_submit = state.get('can_submit', False)
+    disabled = '' if can_submit else ' disabled aria-describedby="availability"'
+    s9 = value.get('kind') not in ('catalogue', 'comparison', 'projection_preview', 'attempt_detail')
+    navigation = ''
+    title = 'Décrire votre besoin'
     if error:
+        title = 'Préparation indisponible' if value.get('unavailable') else 'Action non aboutie'
         content = '<p role="alert">' + text(value['error']) + '</p><p><a href="/preparation">Retrouver mes dossiers</a></p>'
+    elif value.get('kind') == 'home':
+        title = 'Quel modèle pour votre travail ?'
+        content = '<p class="lead">Décrivez une tâche de votre travail, sans donnée personnelle ni information confidentielle. '
+        content += 'Nous préparerons avec vous un exemple fictif pour comparer les modèles sur des critères vérifiables et leur coût observé. '
+        content += 'Les résultats du test vous aideront à faire votre choix.</p>'
+        content += '<div class="actions"><a class="button" href="/preparation">Décrire mon besoin ou retrouver mes dossiers</a></div>'
+        content += '<section class="two"><div><h2>Un besoin, puis une épreuve</h2><p>Précisez le résultat utile. '
+        content += 'Examinez la consigne, les pièces inventées et les critères ; corrigez l’exemple avant de le valider.</p></div>'
+        content += '<div><h2>Des preuves pour choisir</h2><p>Une comparaison autorisée permet ensuite de consulter '
+        content += 'les résultats et leurs limites dans les mêmes conditions de test. Aucun meilleur modèle universel.</p></div></section>'
+        content += section('Votre espace de préparation', '<p>Vos dossiers restent privés. L’état de l’assistant et l’ouverture '
+            'des appels sont indiqués dans cet espace. Un assistant configuré ne signifie pas que les appels sont ouverts.</p>'
+            '<p>Vous pouvez consulter les dossiers existants lorsque les appels sont fermés. Si l’exécuteur est indisponible, '
+            'cet accueil reste accessible ; revenez à votre espace pour vérifier son état.</p>')
+        content += section('Consulter les publications', '<p>Seules les restitutions approuvées sont accessibles publiquement. '
+            'La validation d’un besoin ne publie rien et ne lance aucun test.</p>'
+            '<a href="/index.html">Ouvrir la publication active, si disponible</a>')
     elif value.get('kind') == 'catalogue':
         title = 'Mes tâches'
         content = '<p>Index privé de cette session. Aucune admission au catalogue public.</p>'
@@ -826,14 +890,19 @@ def render(value, csrf, path='/preparation', *, error=False):
         content += '<p>Les pièces exactes et leurs passages restent inertes. Historique conservé ; la dernière évaluation est affichée en premier.</p>'
         content += render_evaluations(list(reversed(value['history'])), value['back_href'])
     elif 'dossiers' in value:
-        content = section('Mes dossiers dans ce navigateur', '<ul>' + ''.join(
-            f'<li><a href="/preparation/dossiers/{text(d["dossier_id"])}">Dossier {text(d["dossier_id"])} — révision {d["revision"]}</a></li>'
-            for d in value['dossiers']) + '</ul>')
+        content = '<p class="lead">Décrivez le travail et le résultat qui vous serait utile. Vous pourrez examiner et corriger les pièces avant de valider le besoin représenté.</p>'
+        dossiers = '<ul class="dossiers">' + ''.join(
+            f'<li><a href="/preparation/dossiers/{text(d["dossier_id"])}">{text(d.get("need") or "Dossier " + d["dossier_id"])}</a>'
+            f'<small>Révision {d["revision"]} · dossier {text(d["dossier_id"])}</small></li>'
+            for d in value['dossiers']) + '</ul>' if value['dossiers'] else (
+                '<p>Aucun dossier dans cette session. Commencez par un besoin lorsque les appels sont ouverts.</p>'
+                '<p>Si vous aviez déjà un dossier, vérifiez que vous utilisez le même navigateur et son cookie de session.</p>')
+        content += section('Mes dossiers dans ce navigateur', dossiers)
         content += section('Décrire mon besoin', form('/preparation/dossiers',
             {'dossier_id': secrets.token_hex(16), 'action_id': secrets.token_hex(16)},
             '<label for="request">Une tâche de votre travail</label><p id="request-help">Décrivez le travail et le résultat utile, sans donnée personnelle ni information confidentielle. Aucun dossier réel, même anonymisé.</p>'
-            '<textarea id="request" name="request" required rows="5" aria-describedby="request-help"></textarea>'
-            '<button type="submit">Préparer cet exemple</button>'))
+            '<textarea id="request" name="request" required rows="5" aria-describedby="request-help"' + disabled + '></textarea>'
+            '<button type="submit"' + disabled + '>Préparer cet exemple</button>'), 'besoin')
     elif 'operation_id' in value:
         title = 'Demande enregistrée'
         url = '/preparation/dossiers/' + value['dossier_id']
@@ -842,38 +911,72 @@ def render(value, csrf, path='/preparation', *, error=False):
     else:
         dossier_id, revision = value['dossier_id'], value['revision']
         url = '/preparation/dossiers/' + dossier_id
-        title = f'Dossier fictif — révision {revision}'
+        title = 'Est-ce le travail que vous voulez tester ?' if value['package'] else 'Précisons le résultat utile'
+        historical = revision != value.get('current_revision', revision)
+        editable = not historical and value['stage'] != 'waiting'
+        disabled = '' if can_submit and editable else ' disabled aria-describedby="availability"'
+        navigation = '<nav class="steps" aria-label="Étapes de préparation">'
+        current_step = 'validation' if value['validation'] else 'epreuve' if value['package'] else 'besoin'
+        for anchor, label in [('besoin', '1. Besoin et précisions'), ('epreuve', '2. Épreuve proposée'), ('validation', '3. Validation du besoin')]:
+            if anchor == 'epreuve' and not value['package']:
+                navigation += '<span>' + label + '</span>'
+            else:
+                navigation += '<a href="#' + anchor + '"' + (' aria-current="step"' if anchor == current_step else '') + '>' + label + '</a>'
+        navigation += '<small>Dossier privé · pièces entièrement inventées</small></nav>'
         stages = {'draft': 'Brouillon', 'waiting': 'Préparation en attente', 'clarification': 'Précision nécessaire',
                   'preview': 'Exemple à examiner', 'scope_confirmation': 'Périmètre à confirmer', 'suspended': 'Préparation suspendue'}
-        content = '<p role="status">' + text(stages[value['stage']]) + '</p>'
+        content = '<p class="tag">Dossier fictif · révision ' + text(revision) + '</p>'
+        if historical:
+            content += '<p class="notice">Révision précédente en lecture seule. Pour modifier ou valider, ouvrez la révision courante.</p>'
+        content += '<p role="status">' + text(stages[value['stage']]) + '</p>'
         content += '<p>' + text(value['explanation']) + '</p>'
         content += f'<p><a href="{text(path)}">Actualiser cet état</a> · <a href="{text(url)}">Révision courante</a></p>'
         if revision > 1:
             content += f'<p><a href="{text(url)}/revisions/{revision - 1}">Consulter la révision précédente</a></p>'
         payload = value['payload']
-        content += section('Besoin conservé', '<p>' + text(payload['request']) + '</p>')
+        content += section('Besoin conservé', '<p>' + text(payload['request']) + '</p>', 'besoin')
         if value.get('task_index'):
-            content += section('Versions d’épreuve et campagnes', render_task_index(value['task_index']))
+            content += '<details><summary>Historique du dossier et versions d’épreuve</summary>' + render_task_index(value['task_index']) + '</details>'
         if value.get('message') and 'message' in value['message']:
             content += section('Message à l’origine de cette révision', '<p>' + text(value['message']['message']) + '</p>')
-        content += section('Précisions et accords conservés', listing(payload['clarifications']) +
-                           listing(encode(a) if type(a) is dict else a for a in payload['validated_assumptions']))
+        if payload['clarifications'] or payload['validated_assumptions']:
+            agreements = listing(payload['clarifications']) if payload['clarifications'] else ''
+            for agreement in payload['validated_assumptions']:
+                if type(agreement) is dict and set(agreement) == {'question', 'answer'}:
+                    agreements += '<blockquote><p>' + text(agreement['question']) + '</p>'
+                    agreements += '<p><strong>Votre accord : </strong>' + text(agreement['answer']) + '</p></blockquote>'
+                else:
+                    agreements += '<p>' + text(encode(agreement) if type(agreement) is dict else agreement) + '</p>'
+            content += section('Précisions et accords conservés', agreements)
         if payload['reformulation']:
             content += section('Reformulation', '<p>' + text(payload['reformulation']) + '</p>')
-        content += section('Paramètres entièrement inventés', listing(f'{k} : {v}' for k, v in payload['fictional_parameters'].items()))
+        if payload['fictional_parameters']:
+            content += section('Paramètres entièrement inventés', listing(f'{k} : {v}' for k, v in payload['fictional_parameters'].items()))
         package = value['package']
         if package:
-            content += section('Consigne exacte du paquet', '<p>' + text(package['instruction']) + '</p>')
-            for field, label in (('deliverables', 'Livrables attendus'), ('criteria', 'Critères compréhensibles'),
-                                 ('acceptable_ambiguities', 'Ambiguïtés recevables'), ('limits', 'Limites de l’exemple')):
-                content += section(label, listing(package[field]))
-            content += section('Travail humain restant', '<p>' + text(package['human_work']) + '</p>')
-            content += section('Pièces du paquet à ouvrir', '<ul>' + ''.join(
-                f'<li><a href="{text(url)}/revisions/{revision}/pieces/{text(p["id"])}">{text(p["name"])} (texte, {p["size_bytes"]} octets)</a></li>'
-                for p in package['pieces']) + '</ul><p>La référence privée de jugement est séparée des pièces présentées.</p>')
-            content += section('Changements et vérifications', listing(value['changes']) +
-                               '<p>Les octets des pièces et l’empreinte du paquet ont été vérifiés.</p>')
-            content += '<p>Empreinte du paquet : <code>' + text(value['package_sha256']) + '</code></p>'
+            content += section('Consigne exacte du paquet', '<p class="verbatim">' + text(package['instruction']) + '</p>', 'epreuve')
+            content += section('L’exemple à examiner', '<p class="hint">Ouvrez le contenu pour le lire ici, puis refermez-le pour poursuivre.</p>' + ''.join(
+                '<details class="example-content"><summary>Voir le contenu'
+                + (f' {index}' if len(package['pieces']) > 1 else '') + '</summary>'
+                + '<div class="example-text">' + text(value['example_contents'][piece['id']]) + '</div></details>'
+                for index, piece in enumerate(package['pieces'], start=1)))
+            content += '<div class="two">' + section('Livrables attendus', listing(package['deliverables']))
+            content += section('Critères compréhensibles', listing(package['criteria'])) + '</div>'
+            limits = '<h3>Travail humain restant</h3><p>' + text(package['human_work']) + '</p>'
+            if package['acceptable_ambiguities']:
+                limits += '<h3>Ambiguïtés recevables</h3>' + listing(package['acceptable_ambiguities'])
+            if package['limits']:
+                limits += '<h3>Limites de l’exemple</h3>' + listing(package['limits'])
+            content += section('Ce qui restera à faire', limits)
+            change_labels = {'instruction': 'Consigne', 'deliverables': 'Livrables', 'criteria': 'Critères',
+                'acceptable_ambiguities': 'Ambiguïtés recevables', 'human_work': 'Travail humain restant',
+                'limits': 'Limites', 'pieces': 'Pièces', 'stage': 'Étape de préparation',
+                'explanation': 'Explication', 'reformulation': 'Reformulation', 'fictional_parameters': 'Paramètres fictifs'}
+            content += section('Changements à relire', listing(change_labels.get(c, c) for c in value['changes']) if value['changes'] else
+                               '<p>Aucun changement signalé.</p>')
+            content += '<details><summary>Intégrité du paquet et vérifications</summary>'
+            content += '<p>Les octets des pièces et l’empreinte du paquet ont été vérifiés. Ce contrôle d’intégrité ne qualifie pas le jugement.</p>'
+            content += '<p>Empreinte du paquet : <code>' + text(value['package_sha256']) + '</code></p></details>'
         if 'indicative_cost' in value:
             estimate = value['indicative_cost']
             amount = estimate.get('token_subtotal_usd') if estimate else None
@@ -891,14 +994,32 @@ def render(value, csrf, path='/preparation', *, error=False):
             content += '<p>Coût rapproché : ' + text(cost['amount'] + ' ' + cost['currency']) + '. Source : ' + text(
                 proof['source']) + ', attestée par ' + text(proof['actor']) + ' le ' + text(proof['observed_at']) + \
                 '. Le reçu original reste inchangé.</p>'
+        content += '<section id="validation"><h2>Validation du besoin</h2>'
         if value['validation']:
             content += '<p role="status">Votre validation est enregistrée pour ce dossier, cette révision et cette empreinte.</p>'
-        else:
+        elif package:
             content += '<p role="status">Validation du besoin : nouvelle validation requise pour le paquet présenté.</p>'
+        else:
+            content += '<p>La validation sera possible lorsqu’un paquet à examiner sera disponible.</p>'
+        if editable and package and value['stage'] == 'preview' and value['validation'] is None:
+            content += '<p>Cette validation concerne uniquement ce paquet. Elle n’approuve ni contrat, ni appel, ni dépense, ni publication.</p>'
+            content += form(url + '/validation', binding(dossier_id, revision, value['package_sha256']),
+                            '<button type="submit">Valider cette révision et ce paquet exacts</button>')
+        content += '</section>'
+        if editable:
+            content += section('Préciser ou corriger cet exemple', form(url + '/messages',
+                {'action_id': secrets.token_hex(16), 'revision': revision},
+                '<p>Indiquez ce qui doit changer. Les accords non touchés et les révisions précédentes sont conservés. Une modification du paquet demande une nouvelle validation.</p>'
+                '<label for="kind">Objet du message</label><select id="kind" name="kind"' + disabled + '>'
+                '<option value="clarify">Répondre à la clarification ou confirmer le périmètre</option>'
+                '<option value="correct"' + (' selected' if package else '') + '>Modifier cet exemple</option></select>'
+                '<label for="message">Votre précision ou correction</label>'
+                '<textarea id="message" name="message" rows="4" required' + disabled + '></textarea><button type="submit"' + disabled + '>Envoyer ce message</button>'))
         qualification = value.get('qualification', {})
         labels = {'PENDING': 'En attente', 'QUALIFIED': 'Contrôles requis prouvés',
                   'BLOCKED': 'Bloquée : référence ou contrôles insuffisamment prouvés',
                   'APPROVED': 'Approuvée par action opérateur locale'}
+        content += '<details><summary>Qualification et approbation de l’épreuve</summary>'
         content += section('Qualification', '<p>' + text(labels.get(
             qualification.get('qualification_status'), 'En attente')) + '</p>')
         content += section('Approbation', '<p>' + text(labels.get(
@@ -907,7 +1028,8 @@ def render(value, csrf, path='/preparation', *, error=False):
             'Aucun appel ni publication n’est autorisé par cet état. Les preuves, la référence '
             'et les limites de jugement sont réservées à l’inspection locale du responsable.</p>')
         if qualification.get('contract_sha256'):
-            content += '<p>Contrat : <code>' + text(qualification['contract_sha256']) + '</code></p>'
+            content += '<details><summary>Identité du contrat</summary><p>Contrat : <code>' + text(qualification['contract_sha256']) + '</code></p></details>'
+        content += '</details>'
         if 'campaigns' in value:
             campaigns = '<p>Suivi privé des comparaisons fictives de ce dossier. '
             campaigns += 'L’acquisition conserve des reçus ; elle ne juge pas le contenu des sorties.</p>'
@@ -982,17 +1104,22 @@ def render(value, csrf, path='/preparation', *, error=False):
             if not value['campaigns']:
                 campaigns += '<p>Aucune campagne liée à ce dossier.</p>'
             content += section('Comparaisons de ce dossier', campaigns)
-        if value['stage'] != 'waiting':
-            content += section('Préciser ou corriger cet exemple', form(url + '/messages',
-                {'action_id': secrets.token_hex(16), 'revision': revision},
-                '<label for="kind">Objet du message</label><select id="kind" name="kind">'
-                '<option value="clarify">Répondre à la clarification ou confirmer le périmètre</option>'
-                '<option value="correct">Modifier cet exemple</option></select>'
-                '<label for="message">Votre précision ou correction</label>'
-                '<textarea id="message" name="message" rows="4" required></textarea><button type="submit">Envoyer ce message</button>'))
-        if package and value['stage'] == 'preview' and value['validation'] is None:
-            content += section('Valider le besoin représenté', '<p>Cette validation concerne uniquement ce paquet. Elle n’approuve ni contrat, ni appel, ni dépense, ni publication.</p>' +
-                form(url + '/validation', binding(dossier_id, revision, value['package_sha256']),
-                     '<button type="submit">Valider cette révision et ce paquet exacts</button>'))
+    if state and s9:
+        reasons = {
+            'open': 'Échanges disponibles. Chaque envoi reste vérifié par le serveur avant admission.',
+            'closed': 'Appels fermés : aucune admission de préparation ouverte.',
+            'unconfigured': 'Appels fermés : aucun assistant configuré pour la préparation.',
+            'waiting': 'Nouveaux appels fermés : une préparation est en attente. Actualisez pour consulter son état.',
+            'interrupted': 'Appels fermés : préparation interrompue ou suspendue. Une intervention du responsable est nécessaire ; aucun rejeu automatique.',
+            'restore': 'Appels fermés : restauration à vérifier par le responsable.',
+            'unresolved': 'Appels fermés : effets ou coûts non résolus dans l’enveloppe de préparation.',
+            'budget': 'Appels fermés : enveloppe insuffisante pour un nouvel échange.'}
+        status = '<aside id="availability" class="availability" aria-label="État de la préparation"><p><strong>Assistant '
+        status += 'configuré' if state['assistant_configured'] else 'non configuré'
+        status += '.</strong> Admission ' + ('ouverte' if state['admission_open'] else 'fermée') + '.</p><p>'
+        status += text(reasons[state['reason']]) + '</p><p class="hint">La consultation et la validation d’un paquet ne lancent aucun appel.</p></aside>'
+        content = status + content
     template = Path(__file__).with_name('preparation.html').read_text()
-    return template.replace('{{title}}', text(title)).replace('{{content}}', content).encode('utf-8')
+    return (template.replace('{{title}}', text(title)).replace('{{body_class}}', 's9' if s9 else '')
+            .replace('{{navigation}}', navigation).replace('{{layout_class}}', 'layout' if navigation else '')
+            .replace('{{content}}', content).encode('utf-8'))

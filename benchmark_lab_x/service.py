@@ -213,6 +213,8 @@ def serve_web(address, port, public, socket_path, source):
                     if result['status'] < 400:
                         home = preparation_request(socket_path, 'GET', '/preparation', token)
                         csrf = home['value']['csrf_token']
+                        if 'operation_id' in result['value']:
+                            result['value']['availability'] = home['value']['availability']
                         if self.command == 'POST' and self.path.endswith('/validation'):
                             target = '/preparation/dossiers/' + result['value']['dossier_id']
                             result = preparation_request(socket_path, 'GET', target, token)
@@ -225,7 +227,9 @@ def serve_web(address, port, public, socket_path, source):
                 self.respond(400, value if wants_json else preparation.render(value, '', error=True),
                              'application/json' if wants_json else 'text/html; charset=utf-8')
             except OSError:
-                value = {'error': 'Exécuteur indisponible. Consultez le dossier avant toute nouvelle soumission.'}
+                value = {'error': 'Exécuteur indisponible : état de l’assistant et de l’admission non vérifiable. '
+                         'Aucune nouvelle soumission disponible. Consultez le dossier avant tout nouvel envoi ; '
+                         'un envoi précédent peut avoir été enregistré.', 'unavailable': True}
                 self.respond(503, value if wants_json else preparation.render(value, '', error=True),
                              'application/json' if wants_json else 'text/html; charset=utf-8')
 
@@ -241,6 +245,10 @@ def serve_web(address, port, public, socket_path, source):
         def do_GET(self):
             if self.path == '/preparation' or self.path.startswith('/preparation/'):
                 self.preparation()
+                return
+            if self.path == '/':
+                from . import preparation
+                self.respond(200, preparation.render({'kind': 'home'}, ''), 'text/html; charset=utf-8')
                 return
             if self.path == '/healthz':
                 self.respond(200, {'web': 'ok', 'source_sha': source})
@@ -270,7 +278,7 @@ def serve_web(address, port, public, socket_path, source):
                     self.respond(404, {'error': 'NO_VERIFIED_PUBLICATION'})
                 return
             # Seuls les fichiers d'une projection approuvée sont consultables
-            name = 'index.html' if self.path == '/' else self.path.removeprefix('/')
+            name = self.path.removeprefix('/')
             if not re.fullmatch(r'[a-zA-Z0-9_-]+\.(html|css|png|jpg|txt|json)', name):
                 self.respond(404, {'error': 'NOT_FOUND'})
                 return
@@ -305,7 +313,7 @@ def serve_web(address, port, public, socket_path, source):
                 media_type = {'.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg'}[path.suffix]
                 self.respond(200, raw, media_type)
             except (OSError, ValueError, KeyError):
-                self.respond(503 if self.path == '/' else 404, {'error': 'NO_VERIFIED_PUBLICATION'})
+                self.respond(404, {'error': 'NO_VERIFIED_PUBLICATION'})
 
     # Le proxy termine TLS ; le pare-feu réserve ce port aux deux proxys
     with HTTPServer((address, port), Handler) as server:
