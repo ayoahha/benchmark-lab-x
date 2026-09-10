@@ -19,6 +19,11 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 li { margin-block: .5rem; }
 details { border: 1px solid #486170; padding: .75rem; }
 summary { cursor: pointer; }
+details.proof-content { padding: 0; margin-block: 1rem; border-color: #cad5db; border-radius: .3rem; background: white; overflow-wrap: anywhere; }
+.proof-content summary { padding: 1rem; font-weight: 650; color: #164c65; background: #e5edf2; border-radius: .3rem; }
+.proof-content[open] summary { border-bottom: 1px solid #cad5db; }
+.proof-text { padding: 1.25rem; white-space: pre-wrap; }
+.proof-content > p { padding-inline: 1.25rem; }
 .skip { position: absolute; top: -10rem; }
 .skip:focus { position: static; display: block; }
 .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 1rem; }
@@ -92,3 +97,20 @@ body.s9 { max-width: 76rem; padding: 0 2rem; }
   .s9 section { padding: 1rem; }
   .s9 .button { box-sizing: border-box; max-width: 100%; }
 }
+
+/* Comparaison privée : synthèse et tableau avant les détails */
+.comparison main { max-width: none; padding-top: 1rem; }
+.comparison h1 { max-width: none; font-size: clamp(1.6rem, 3vw, 2.2rem); margin: .25rem 0 .75rem; }
+.comparison .lead, .comparison .hint, .comparison .view-scope { margin: .5rem 0; }
+.campaign-summary { padding: .7rem 1rem; margin: .75rem 0; border-left: 4px solid #164c65; background: #e5edf2; }
+.campaign-summary p { margin: .25rem 0; }
+.campaign-summary [role=status] { border: 0; padding: 0; }
+.comparison details.comparison-filters { margin: .5rem 0; }
+.s9 section.comparison-results { padding: 0; border: 0; background: transparent; margin: .75rem 0 1.5rem; }
+.comparison-results h2 { margin-bottom: .5rem; }
+.comparison table details { font-size: .9rem; }
+.evidence-fields { margin: .5rem 0; }
+.evidence-fields dt { font-weight: 650; margin-top: .7rem; }
+.evidence-fields dd { margin: .15rem 0 .6rem; overflow-wrap: anywhere; }
+.evidence-fields dd > .evidence-fields { margin-left: .75rem; padding-left: .75rem; border-left: 2px solid #cad5db; }
+.evidence-fields .verbatim { white-space: pre-wrap; }
