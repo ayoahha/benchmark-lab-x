@@ -6,16 +6,19 @@
 <title>{{title}} — Benchmark Lab-X</title>
 <link rel="stylesheet" href="/preparation/style.css">
 </head>
-<body>
+<body class="{{body_class}}">
 <a class="skip" href="#main">Aller au contenu</a>
-<header><nav aria-label="Navigation principale"><a href="/preparation">Benchmark Lab-X · Mes dossiers</a> · <a href="/preparation/catalogue">Mes tâches</a></nav></header>
+<header><a class="brand" href="/">Benchmark Lab-X</a><nav aria-label="Navigation principale"><a href="/preparation">Mes dossiers</a> <a href="/preparation/catalogue">Mes tâches</a> <a href="/index.html">Publications</a></nav></header>
+<div class="{{layout_class}}">
+{{navigation}}
 <main id="main">
 <h1>{{title}}</h1>
-<p>Parcours fictif local. Aucun assistant réel du produit ni appel candidat n’est activé.</p>
-<details><summary>Retrouver mes dossiers sans compte</summary>
-<p>Ce navigateur garde l’accès avec son cookie de session. Sa survie à la fermeture du navigateur n’est pas garantie. Perdre ou effacer le cookie fait perdre l’accès sans effacer les dossiers. Aucun compte ni récupération sur un autre appareil n’est prévu.</p>
-</details>
+
 {{content}}
 </main>
+</div>
+<footer><details><summary>Retrouver mes dossiers sans compte</summary>
+<p>Ce navigateur garde l’accès avec son cookie de session. Sa survie à la fermeture du navigateur n’est pas garantie. Perdre ou effacer le cookie fait perdre l’accès sans effacer les dossiers. Aucun compte ni récupération sur un autre appareil n’est prévu.</p>
+</details></footer>
 </body>
 </html>

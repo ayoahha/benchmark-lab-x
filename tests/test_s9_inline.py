@@ -1,0 +1,63 @@
+"""Integrated example reading with fictional data and existing ownership guards"""
+from contextlib import closing
+from html import escape
+from pathlib import Path
+import tempfile
+import unittest
+
+from benchmark_lab_x import preparation as prep, storage
+from tests.test_s2_review_regressions import response_for
+
+
+class InlineExampleTests(unittest.TestCase):
+    def test_exact_inert_content_without_download_or_emission(self):
+        content = '\nNotes inventées\n<script>alert("test")</script>\n& fin'
+        with tempfile.TemporaryDirectory() as temporary:
+            data = Path(temporary).resolve() / 'private'
+            storage.initialize(data)
+            storage.initialize_preparation(data)
+            with closing(storage.Store(data)) as store:
+                store.create_budget('inline', '100', 'TEST')
+                prep.admit(store, dict(authority_id='FICTIONAL_INLINE', budget_id='inline',
+                    reserve_amount='7', requested_configuration={'model': 'fictional'}))
+                session, csrf, token = prep.session(store, None, create=True)
+                operation, _ = prep.submit(store, session, 'inline',
+                    dict(action_id='create', request='Examiner des notes inventées'), 'a' * 40, True)
+
+                def transport(op, request):
+                    result = response_for(op)
+                    result['receipt']['result']['package']['pieces'][0]['content'] = content
+                    return result
+
+                prep.execute(data, operation, transport)
+                before = store.inspect_operations()
+                code, view, _, start = prep.dispatch(store, 'GET', '/preparation/dossiers/inline',
+                                                    token, None, 'a' * 40, None)
+                self.assertEqual(200, code)
+                self.assertIsNone(start)
+                self.assertEqual([content], list(view['example_contents'].values()))
+                page = prep.render(view, csrf).decode()
+                self.assertIn('<details class="example-content"><summary>Voir le contenu</summary>', page)
+                self.assertIn('<div class="example-text">' + escape(content, quote=True) + '</div>', page)
+                self.assertNotIn('<script>', page)
+                self.assertNotIn('/pieces/', page)
+                self.assertNotIn('notes.txt', page)
+                self.assertNotIn('Attendu fictif réservé', page)
+                self.assertEqual(before, store.inspect_operations())
+                other, _, other_token = prep.session(store, None, create=True)
+                with self.assertRaises(prep.Denied):
+                    prep.dispatch(store, 'GET', '/preparation/dossiers/inline', other_token, None, 'a' * 40, None)
+                judge = store._connection.execute("SELECT piece_id FROM pieces WHERE role='judge'").fetchone()[0]
+                with self.assertRaises(prep.Denied):
+                    prep.piece_bytes(store, session, 'inline', view['revision'], judge)
+                with self.assertRaises(prep.Denied):
+                    prep.piece_bytes(store, other, 'inline', view['revision'], view['package']['pieces'][0]['id'])
+
+                operation, _ = prep.submit(store, session, 'inline', dict(action_id='correct',
+                    revision=view['revision'], kind='correct', message='Changer les notes'), 'a' * 40, True)
+                prep.execute(data, operation, lambda op, request: response_for(op))
+                current = prep.view(store, session, 'inline')
+                historical = prep.view(store, session, 'inline', view['revision'])
+                self.assertEqual([content], list(historical['example_contents'].values()))
+                self.assertEqual(['Action fictive : relire'], list(current['example_contents'].values()))
+                self.assertIsNone(current['validation'])

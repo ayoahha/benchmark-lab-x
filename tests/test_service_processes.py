@@ -34,7 +34,7 @@ class ServiceProcessesTests(unittest.TestCase):
                 store.reserve_intent(operation('attempt'), 'test', '1')
                 store.mark_emission_possible('attempt')
             sock = root / 'executor.sock'
-            command = [sys.executable, '-m', 'benchmark_lab_x.runtime']
+            command = [sys.executable, '-B', '-m', 'benchmark_lab_x.runtime']
             children = []
             try:
                 executor = subprocess.Popen(command + ['executor', '--data', str(data), '--socket', str(sock)], cwd=root)
@@ -66,12 +66,26 @@ class ServiceProcessesTests(unittest.TestCase):
                         if time.monotonic() >= deadline:
                             raise
                         time.sleep(0.02)
-                for path, code in [('/private/metadata.sqlite3', 404), ('/../private/metadata.sqlite3', 404), ('/', 503)]:
+                for path, code in [('/private/metadata.sqlite3', 404), ('/../private/metadata.sqlite3', 404), ('/index.html', 404)]:
                     with self.assertRaises(HTTPError) as rejected:
                         urlopen(base + path, timeout=2)
                     self.assertEqual(code, rejected.exception.code)
                     self.assertNotIn(b'must never be public', rejected.exception.read())
                     rejected.exception.close()
+                def check_home():
+                    with urlopen(base + '/', timeout=2) as response:
+                        self.assertEqual(200, response.status)
+                        self.assertIn('text/html', response.headers['Content-Type'])
+                        self.assertEqual('no-store', response.headers['Cache-Control'])
+                        self.assertEqual('nosniff', response.headers['X-Content-Type-Options'])
+                        self.assertIsNone(response.headers.get('Set-Cookie'))
+                        home = response.read()
+                        self.assertIn(b'href="/preparation"', home)
+                        self.assertIn(b'href="/index.html"', home)
+                        self.assertNotIn(b'must never be public', home)
+                    return home
+
+                home = check_home()
                 page = b'<!doctype html><title>Approved fixture</title>'
                 manifest = json.dumps({'files': {'index.html': sha256(page).hexdigest()}}).encode()
                 publication = sha256(manifest).hexdigest()
@@ -80,13 +94,15 @@ class ServiceProcessesTests(unittest.TestCase):
                 (projection / 'publication.json').write_bytes(manifest)
                 (projection / 'index.html').write_bytes(page)
                 (public / 'active.json').write_text(json.dumps({'directory': publication}))
-                with urlopen(base + '/', timeout=2) as response:
+                with urlopen(base + '/index.html', timeout=2) as response:
                     self.assertEqual(page, response.read())
+                self.assertEqual(home, check_home())
                 (projection / 'index.html').write_bytes(b'tampered')
                 with self.assertRaises(HTTPError) as corrupt:
-                    urlopen(base + '/', timeout=2)
-                self.assertEqual(503, corrupt.exception.code)
+                    urlopen(base + '/index.html', timeout=2)
+                self.assertEqual(404, corrupt.exception.code)
                 corrupt.exception.close()
+                self.assertEqual(home, check_home())
                 executor.terminate()
                 self.assertEqual(0, executor.wait(timeout=5))
                 with self.assertRaises(HTTPError) as unavailable:
@@ -95,6 +111,7 @@ class ServiceProcessesTests(unittest.TestCase):
                 unavailable.exception.close()
                 with urlopen(base + '/healthz', timeout=2) as response:
                     self.assertEqual('ok', json.load(response)['web'])
+                self.assertEqual(home, check_home())
                 restarted = subprocess.Popen(command + ['executor', '--data', str(data), '--socket', str(sock)], cwd=root)
                 children.append(restarted)
                 deadline = time.monotonic() + 5
