@@ -1,7 +1,8 @@
-"""Private, fictional evaluations of identified S4 observations.
+"""Private evaluations of identified S4 observations.
 
 The trusted local caller supplies findings, never a verdict or a transport.
-Real verdict responsibility and assisted model calls are deliberately closed.
+Real local or human findings require an explicit private operator authority.
+Assisted model calls retain their historical test-only boundary.
 """
 from contextlib import closing
 from copy import deepcopy
@@ -92,8 +93,12 @@ def connection_for(store):
 
 def _authority(responsible, authority):
     _fields(authority, ('actor', 'authority_id'), 'evaluation authority')
-    if responsible != _ACTOR or authority != {'actor': _ACTOR, 'authority_id': _AUTHORITY}:
-        raise ValueError('Seule la responsabilité fictive S5 est ouverte')
+    if responsible == _ACTOR and authority == {'actor': _ACTOR, 'authority_id': _AUTHORITY}:
+        return
+    c._present(responsible, 'responsible')
+    c._present(authority['authority_id'], 'authority_id')
+    if authority['actor'] != 'Ayo' or authority['authority_id'].startswith('TEST_ONLY'):
+        raise ValueError('Autorité opérateur explicite requise')
 
 
 def _context(store, connection, campaign_id, attempt_id):
@@ -169,7 +174,7 @@ def _validate_context(old, current):
         raise IntegrityError('Sortie inventée avant réception')
 
 
-def _judgment(store, connection, value, ctx, resources, source_operation=None):
+def _judgment(store, connection, value, ctx, resources, source_operation=None, responsible=_ACTOR):
     _fields(value, _JUDGMENT_FIELDS, 'judgment')
     if value['mode'] not in ('local', 'human', 'assisted'):
         raise ValueError('Mode de jugement inconnu')
@@ -194,8 +199,8 @@ def _judgment(store, connection, value, ctx, resources, source_operation=None):
         arbitration = disagreement['arbitration']
         if arbitration is not None:
             _fields(arbitration, ('responsible', 'decision', 'proof'), 'arbitration')
-            if arbitration['responsible'] != _ACTOR:
-                raise ValueError('Arbitrage fictif attribué requis')
+            if arbitration['responsible'] != responsible:
+                raise ValueError('Arbitrage attribué au responsable requis')
             c._present(arbitration['decision'], 'decision')
             _evidence(arbitration['proof'], resources, required=True)
     review_proofs = ([] if value['professional_review'] == 'ABSENTE' else list(value['professional_review']['proof']))
@@ -245,7 +250,7 @@ def _judgment(store, connection, value, ctx, resources, source_operation=None):
     return result
 
 
-def _report(store, connection, report, ctx, resources, source_operation=None):
+def _report(store, connection, report, ctx, resources, source_operation=None, responsible=_ACTOR):
     _fields(report, _REPORT_FIELDS, 'evaluation report')
     encode(report)
     q._texts(report['limits'], 'limits')
@@ -288,7 +293,7 @@ def _report(store, connection, report, ctx, resources, source_operation=None):
         if cid not in seen:
             measures.append(dict(criterion_id=cid, value=None, unit=definition['unit'], evidence=[],
                                  definition=definition, status='UNKNOWN'))
-    judgment = _judgment(store, connection, report['judgment'], ctx, resources, source_operation)
+    judgment = _judgment(store, connection, report['judgment'], ctx, resources, source_operation, responsible)
     used = {e['piece_id'] for f in findings + measures for e in f['evidence']}
     if not used <= set(judgment['resources_seen']):
         raise ValueError('Une preuve ne figure pas parmi les pièces vues')
@@ -358,9 +363,13 @@ def _verdict(ctx, findings, judgment):
 
 
 def _record(store, connection, ctx, report, *, evaluation_id, created_at, engine_source,
-            previous_evaluation_id, source_operation=None):
+            previous_evaluation_id, source_operation=None, responsible=_ACTOR, authority=None):
+    authority = authority or {'actor': _ACTOR, 'authority_id': _AUTHORITY}
+    _authority(responsible, authority)
     resources = _resources(store, ctx)
-    findings, measures, judgment = _report(store, connection, report, ctx, resources, source_operation)
+    findings, measures, judgment = _report(store, connection, report, ctx, resources, source_operation, responsible)
+    if authority['actor'] == 'Ayo' and judgment['mode'] == 'assisted':
+        raise ValueError('Transport de jugement assisté réel non raccordé')
     verdict, reason = _verdict(ctx, findings, judgment)
     campaign, qualification, attempt = (ctx[k] for k in ('campaign', 'qualification', 'attempt'))
     contract = qualification['contract']
@@ -373,7 +382,7 @@ def _record(store, connection, ctx, report, *, evaluation_id, created_at, engine
     c.identifier(evaluation_id)
     c._date(created_at)
     q._hash(engine_source)
-    return dict(evaluation_id=evaluation_id, execution_id=evaluation_id, created_at=created_at,
+    record = dict(evaluation_id=evaluation_id, execution_id=evaluation_id, created_at=created_at,
                 engine_version=FORMAT_IDENTITY, engine_source_sha256=engine_source,
                 context_sha256=q.digest(ctx), campaign_id=manifest['campaign_id'],
                 manifest_sha256=campaign['manifest_sha256'], attempt_id=attempt['operation_id'],
@@ -389,10 +398,13 @@ def _record(store, connection, ctx, report, *, evaluation_id, created_at, engine
                 attribution_incident=attempt['attribution_incident'], candidate_cost=op['observed_cost'],
                 cost_basis=manifest['cost_basis'], aggregation=contract['specification']['aggregation'],
                 verdict=verdict, reason=reason, findings=findings, measures=measures,
-                responsible=_ACTOR, authority_id=_AUTHORITY, judgment=judgment,
+                responsible=responsible, authority_id=authority['authority_id'], judgment=judgment,
                 configuration_links=_configuration_links(store, connection, ctx, judgment),
                 limits=list(dict.fromkeys(contract['specification']['limits'] + report['limits'])),
                 previous_evaluation_id=previous_evaluation_id)
+    if authority['actor'] == 'Ayo':
+        record['authority_actor'] = 'Ayo'
+    return record
 
 
 def _records(store, connection, attempt_id=None):
@@ -419,7 +431,8 @@ def _records(store, connection, attempt_id=None):
                       judgment={k: record['judgment'][k] for k in _JUDGMENT_FIELDS}, limits=record['limits'])
         expected = _record(store, connection, ctx, report, evaluation_id=eid, created_at=record['created_at'],
                            engine_source=record['engine_source_sha256'], previous_evaluation_id=previous,
-                           source_operation=record['judgment']['operation'])
+                           source_operation=record['judgment']['operation'], responsible=record['responsible'],
+                           authority={'actor': record.get('authority_actor', _ACTOR), 'authority_id': record['authority_id']})
         if expected != record:
             raise IntegrityError('Verdict ou preuve d’évaluation divergent')
         latest[aid] = eid
@@ -442,10 +455,10 @@ def inspect(store, evaluation_id):
 
 
 def evaluate(store, campaign_id, attempt_id, *, responsible, authority, check, previous_evaluation_id=None):
-    """One trusted fictional callback; immutable result and explicit correction chain"""
+    """One trusted callback; immutable result and explicit correction chain"""
     _authority(responsible, authority)
     if not callable(check):
-        raise ValueError('Contrôleur local fictif injecté requis')
+        raise ValueError('Contrôleur local injecté requis')
     from .runtime import worker_lock
     with worker_lock(store, shared=True):
         c._intact(store)
@@ -459,7 +472,7 @@ def evaluate(store, campaign_id, attempt_id, *, responsible, authority, check, p
             report = deepcopy(check(deepcopy(ctx), deepcopy(resources)))
             record = _record(store, connection, ctx, report, evaluation_id=secrets.token_hex(16),
                              created_at=c._now(), engine_source=sha256(Path(__file__).read_bytes()).hexdigest(),
-                             previous_evaluation_id=previous_evaluation_id)
+                             previous_evaluation_id=previous_evaluation_id, responsible=responsible, authority=authority)
             if _context(store, connection, campaign_id, attempt_id) != ctx or _resources(store, ctx) != resources:
                 raise IntegrityError('Source changée pendant le jugement')
             connection.execute('INSERT INTO s5_evaluations VALUES (?,?,?,?,?,?,?,?,?,?)',
@@ -514,3 +527,35 @@ def piece_bytes(store, session_id, dossier_id, evaluation_id, piece_id):
         if piece_id not in ids:
             raise Denied('Pièce non liée à cette évaluation')
         return store.read_piece(piece_id)
+
+def prepare_report(store, campaign_id, attempt_id):
+    """Export private inputs for a reviewer; no verdict or approval is inferred"""
+    connection = connection_for(store)
+    with _transaction(connection):
+        ctx = _context(store, connection, campaign_id, attempt_id)
+        resources = _resources(store, ctx)
+        previous = _records(store, connection, attempt_id)
+        spec = ctx['qualification']['contract']['specification']
+        return dict(campaign_id=campaign_id, attempt_id=attempt_id, context_sha256=q.digest(ctx),
+                    previous_evaluation_id=previous[-1]['evaluation_id'] if previous else None,
+                    contract=ctx['qualification']['contract'], attempt=ctx['attempt'],
+                    pieces=[dict(piece_id=pid, sha256=sha256(raw).hexdigest(), content=raw.decode('utf-8'))
+                            for pid, raw in resources.items()],
+                    report=dict(findings=[dict(criterion_id=criterion['id'], control_id=control,
+                        status='INDETERMINE', attribution='evidence', finding='Contrôle à examiner', evidence=[])
+                        for criterion in spec['obligations'] + spec['eliminatory_errors'] for control in criterion['control_ids']],
+                        measures=[], judgment=dict(mode='human', instructions='Revue à renseigner selon la méthode du contrat',
+                            resources_seen=[], assistance_operation_id=None, model_links='INCONNU',
+                            disagreements=[], professional_review='ABSENTE'), limits=[]))
+
+
+
+def submit_report(store, request):
+    """The private operator submits findings; the engine derives the verdict"""
+    _fields(request, ('campaign_id', 'attempt_id', 'responsible', 'authority', 'report', 'previous_evaluation_id'), 'reviewed evaluation')
+    _fields(request['authority'], ('actor', 'authority_id'), 'evaluation authority')
+    if request['authority']['actor'] != 'Ayo':
+        raise ValueError('Autorité opérateur requise')
+    return evaluate(store, request['campaign_id'], request['attempt_id'], responsible=request['responsible'],
+                    authority=request['authority'], check=lambda ctx, resources: request['report'],
+                    previous_evaluation_id=request['previous_evaluation_id'])

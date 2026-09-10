@@ -137,6 +137,35 @@ def consumption(document, *, complete=True):
             'source': 'HTTP response JSON /usage/cost', 'method': deepcopy(USAGE_METHOD), 'invoice': False}
 
 
+def post(api_key, wire, timeout=TIMEOUT_SECONDS):
+    """One OpenRouter HTTP exchange; response bytes retained, no automatic retry"""
+    started = datetime.now(timezone.utc).isoformat()
+    clock = time.monotonic()
+    connection = HTTPSConnection(HOST, timeout=timeout)
+    try:
+        connection.request('POST', PATH, body=wire.encode(), headers={
+            'Authorization': 'Bearer ' + api_key, 'Content-Type': 'application/json',
+            'X-OpenRouter-Metadata': 'enabled'})
+        response = connection.getresponse()
+        status = response.status
+        safe_headers = {}
+        for name, pattern in (('X-Generation-Id', r'gen-[A-Za-z0-9_-]{1,200}'),
+                              ('Retry-After', r'[0-9]{1,10}|[A-Za-z]{3}, [0-9]{2} [A-Za-z]{3} [0-9]{4} [0-9:]{8} GMT')):
+            value = response.getheader(name)
+            if type(value) is str and re.fullmatch(pattern, value) and api_key not in value:
+                safe_headers[name] = value
+        try:
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+            complete = response.length in (None, 0)
+        except IncompleteRead as error:
+            raw, complete = error.partial, False
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raw, complete = raw[:MAX_RESPONSE_BYTES], False
+    finally:
+        connection.close()
+    return status, safe_headers, raw, complete, started, clock
+
+
 class OpenRouterPreparation:
     def __init__(self, api_key):
         if (type(api_key) is not str or not api_key or not api_key.isascii()
@@ -165,30 +194,7 @@ class OpenRouterPreparation:
         wire = operation['resources'][1]
         expected_models = operation['requested_configuration']['model_identities']
         named_providers = {row['provider_name'] for row in operation['requested_configuration']['reservation_estimate']['endpoints']}
-        started = datetime.now(timezone.utc).isoformat()
-        clock = time.monotonic()
-        connection = HTTPSConnection(HOST, timeout=TIMEOUT_SECONDS)
-        try:
-            connection.request('POST', PATH, body=wire.encode(), headers={
-                'Authorization': 'Bearer ' + self._api_key, 'Content-Type': 'application/json',
-                'X-OpenRouter-Metadata': 'enabled'})
-            response = connection.getresponse()
-            status = response.status
-            safe_headers = {}
-            for name, pattern in (('X-Generation-Id', r'gen-[A-Za-z0-9_-]{1,200}'),
-                                  ('Retry-After', r'[0-9]{1,10}|[A-Za-z]{3}, [0-9]{2} [A-Za-z]{3} [0-9]{4} [0-9:]{8} GMT')):
-                value = response.getheader(name)
-                if type(value) is str and re.fullmatch(pattern, value) and self._api_key not in value:
-                    safe_headers[name] = value
-            try:
-                raw = response.read(MAX_RESPONSE_BYTES + 1)
-                complete = response.length in (None, 0)
-            except IncompleteRead as error:
-                raw, complete = error.partial, False
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raw, complete = raw[:MAX_RESPONSE_BYTES], False
-        finally:
-            connection.close()
+        status, safe_headers, raw, complete, started, clock = post(self._api_key, wire)
         # A reflected credential cannot enter private receipts either
         redacted = self._api_key.encode() in raw
         if redacted:

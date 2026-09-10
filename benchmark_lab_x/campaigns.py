@@ -362,7 +362,8 @@ def _request(store, manifest, fingerprint, contract, cell):
 
 def _engine():
     return {name: sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('campaigns.py', 'storage.py', 'preparation.py', 'qualification.py', 'runtime.py')}
+            for name in ('campaigns.py', 'storage.py', 'preparation.py', 'qualification.py', 'runtime.py',
+                         'pi_openrouter.py', 'pi_bridge.mjs', 'openrouter_preparation.py')}
 
 
 def _attribution(receipt, configuration):
@@ -603,7 +604,7 @@ def close_admission(store, reason):
 def execute(data, attempt_id, transport=None):
     """One explicit worker, one durable boundary, one callback; never an implicit retry."""
     if not callable(transport):
-        raise ValueError('Transport fictif injecté par le lanceur de confiance requis')
+        raise ValueError('Transport injecté par le lanceur de confiance requis')
     from .runtime import worker_lock
     with closing(storage.Store(data)) as store, worker_lock(store, shared=True):
         _intact(store)
@@ -626,6 +627,8 @@ def execute(data, attempt_id, transport=None):
                 raise ConflictError('Ordre de tentative non respecté')
             raw = connection.execute('SELECT request_json FROM s4_attempts WHERE operation_id=?', (attempt_id,)).fetchone()[0]
             request = json.loads(raw)
+            if hasattr(transport, 'prepare'):
+                transport.prepare(deepcopy(attempt['operation']), deepcopy(request), deepcopy(snapshot['budget']))
             connection.execute('INSERT INTO s4_emissions VALUES (?,?,?)', (attempt_id, admission['admission_id'], _now()))
             # Same S1 transition as mark_emission_possible, in the transaction that
             # also freezes the admission actually used by this worker
