@@ -20,17 +20,19 @@ from benchmark_lab_x import openrouter_preparation as assistant
 
 
 KEY = 'fixture-key-never-a-credential'
-ESTIMATE = {'channel': 'OpenRouter', 'model_id': assistant.MODEL, 'context_length': 1000000,
+ESTIMATE = {'channel': 'OpenRouter', 'model_id': assistant.MODEL, 'context_length': 1000000, 'canonical_slug': assistant.MODEL + '-20260826',
             'assumptions': {'input_tokens': 1000000, 'cached_input_tokens': 0, 'output_tokens': 8192},
             'sources': {key: {'url': 'https://openrouter.ai/api/v1/' + path,
                               'retrieved_at': '2026-09-10T00:00:00+00:00', 'body_sha256': 'b' * 64}
                         for key, path in [('model', 'model/' + assistant.MODEL),
                                           ('endpoints', 'models/' + assistant.MODEL + '/endpoints')]},
-            'endpoints': [{'model_id': assistant.MODEL, 'tag': 'fixture/fp8', 'provider_name': 'Fixture provider',
-                           'pricing_raw': {'prompt': '0.0000002', 'completion': '0.0000008'}}]}
+            'endpoints': [{'model_id': assistant.MODEL, 'tag': tag, 'provider_name': provider,
+                           'supported_parameters': ['temperature', 'top_p', 'reasoning', 'max_tokens', 'response_format'],
+                           'pricing_raw': {'prompt': '0.0000002', 'completion': '0.0000008'}}
+                          for tag, provider in assistant.PROVIDERS.items()]}
 RESERVE = assistant.reservation(ESTIMATE)
 ROUTE = {'requested': assistant.MODEL, 'strategy': 'direct', 'attempt': 1,
-         'endpoints': {'available': [{'provider': 'Fixture provider', 'model': assistant.MODEL, 'selected': True}]}}
+         'endpoints': {'available': [{'provider': 'Modal', 'model': assistant.MODEL, 'selected': True}]}}
 
 NEED = 'Je passe trop de temps à retrouver ce qui a été décidé en réunion et qui doit faire quoi. Je voudrais comparer des modèles pour m’aider.'
 CLARIFICATION = 'Association entièrement fictive organisant un événement ; notes françaises ; décisions, actions, responsables, échéances et informations à confirmer.'
@@ -140,7 +142,9 @@ class OpenRouterPreparationTests(unittest.TestCase):
             self.assertNotIn('thinking', sent)
             self.assertNotIn('request_id', sent)
             self.assertEqual({'effort': 'max'}, sent['reasoning'])
-            self.assertFalse(sent['provider']['allow_fallbacks'])
+            self.assertTrue(sent['provider']['allow_fallbacks'])
+            self.assertEqual(list(assistant.PROVIDERS), sent['provider']['only'])
+            self.assertEqual(sent['provider']['only'], sent['provider']['order'])
             self.assertTrue(sent['provider']['require_parameters'])
             self.assertEqual('enabled', headers['X-OpenRouter-Metadata'])
         self.http.request.side_effect = at_request
@@ -157,7 +161,7 @@ class OpenRouterPreparationTests(unittest.TestCase):
         self.assertEqual(assistant.MODEL, observed['model'])
         self.assertIsNone(observed['parameters'])
         self.assertEqual(ROUTE, observed['route'])
-        self.assertEqual('Fixture provider', observed['provider'])
+        self.assertEqual('Modal', observed['provider'])
         self.assertEqual('OpenRouter', operation['requested_configuration']['provider'])
         self.assertEqual('0.000202', observed['consumption']['amount'])
         self.assertFalse(observed['consumption']['invoice'])
@@ -328,14 +332,61 @@ class OpenRouterPreparationTests(unittest.TestCase):
         self.assertEqual('0', self.store.inspect_budget('fixture')['reserved'])
         self.http.request.assert_not_called()
 
-    def test_reported_fallback_is_not_accepted_as_the_requested_route(self):
-        self.http.getresponse.return_value.read.return_value = http_body(openrouter_metadata={**ROUTE, 'attempt': 2})
+    def test_native_fallback_after_429_is_accepted_without_another_http_call(self):
+        self.http.getresponse.return_value.read.return_value = http_body(openrouter_metadata={**ROUTE, 'strategy': 'fallback', 'attempt': 2,
+            'attempts': [{'provider': 'CoreWeave', 'model': assistant.MODEL, 'status': 429},
+                         {'provider': 'Modal', 'model': assistant.MODEL, 'status': 200}]})
         operation, view = self.execute()
-        self.assertEqual('suspended', view['stage'])
+        self.assertEqual('preview', view['stage'])
         self.assertEqual(2, operation['receipt']['observed_configuration']['route']['attempt'])
         self.assertEqual('KNOWN', operation['observed_cost']['status'])
-        self.assertIsNone(prep.admission(self.store))
+        self.assertIsNotNone(prep.admission(self.store))
         self.assertEqual(1, self.http.request.call_count)
+
+    def test_canonical_model_is_attributed_but_another_revision_or_endpoint_is_rejected(self):
+        canonical = ESTIMATE['canonical_slug']
+        route = deepcopy(ROUTE)
+        route['attempt'] = 4
+        route['endpoints']['available'][0]['model'] = canonical
+        self.http.getresponse.return_value.read.return_value = http_body(model=canonical, openrouter_metadata=route)
+        operation, view = self.execute()
+        self.assertEqual('preview', view['stage'])
+        self.assertEqual(canonical, operation['receipt']['observed_configuration']['model'])
+        self.assertIsNotNone(operation['receipt']['observed_configuration']['routing_limit'])
+        for index, updates in enumerate([{'model': assistant.MODEL + '-20260827'},
+                {'openrouter_metadata': {**ROUTE, 'attempts': [{'provider': 'Modal', 'model': assistant.MODEL + '-20260827'}]}},
+                {'openrouter_metadata': {**ROUTE, 'attempts': [{'provider': 'Modal', 'tag': 'outside/fp8', 'model': assistant.MODEL}]}}]):
+            prep.admit(self.store, self.authority)
+            self.http.getresponse.return_value.read.return_value = http_body(**updates)
+            operation, view = self.execute(action_id='different-' + str(index), revision=view['revision'], kind='correct', message=CORRECTION)
+            self.assertEqual('suspended', view['stage'])
+            self.assertEqual('KNOWN', operation['observed_cost']['status'])
+        self.assertEqual(4, self.http.request.call_count)
+
+    def test_unmapped_provider_name_is_unknown_not_an_invented_alias(self):
+        route = deepcopy(ROUTE)
+        route['endpoints']['available'][0]['provider'] = 'NovitaAI'
+        self.http.getresponse.return_value.read.return_value = http_body(openrouter_metadata=route)
+        operation, view = self.execute()
+        self.assertEqual('preview', view['stage'])
+        observed = operation['receipt']['observed_configuration']
+        self.assertIsNone(observed['provider'])
+        self.assertEqual('NovitaAI', observed['route']['endpoints']['available'][0]['provider'])
+
+    def test_429_retains_only_safe_identifiers_and_no_cost_or_retry_is_invented(self):
+        response = self.http.getresponse.return_value
+        response.status = 429
+        response.read.return_value = b'{"error":{"code":429,"message":"fixture upstream pool busy"}}'
+        response.getheader.side_effect = {'X-Generation-Id': 'gen-fixture-error', 'Retry-After': '30'}.get
+        operation, view = self.execute()
+        observed = operation['receipt']['observed_configuration']
+        self.assertEqual('gen-fixture-error', observed['generation_id'])
+        self.assertEqual({'X-Generation-Id': 'gen-fixture-error', 'Retry-After': '30'}, observed['http']['response_headers'])
+        self.assertEqual('UNKNOWN', operation['observed_cost']['status'])
+        self.assertEqual('suspended', view['stage'])
+        self.assertEqual(RESERVE, self.store.inspect_budget('fixture')['reserved'])
+        self.assertEqual(1, self.http.request.call_count)
+        self.assertEqual({'X-Generation-Id', 'Retry-After'}, {c.args[0] for c in response.getheader.call_args_list})
 
     def test_key_absent_default_transport_and_reflected_key(self):
         with patch.dict(os.environ, {'ZAI_API_KEY': KEY}, clear=True), patch.object(service, 'serve_executor') as executor, \

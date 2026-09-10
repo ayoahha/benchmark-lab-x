@@ -24,6 +24,12 @@ import stat
 
 SCHEMA_VERSION = 1
 PREPARATION_IDENTITY = "benchmark-lab-x/preparation/v1"
+RECONCILIATION_IDENTITY = "benchmark-lab-x/cost-reconciliation/v1"
+_RECONCILIATION_SCHEMA = """CREATE TABLE cost_reconciliations (
+    operation_id TEXT PRIMARY KEY NOT NULL REFERENCES operations(operation_id),
+    proof_json TEXT NOT NULL,
+    proof_sha256 TEXT NOT NULL CHECK(length(proof_sha256) = 64)
+)"""
 _S2_SCHEMA = (
     """CREATE TABLE s2_sessions (
     session_id TEXT PRIMARY KEY NOT NULL,
@@ -424,6 +430,14 @@ def _check_schema(connection, allow_empty=False):
             return False
         if version != SCHEMA_VERSION:
             raise SchemaError("unsupported storage schema version")
+        reconciliation = [row for row in rows if row[2] == 'cost_reconciliations']
+        if reconciliation:
+            objects = [('table', 'cost_reconciliations', 'cost_reconciliations', _RECONCILIATION_SCHEMA),
+                       ('index', 'sqlite_autoindex_cost_reconciliations_1', 'cost_reconciliations', None)]
+            normalize = lambda values: sorted((a, b, c, ' '.join(d.split()) if d else None) for a, b, c, d in values)
+            if normalize(reconciliation) != normalize(objects):
+                raise SchemaError('unsupported cost reconciliation structure')
+            rows = [row for row in rows if row[2] != 'cost_reconciliations']
         # Compare all schema objects, including constraints and automatic indexes
         expected = [
             ("table", "dossier_revisions", "dossier_revisions", _SCHEMA[0]),
@@ -482,7 +496,7 @@ def _check_schema(connection, allow_empty=False):
             from .evaluation import FORMAT_IDENTITY
             if connection.execute('SELECT * FROM s5_control').fetchall() != [(1, FORMAT_IDENTITY)]:
                 raise SchemaError('unsupported evaluations identity')
-        if layout is None:
+        if layout is None or (reconciliation and layout == 'canary'):
             raise SchemaError("unsupported storage schema structure")
         if connection.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
             raise SchemaError("S1 requires the standard DELETE journal")
@@ -673,6 +687,128 @@ class Store:
     def inspect_operations(self) -> list[dict]:
         return self._operations(self._s1_connection())
 
+    def _reconciliation(self, connection, operation):
+        if not connection.execute("SELECT 1 FROM sqlite_schema WHERE name='cost_reconciliations'").fetchone():
+            return None
+        row = connection.execute('SELECT proof_json,proof_sha256 FROM cost_reconciliations WHERE operation_id=?',
+                                 (operation['operation_id'],)).fetchone()
+        if row is None:
+            return None
+        try:
+            proof = json.loads(row[0], object_pairs_hook=_unique_object)
+            if hashlib.sha256(row[0].encode()).hexdigest() != row[1]:
+                raise ValueError('reconciliation fingerprint differs')
+            self._validate_reconciliation(connection, operation, proof)
+        except (ValueError, KeyError, TypeError) as error:
+            raise IntegrityError('invalid cost reconciliation evidence') from error
+        return {'proof': proof, 'sha256': row[1]}
+
+    def _validate_reconciliation(self, connection, operation, proof):
+        _fields(proof, ('format_identity', 'operation_id', 'budget_id', 'receipt_sha256', 'actor',
+                        'authority_id', 'account_reference', 'generation_id', 'model', 'cost', 'source',
+                        'correlation'), 'cost reconciliation')
+        for key in ('actor', 'authority_id', 'account_reference', 'generation_id', 'model', 'correlation'):
+            _text(proof[key], key)
+        if (proof['format_identity'] != RECONCILIATION_IDENTITY
+                or operation['state'] != 'RECEIVED' or operation['observed_cost']['status'] != 'UNKNOWN'
+                or operation['phase'] not in ('preparation', 'correction')
+                or operation['requested_configuration'].get('provider') != 'OpenRouter'
+                or proof['model'] != operation['requested_configuration'].get('model')
+                or proof['operation_id'] != operation['operation_id'] or proof['budget_id'] != operation['budget_id']
+                or proof['receipt_sha256'] != hashlib.sha256(_strict_json(operation['receipt']).encode()).hexdigest()
+                or re.fullmatch(r'gen-[A-Za-z0-9_-]{1,200}', proof['generation_id']) is None):
+            raise ValueError('reconciliation attribution differs')
+        observed = operation['receipt']['observed_configuration'] or {}
+        generation = observed.get('generation_id')
+        if generation is not None and generation != proof['generation_id']:
+            raise ValueError('generation identity differs from receipt')
+        http = observed.get('http')
+        headers = http.get('response_headers') if type(http) is dict else None
+        header = headers.get('X-Generation-Id') if type(headers) is dict else None
+        if header is not None and header != proof['generation_id']:
+            raise ValueError('generation identity differs from header')
+        _receipt(operation['receipt'], proof['cost'])
+        currency = connection.execute('SELECT currency FROM budgets WHERE budget_id=?', (proof['budget_id'],)).fetchone()[0]
+        if proof['cost']['status'] != 'KNOWN' or proof['cost']['currency'] != currency or currency != 'USD':
+            raise ValueError('explicit USD cost required')
+        source = proof['source']
+        _fields(source, ('kind', 'http_status', 'name', 'observed_at', 'document', 'sha256', 'excerpt'), 'external source')
+        for key in ('name', 'document', 'excerpt'):
+            _text(source[key], key)
+        _text(source['observed_at'], 'observed_at')
+        date = datetime.fromisoformat(source['observed_at'])
+        if date.tzinfo is None or date < datetime.fromisoformat(operation['created_at']):
+            raise ValueError('dated evidence after the operation required')
+        if (source['sha256'] != hashlib.sha256(source['document'].encode()).hexdigest()
+                or source['excerpt'] not in source['document']):
+            raise ValueError('source document and exact excerpt required')
+        if source['kind'] == 'openrouter_generation':
+            if type(source['http_status']) is not int or source['http_status'] != 200:
+                raise ValueError('successful generation evidence required; an error proves no amount')
+            document = json.loads(source['document'], object_pairs_hook=_unique_object, parse_float=str)
+            data = document.get('data') if type(document) is dict else None
+            requested = operation['requested_configuration']
+            canonical = (requested.get('reservation_estimate') or {}).get('canonical_slug')
+            if (type(data) is not dict or data.get('id') != proof['generation_id']
+                    or data.get('model') not in [model for model in (proof['model'], canonical) if type(model) is str]
+                    or type(data.get('total_cost')) not in (str, int)
+                    or _money(str(data['total_cost'])) != _money(proof['cost']['amount'])):
+                raise ValueError('generation identity or charged amount differs')
+        elif source['kind'] != 'operator_attested_openrouter_record' or source['http_status'] is not None:
+            raise ValueError('attributed operator record or successful generation evidence required')
+        if len(_strict_json(proof).encode()) > 2 * 1024 * 1024:
+            raise ValueError('cost evidence exceeds the private response size limit')
+
+    def _effective_cost(self, connection, operation):
+        reconciliation = self._reconciliation(connection, operation)
+        return operation['observed_cost'] if reconciliation is None else reconciliation['proof']['cost']
+
+    def inspect_cost(self, operation_id):
+        connection = self._s1_connection()
+        with _transaction(connection):
+            operation = self._operation_for_update(connection, operation_id, ('RECEIVED',))
+            reconciliation = self._reconciliation(connection, operation)
+            return {'operation_id': operation_id, 'observed_cost': operation['observed_cost'],
+                    'effective_cost': self._effective_cost(connection, operation), 'reconciliation': reconciliation,
+                    'budget': self._budget(connection, operation['budget_id'], self._operations(connection))}
+
+    def _reconciliation_maintenance(self, connection):
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
+        if (connection.execute("SELECT 1 FROM operations WHERE state='EMISSION_POSSIBLE' LIMIT 1").fetchone()
+                or ('s2_control' in tables and connection.execute('SELECT 1 FROM s2_control WHERE admission_json IS NOT NULL').fetchone())
+                or ('s4_status' in tables and connection.execute('SELECT 1 FROM s4_status WHERE admission_id IS NOT NULL LIMIT 1').fetchone())):
+            raise ConflictError('maintenance and quiescence required for reconciliation')
+
+    def initialize_reconciliation(self):
+        connection = self._s1_connection()
+        with _transaction(connection, write=True):
+            self._reconciliation_maintenance(connection)
+            if not connection.execute("SELECT 1 FROM sqlite_schema WHERE name='cost_reconciliations'").fetchone():
+                connection.execute(_RECONCILIATION_SCHEMA)
+            _check_schema(connection)
+        return {'format_identity': RECONCILIATION_IDENTITY}
+
+    def reconcile_cost(self, proof):
+        if type(proof) is not dict or type(proof.get('operation_id')) is not str:
+            raise ValueError('cost reconciliation operation identity required')
+        connection = self._s1_connection()
+        with _transaction(connection, write=True):
+            self._reconciliation_maintenance(connection)
+            if not connection.execute("SELECT 1 FROM sqlite_schema WHERE name='cost_reconciliations'").fetchone():
+                raise SchemaError('explicit reconciliation initialization required')
+            operation = self._operation_for_update(connection, proof['operation_id'], ('RECEIVED',))
+            self._validate_reconciliation(connection, operation, proof)
+            previous = self._reconciliation(connection, operation)
+            if previous is not None:
+                if previous['proof'] != proof:
+                    raise ConflictError('cost reconciliation is immutable')
+                return previous
+            raw = _strict_json(proof)
+            digest = hashlib.sha256(raw.encode()).hexdigest()
+            connection.execute('INSERT INTO cost_reconciliations VALUES (?,?,?)',
+                               (operation['operation_id'], raw, digest))
+            return {'proof': proof, 'sha256': digest}
+
     def _budget(self, connection, budget_id, operations):
         row = connection.execute(
             'SELECT limit_amount, currency FROM budgets WHERE budget_id=?', (budget_id,)
@@ -689,7 +825,7 @@ class Store:
         for operation in operations:
             if operation['budget_id'] != budget_id:
                 continue
-            cost = operation['observed_cost']
+            cost = self._effective_cost(connection, operation)
             if cost is not None and cost['status'] == 'KNOWN':
                 costs.append(_money(cost['amount']))
             else:
@@ -836,13 +972,15 @@ class Store:
                 verify_evaluations(self, connection)
             return {
                 'schema_version': SCHEMA_VERSION, 'integrity_ok': intact and not broken,
+                'cost_reconciliation_format': RECONCILIATION_IDENTITY if connection.execute(
+                    "SELECT 1 FROM sqlite_schema WHERE name='cost_reconciliations'").fetchone() else None,
                 'broken_pieces': broken, 'orphan_files': orphans,
                 'active_operations': [row['operation_id'] for row in operations
                                       if row['state'] != 'RECEIVED'],
                 'ambiguous_operations': [row['operation_id'] for row in operations
                                          if row['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS')],
                 'unknown_cost_operations': [row['operation_id'] for row in operations
-                    if row['observed_cost'] is not None and row['observed_cost']['status'] == 'UNKNOWN'],
+                    if self._effective_cost(connection, row) is not None and self._effective_cost(connection, row)['status'] == 'UNKNOWN'],
             }
 
     def save_dossier(self, dossier_id: str, revision: int, payload: dict) -> None:

@@ -68,7 +68,9 @@ class OpenRouterPricesTests(unittest.TestCase):
         self.assertEqual(2, self.http.close.call_count)
 
     def test_runtime_prepares_s2_configuration_from_the_public_forecast(self):
-        self.responses()
+        self.responses([{**ENDPOINT, 'tag': tag, 'provider_name': provider,
+                         'supported_parameters': ['temperature', 'top_p', 'reasoning', 'max_tokens', 'response_format']}
+                        for tag, provider in assistant.PROVIDERS.items()])
         with redirect_stdout(io.StringIO()) as output, patch.object(runtime, 'Store') as store:
             self.assertEqual(0, runtime.main(['forecast-prices', '--model', MODEL, '--input-tokens', '1000',
                                               '--output-tokens', '8192', '--preparation-assistant', assistant.ASSISTANT]))
