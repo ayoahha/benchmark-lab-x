@@ -39,7 +39,7 @@ python3 -B -m benchmark_lab_x show --run-dir runs/ma-campagne
 
 Cette commande vérifie l’intégrité puis ouvre la page sur macOS. Le [guide local](benchmark_lab_x/README.md) détaille les étapes, les prérequis et les autorisations nécessaires. Les [tests hors ligne](benchmark_lab_x/verify.md) utilisent un faux Pi et n’appellent aucun modèle.
 
-L’outil actuel reste attaché à un scénario et à son panel figés. Il ne fournit pas encore le parcours public de préparation assistée, les aperçus modifiables, les classements et filtres prévus, le catalogue de tâches, la navigation entre plusieurs campagnes, le serveur Linux et la persistance décrits dans les spécifications. Le [périmètre produit](docs/PRD.md#5-périmètre-produit) définit ces capacités attendues.
+Ce moteur historique reste attaché à un scénario et à son panel figés. Le runtime du service fournit séparément la préparation privée, les dossiers versionnés, les campagnes et leur restitution. Le [guide opérateur](benchmark_lab_x/README.md#première-comparaison-privée--pi-et-jugement-opérateur) décrit le raccordement candidat Pi/OpenRouter et l’évaluation locale ou humaine ; leurs tests simulés ne remplacent ni les campagnes réelles ni leur autorisation. Le [périmètre produit](docs/PRD.md#5-périmètre-produit) définit ces capacités attendues.
 
 ## Préparer une tâche de benchmark
 
@@ -54,7 +54,7 @@ Comparer des salles, préparer le suivi d’une réunion et organiser les pièce
 
 La préparation vérifie aussi que la référence est étayée et que les contrôles acceptent une solution valable et repèrent les défauts visés. Des modèles peuvent aider à la relire ; leur accord ne suffit pas à établir sa justesse. Le responsable de campagne prépare et approuve ce contrat avant les appels candidats, selon les [règles de qualification](docs/RULES.md#4-contrat-avant-exécution). La préparation assistée, le choix des configurations, le budget et la publication nécessitent leurs propres autorités. Les résultats de benchmark doivent être réellement acquis ; une réponse simulée ne les remplace pas.
 
-Remplir cette carte ne l’enregistre pas automatiquement dans un catalogue et ne la rend pas exécutable par l’outillage actuel. L’intégration d’une nouvelle tâche doit relier la carte à ses données, à ses contrôles et à une campagne autorisée. Le site actuel ne propose ni formulaire de contribution, ni téléversement, ni commentaire. Cette limite décrit l’outil disponible ; l’ouverture du parcours public relève du [périmètre 0.1.0](docs/PRD.md#51-périmètre-010), avec les décisions d’accès, de financement et de données encore à prendre.
+Remplir cette carte ne l’enregistre pas automatiquement dans un catalogue et ne la rend pas exécutable par l’outillage actuel. L’intégration d’une nouvelle tâche doit relier la carte à ses données, à ses contrôles et à une campagne autorisée. La restitution historique ne propose ni formulaire de contribution, ni téléversement, ni commentaire ; l’ouverture du parcours public relève du [périmètre 0.1.0](docs/PRD.md#51-périmètre-010), avec les décisions d’accès, de financement et de données encore à prendre.
 
 ## Comprendre le projet et suivre son évolution
 

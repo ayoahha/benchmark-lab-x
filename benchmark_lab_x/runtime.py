@@ -198,7 +198,7 @@ def restore(source, destination):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     campaign_actions = ('create-campaign', 'inspect-campaign', 'admit-campaign', 'stop-campaign', 'resume-campaign')
-    parser.add_argument('action', choices=campaign_actions + ('initialize-reconciliation', 'reconcile-cost', 'inspect-cost', 'forecast-prices', 'initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
+    parser.add_argument('action', choices=campaign_actions + ('inspect-pi', 'reserve-candidate', 'execute-candidate', 'prepare-evaluation', 'evaluate-attempt', 'initialize-reconciliation', 'reconcile-cost', 'inspect-cost', 'forecast-prices', 'initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
     parser.add_argument('--data', type=Path)
     parser.add_argument('--authority', type=Path)
     parser.add_argument('--destination', type=Path)
@@ -208,6 +208,8 @@ def main(argv=None):
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--preparation-assistant', choices=('glm-5.3-flash',))
     parser.add_argument('--model')
+    parser.add_argument('--pi-package', type=Path)
+    parser.add_argument('--node', type=Path)
     parser.add_argument('--input-tokens', type=int)
     parser.add_argument('--output-tokens', type=int)
     parser.add_argument('--cached-input-tokens', type=int, default=0)
@@ -216,6 +218,12 @@ def main(argv=None):
     try:
         if args.preparation_assistant and args.action not in ('executor', 'forecast-prices'):
             raise ValueError('Assistant réservé à l’exécuteur')
+        if args.action == 'inspect-pi':
+            from .pi_openrouter import identity
+            if args.pi_package is None or args.node is None:
+                raise ValueError('Installation Pi et Node explicites requis')
+            print(encode(identity(args.pi_package, args.node)))
+            return 0
         if args.action == 'forecast-prices':
             from .openrouter_prices import forecast
             result = forecast(args.model, args.input_tokens, args.output_tokens, args.cached_input_tokens)
@@ -288,6 +296,33 @@ def main(argv=None):
                                 from .storage import _fields
                                 _fields(proof, ('operation_id',), 'inspect-cost')
                                 result = store.inspect_cost(proof['operation_id'])
+                elif args.action in ('reserve-candidate', 'execute-candidate', 'prepare-evaluation', 'evaluate-attempt'):
+                    from . import campaigns, evaluation
+                    from .storage import _fields
+                    if args.authority is None:
+                        raise ValueError('Fichier opérateur privé requis')
+                    private_path(args.authority)
+                    request = json.loads(args.authority.read_text(), object_pairs_hook=_unique_object)
+                    if args.action == 'reserve-candidate':
+                        _fields(request, ('campaign_id', 'cell_id', 'attempt_id'), args.action)
+                        result = campaigns.reserve(store, request['campaign_id'], request['cell_id'], request['attempt_id'])
+                    elif args.action == 'execute-candidate':
+                        from .pi_openrouter import PiOpenRouter
+                        _fields(request, ('campaign_id', 'attempt_id'), args.action)
+                        if args.pi_package is None or args.node is None:
+                            raise ValueError('Installation Pi et Node explicites requis')
+                        before = campaigns.inspect(store, request['campaign_id'])
+                        if request['attempt_id'] not in {a['operation_id'] for a in before['attempts']}:
+                            raise ValueError('Tentative étrangère à la campagne')
+                        transport = PiOpenRouter(os.environ.pop('OPENROUTER_API_KEY', ''), args.pi_package, args.node)
+                        campaigns.execute(args.data, request['attempt_id'], transport)
+                        result = next(a for a in campaigns.inspect(store, request['campaign_id'])['attempts']
+                                      if a['operation_id'] == request['attempt_id'])
+                    elif args.action == 'prepare-evaluation':
+                        _fields(request, ('campaign_id', 'attempt_id'), args.action)
+                        result = evaluation.prepare_report(store, request['campaign_id'], request['attempt_id'])
+                    else:
+                        result = evaluation.submit_report(store, request)
                 elif args.action in campaign_actions:
                     from . import campaigns
                     from .storage import _fields
@@ -360,7 +395,7 @@ def main(argv=None):
                 else:
                     result = status(args.data, store)
         print(encode(result))
-        return 0
+        return 78 if args.action == 'execute-candidate' and result['state'] != 'RECEIVED' else 0
     except (OSError, ValueError, KeyError, sqlite3.Error):
         # Ne pas copier le contenu d'une saisie ou un chemin privé dans les journaux
         print(encode({'state': 'HOLD', 'reason': 'OPERATION_NOT_VERIFIED'}))
