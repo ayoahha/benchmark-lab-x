@@ -838,6 +838,13 @@ class Store:
                 'reserved': str(reserved), 'spent': str(spent), 'available': str(available),
                 'unknown_cost_operations': unknown}
 
+    def _blocking_costs(self, operations, budget, phase):
+        # Received preparation costs remain unknown and reserved without blocking the next exchange
+        return [row['operation_id'] for row in operations
+                if row['operation_id'] in budget['unknown_cost_operations']
+                and not (phase in ('preparation', 'correction')
+                         and row['phase'] in ('preparation', 'correction') and row['state'] == 'RECEIVED')]
+
     def inspect_budget(self, budget_id: str) -> dict:
         _text(budget_id, 'budget_id')
         connection = self._s1_connection()
@@ -866,7 +873,7 @@ class Store:
             (operation['dossier_id'], operation['revision']),
         ).fetchone():
             raise KeyError((operation['dossier_id'], operation['revision']))
-        if (budget['unknown_cost_operations'] or any(
+        if (self._blocking_costs(operations, budget, operation['phase']) or any(
                 row['budget_id'] == budget_id and row['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS')
                 for row in operations)):
             raise BudgetError('unresolved effects or costs block this envelope')

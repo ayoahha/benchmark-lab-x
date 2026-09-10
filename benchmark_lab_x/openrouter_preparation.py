@@ -90,7 +90,7 @@ def reservation(estimate):
         if (source['url'] != expected or re.fullmatch('[0-9a-f]{64}', source['body_sha256']) is None
                 or not datetime.fromisoformat(source['retrieved_at']).tzinfo):
             raise ValueError('Source datée du relevé requise')
-    amounts, seen = [], set()
+    seen = set()
     for endpoint in estimate['endpoints']:
         if endpoint['tag'] not in PROVIDERS:
             continue
@@ -99,30 +99,19 @@ def reservation(estimate):
         seen.add(endpoint['tag'])
         if not {'temperature', 'top_p', 'reasoning', 'max_tokens', 'response_format'} <= set(endpoint['supported_parameters']):
             raise ValueError('Paramètres requis non annoncés par cet endpoint')
-        rates = endpoint['pricing_raw']
-        if endpoint['model_id'] != MODEL or not endpoint['tag'] or not endpoint['provider_name']:
+        if endpoint['model_id'] != MODEL:
             raise ValueError('Identité endpoint requise')
-        if type(rates) is not dict:
-            raise ValueError('Tarifs prompt et completion requis pour la réserve')
-        if any(type(row) is not dict or row.keys() & {'prompt', 'completion', 'input_cache_read'}
-               for row in (rates.get('overrides') or [])):
-            raise ValueError('Conditions tarifaires du texte à résoudre avant réservation')
-        # Reserve at the uncached base price, without deducting a promotional discount
-        row = openrouter_prices.price_row({key: rates.get(key) for key in ('prompt', 'completion')},
-                {'prompt': assumptions['input_tokens'], 'completion': assumptions['output_tokens']})
-        amount = row['forecast']['token_subtotal_usd']
-        if amount is None:
-            raise ValueError('Tarif prompt ou completion manquant pour la réserve')
-        amounts.append(_money(amount))
     if seen != PROVIDERS.keys():
         raise ValueError('Relevé des trois endpoints autorisés requis')
-    return str(max(amounts))
+    indication = openrouter_prices.indication(estimate, {
+        'prompt_tokens': assumptions['input_tokens'], 'completion_tokens': assumptions['output_tokens']})
+    return None if indication is None else indication['token_subtotal_usd']
 
 
 def configuration(estimate=None):
     value = {'provider': 'OpenRouter', 'model': MODEL, 'access': 'API', 'endpoint': ENDPOINT,
              'route': 'Native OpenRouter fallback within the three explicit endpoint slugs, in configured order',
-             'reserve_basis': 'Most expensive full completion among permitted endpoints; failed-charge exceptions remain unknown, no invoice cap',
+             'reserve_basis': 'Indicative model token reference; explicit admission reserve remains counted, no invoice cap',
              'parameters': deepcopy(PARAMETERS), 'prompt_sha256': sha256(SYSTEM_PROMPT.encode()).hexdigest(),
              'max_request_bytes': MAX_REQUEST_BYTES, 'max_response_bytes': MAX_RESPONSE_BYTES,
              'timeout_seconds': TIMEOUT_SECONDS, 'cost_method': deepcopy(USAGE_METHOD)}
@@ -161,7 +150,8 @@ class OpenRouterPreparation:
         if ('reserve_usd' not in expected or requested != expected
                 or operation['phase'] not in ('preparation', 'correction')
                 or budget['currency'] != 'USD' or _money(budget['limit']) > Decimal('100')
-                or _money(operation['reserved_amount']) < _money(expected['reserve_usd'])):
+                or (expected['reserve_usd'] is not None
+                    and _money(operation['reserved_amount']) < _money(expected['reserve_usd']))):
             raise ValueError('Configuration ou réservation OpenRouter divergente')
         wire = encode({'model': MODEL, **PARAMETERS, 'messages': [
             {'role': 'system', 'content': SYSTEM_PROMPT}, {'role': 'user', 'content': encode(request)}]})

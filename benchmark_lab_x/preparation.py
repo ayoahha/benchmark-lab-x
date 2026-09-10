@@ -179,6 +179,9 @@ def view(store, session_id, dossier_id, revision=None):
         result['observed_cost'] = None if completed is None else json.loads(completed[1])
         if completed is not None:
             operation = store._operation_for_update(connection, completed[2], ('RECEIVED',))
+            observed = operation['receipt']['observed_configuration'] or {}
+            if 'indicative_cost' in observed:
+                result['indicative_cost'] = observed['indicative_cost']
             reconciliation = store._reconciliation(connection, operation)
             result['effective_cost'] = store._effective_cost(connection, operation)
             result['cost_reconciliation'] = None if reconciliation is None else {
@@ -344,7 +347,7 @@ def execute(data, operation_id, transport):
                                              requested_configuration=operation['requested_configuration'])):
                     return
                 budget = store._budget(connection, operation['budget_id'], store._operations(connection))
-                if budget['unknown_cost_operations'] or _sum_money((_money(budget['reserved']), _money(budget['spent']))) > _money(budget['limit']):
+                if store._blocking_costs(store._operations(connection), budget, operation['phase']) or _sum_money((_money(budget['reserved']), _money(budget['spent']))) > _money(budget['limit']):
                     return
                 if any(row['operation_id'] != operation_id and row['budget_id'] == operation['budget_id']
                        and row['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS') for row in store._operations(connection)):
@@ -476,6 +479,14 @@ def publish(store, operation, request, response):
         connection.execute('INSERT INTO s2_revisions VALUES (?,?,?,?,?,?,?,?)',
                            (dossier_id, revision, stage, result['explanation'], None if package is None else encode(package),
                             digest, encode(changes), encode(checks)))
+        if (operation['requested_configuration'].get('provider') == 'OpenRouter'
+                and type(response['receipt']['observed_configuration']) is dict):
+            from .openrouter_prices import indication
+            observed = response['receipt']['observed_configuration']
+            consumption = observed.get('consumption')
+            observed['indicative_cost'] = indication(
+                operation['requested_configuration'].get('reservation_estimate'),
+                consumption.get('usage') if type(consumption) is dict else None)
         store._record_receipt(connection, operation['operation_id'], response['receipt'], response['cost'])
         connection.execute('UPDATE s2_dossiers SET current_revision=? WHERE dossier_id=?', (revision, dossier_id))
 
@@ -863,6 +874,12 @@ def render(value, csrf, path='/preparation', *, error=False):
             content += section('Changements et vérifications', listing(value['changes']) +
                                '<p>Les octets des pièces et l’empreinte du paquet ont été vérifiés.</p>')
             content += '<p>Empreinte du paquet : <code>' + text(value['package_sha256']) + '</code></p>'
+        if 'indicative_cost' in value:
+            estimate = value['indicative_cost']
+            amount = estimate.get('token_subtotal_usd') if estimate else None
+            content += '<p>Estimation indicative de cette préparation : ' + text(
+                'non estimable' if amount is None else amount + ' USD') + \
+                '. Tokens utilisés × tarifs du modèle relevés avant appel ; ce montant n’est pas une facture.</p>'
         if value.get('observed_cost'):
             cost = value['observed_cost']
             content += '<p>Coût observé de cette préparation : ' + text(

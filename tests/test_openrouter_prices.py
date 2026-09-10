@@ -70,7 +70,8 @@ class OpenRouterPricesTests(unittest.TestCase):
     def test_runtime_prepares_s2_configuration_from_the_public_forecast(self):
         self.responses([{**ENDPOINT, 'tag': tag, 'provider_name': provider,
                          'supported_parameters': ['temperature', 'top_p', 'reasoning', 'max_tokens', 'response_format']}
-                        for tag, provider in assistant.PROVIDERS.items()])
+                        for tag, provider in assistant.PROVIDERS.items()],
+                       summary={**SUMMARY, 'pricing': {'prompt': '0.000001', 'completion': '0.000002'}})
         with redirect_stdout(io.StringIO()) as output, patch.object(runtime, 'Store') as store:
             self.assertEqual(0, runtime.main(['forecast-prices', '--model', MODEL, '--input-tokens', '1000',
                                               '--output-tokens', '8192', '--preparation-assistant', assistant.ASSISTANT]))

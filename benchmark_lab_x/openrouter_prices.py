@@ -73,6 +73,22 @@ def price_row(pricing, quantities):
                          'conditional_pricing_unresolved': conditional}}
 
 
+def indication(estimate, usage):
+    """Model token indication, distinct from any reported account charge"""
+    try:
+        quantities = {'prompt': usage['prompt_tokens'], 'completion': usage['completion_tokens']}
+        if any(type(value) is not int or value < 0 for value in quantities.values()):
+            return None
+        pricing = estimate['model_summary']['pricing_raw']
+        for key in quantities:
+            _money(pricing[key])
+        forecast = price_row({key: pricing[key] for key in quantities}, quantities)['forecast']
+        return {**forecast, 'quantities': quantities, 'model_id': estimate['model_id'],
+                'source': estimate['sources']['model']}
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
 def forecast(model, input_tokens, output_tokens, cached_input_tokens=0):
     if (type(model) is not str or re.fullmatch(r'[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+', model) is None
             or any(type(value) is not int or value < 0 for value in (input_tokens, output_tokens, cached_input_tokens))
