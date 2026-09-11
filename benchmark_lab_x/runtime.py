@@ -198,7 +198,7 @@ def restore(source, destination):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     campaign_actions = ('create-campaign', 'inspect-campaign', 'admit-campaign', 'stop-campaign', 'resume-campaign')
-    parser.add_argument('action', choices=campaign_actions + ('inspect-pi', 'reserve-candidate', 'execute-candidate', 'prepare-evaluation', 'evaluate-attempt', 'initialize-reconciliation', 'reconcile-cost', 'inspect-cost', 'forecast-prices', 'initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
+    parser.add_argument('action', choices=campaign_actions + ('inspect-pi', 'prepare-recovery', 'prepare-candidate-configuration', 'inspect-model-profile', 'reserve-candidate', 'execute-candidate', 'prepare-review', 'prepare-evaluation', 'evaluate-attempt', 'initialize-reconciliation', 'reconcile-cost', 'inspect-cost', 'forecast-prices', 'initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
     parser.add_argument('--data', type=Path)
     parser.add_argument('--authority', type=Path)
     parser.add_argument('--allow-owner-launch', action='store_true', help='Autoriser explicitement le propriétaire à déclencher les cellules admises')
@@ -309,14 +309,27 @@ def main(argv=None):
                                 from .storage import _fields
                                 _fields(proof, ('operation_id',), 'inspect-cost')
                                 result = store.inspect_cost(proof['operation_id'])
-                elif args.action in ('reserve-candidate', 'execute-candidate', 'prepare-evaluation', 'evaluate-attempt'):
+                elif args.action in ('prepare-recovery', 'prepare-candidate-configuration', 'inspect-model-profile', 'reserve-candidate', 'execute-candidate', 'prepare-review', 'prepare-evaluation', 'evaluate-attempt'):
                     from . import campaigns, evaluation
                     from .storage import _fields
                     if args.authority is None:
                         raise ValueError('Fichier opérateur privé requis')
                     private_path(args.authority)
                     request = json.loads(args.authority.read_text(), object_pairs_hook=_unique_object)
-                    if args.action == 'reserve-candidate':
+                    if args.action == 'prepare-recovery':
+                        from .recovery import propose
+                        _fields(request, ('operation_id', 'capabilities'), args.action)
+                        result = propose(store, request['operation_id'], request['capabilities'])
+                    elif args.action == 'prepare-candidate-configuration':
+                        from .recovery import starting_configuration
+                        _fields(request, ('configuration', 'outgoing_format'), args.action)
+                        result = starting_configuration(store, request['configuration'], content_format=request['outgoing_format'])
+                    elif args.action == 'inspect-model-profile':
+                        from .recovery import profile
+                        _fields(request, ('provider', 'model', 'revision', 'access', 'channel_id', 'outgoing_format'),
+                                args.action)
+                        result = profile(store, request)
+                    elif args.action == 'reserve-candidate':
                         _fields(request, ('campaign_id', 'cell_id', 'attempt_id'), args.action)
                         result = campaigns.reserve(store, request['campaign_id'], request['cell_id'], request['attempt_id'])
                     elif args.action == 'execute-candidate':
@@ -331,6 +344,9 @@ def main(argv=None):
                         campaigns.execute(args.data, request['attempt_id'], transport)
                         result = next(a for a in campaigns.inspect(store, request['campaign_id'])['attempts']
                                       if a['operation_id'] == request['attempt_id'])
+                    elif args.action == 'prepare-review':
+                        _fields(request, ('campaign_id', 'attempt_id'), args.action)
+                        result = evaluation.prepare_review(store, request['campaign_id'], request['attempt_id'])
                     elif args.action == 'prepare-evaluation':
                         _fields(request, ('campaign_id', 'attempt_id'), args.action)
                         result = evaluation.prepare_report(store, request['campaign_id'], request['attempt_id'])

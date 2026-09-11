@@ -80,6 +80,8 @@ Règle d’agrégation : `<forme et portée du résultat ; cas et tentatives pri
 
 ### Entrées et outils autorisés
 
+Format de contenu sortant : `<version de projection liée au paquet validé>`. Déclarer les fichiers candidats par manifeste fermé avec rôles `instructions` et `input` ; aucune découverte automatique de Markdown. Conserver méthode, statuts, historique et pièces de jugement hors des messages candidats. La génération de l’épreuve sépare le contenu candidat, les notes internes et la référence de jugement, sans rôle fourni par le modèle. Toute contrainte nécessaire issue de notes internes est rédigée explicitement dans la consigne de cette version. Après émission, conserver séparément l’empreinte du corps HTTP réel, système inclus, sans authentification.
+
 Consigne exacte commune aux candidats : `<texte ou pièce identifiée, sans réponse attendue réservée au jugement>`.
 
 Aperçu présenté : `<situation fictive, informations importantes, livrables, critères compréhensibles, incertitudes recevables, exclusions et intervention humaine ; références aux pièces existantes et au même paquet prévu pour les candidats>`.

@@ -63,7 +63,7 @@ def response(operation, request):
     return dict(receipt=dict(receipt_id='r-'+operation['operation_id'],
                 observed_configuration=dict(revision=config['revision'], channel_id=config['channel_id'],
                                             sources={'revision':'fixture response', 'channel_id':'fixture transport'}),
-                resources_seen=[p['id'] for p in request['pieces']],
+                resources_seen=[p['name'] for p in request.get('outgoing', {}).get('pieces', [])],
                 result=dict(output='  fictional raw output\n', incident=None, emission='ESTABLISHED')),
                 cost=dict(status='KNOWN',amount='2',currency='TEST',source='Fictional acquisition receipt'))
 
@@ -218,7 +218,7 @@ class S4Regressions(unittest.TestCase):
                 self.assertEqual('7',snapshot['budget']['reserved'])
             self.assertNotIn(self.reference,json.dumps(request))
             out=response(op,request)
-            op['requested_configuration'].clear(); request['pieces'].clear()
+            request['outgoing']['pieces'].clear()
             return out
         c.execute(self.data,'intent-x',mutate)
         self.assertEqual(self.snapshot['manifest'],c.inspect(self.store,'local-comparison')['manifest'])

@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import time
 
-from . import openrouter_preparation as http, qualification as q, storage
+from . import openrouter_preparation as http, qualification as q, storage, outgoing
 
 PACKAGE = '@earendil-works/pi-coding-agent'
 VERSION = '0.85.1'
@@ -80,10 +80,13 @@ class PiOpenRouter:
         self.package = Path(package).resolve(strict=True)
         self.node = str(Path(node).resolve(strict=True))
 
-    def prepare(self, operation, request, budget):
+    def prepare(self, operation, request):
+        if request.get('outgoing_format') != outgoing.FORMAT:
+            raise ValueError('Ancien format sortant : nouvelle version de tâche requise')
+        projected = outgoing.closed_candidate(request['outgoing'])
         config, conditions = request['requested_configuration'], request['conditions']
-        if operation['phase'] != 'acquisition' or budget['currency'] != 'USD':
-            raise ValueError('Tentative candidate et budget USD requis')
+        if operation['phase'] != 'acquisition':
+            raise ValueError('Tentative candidate requise')
         if config['access'] != 'API' or config['channel_id'] != http.ENDPOINT:
             raise ValueError('Canal OpenRouter obligatoire')
         if (not config['model'].strip() or config['model'] != config['revision']):
@@ -124,15 +127,17 @@ class PiOpenRouter:
         if (provider['order'] != provider['only'] or type(provider['allow_fallbacks']) is not bool
                 or provider['require_parameters'] is not True):
             raise ValueError('Routage explicite et paramètres requis')
-        prompt = storage._strict_json(dict(package=request['package'], pieces=request['pieces']))
-        self._input = dict(model=config['model'], system=defaults['system_prompt'], prompt=prompt,
-                           max_tokens=parameters['max_tokens'], context_window=defaults['context_window'])
-        self._wire = dict(model=config['model'], **parameters, stream=False,
-                          messages=[dict(role='system', content=system_context(defaults['system_prompt'])),
-                                    dict(role='user', content=prompt)])
-        wire = storage._strict_json(self._wire)
+        prompt = storage._strict_json(projected)
+        messages = [dict(role='system', content=system_context(defaults['system_prompt'])),
+                    dict(role='user', content=prompt)]
+        wire = storage._strict_json({'model': config['model'], **parameters, 'stream': False, 'messages': messages})
         if len(wire.encode()) > http.MAX_REQUEST_BYTES or self._key in wire:
             raise ValueError('Requête hors limites')
+        self._input = dict(model=config['model'], system=defaults['system_prompt'], prompt=prompt,
+                           max_tokens=parameters['max_tokens'], context_window=defaults['context_window'])
+        self._wire_bytes = wire
+        self._wire_sha256 = sha256(wire.encode('utf-8')).hexdigest()
+        self._wire_proof = outgoing.wire_proof(wire, messages)
         self._prepared = q.digest(request)
         self._identity = live
         self._timeout = defaults['timeout_seconds']
@@ -140,6 +145,9 @@ class PiOpenRouter:
     def __call__(self, operation, request):
         if (operation['state'] != 'EMISSION_POSSIBLE' or getattr(self, '_prepared', None) != q.digest(request)):
             raise ValueError('Préparation et intention persistante requises')
+        wire = getattr(self, '_wire_bytes', None)
+        if wire is None or sha256(wire.encode('utf-8')).hexdigest() != self._wire_sha256:
+            raise ValueError('Corps modifié avant émission')
         # No credentials, home configuration, tools, or judge pieces enter Pi
         with tempfile.TemporaryDirectory(prefix='benchmark-pi-') as directory:
             process = subprocess.Popen([self.node, str(BRIDGE), str(self.package)], cwd=directory,
@@ -152,8 +160,9 @@ class PiOpenRouter:
                 storage._fields(event, ('type', 'model', 'context'), 'Pi request')
                 context = event['context']
                 messages = context.get('messages', [])
+                emitted = json.loads(wire)
                 if (event['type'] != 'request' or event['model'] != self._input['model']
-                        or context.get('systemPrompt') != self._wire['messages'][0]['content'] or context.get('tools') != []
+                        or context.get('systemPrompt') != emitted['messages'][0]['content'] or context.get('tools') != []
                         or len(messages) != 1 or messages[0].get('role') != 'user'
                         or messages[0].get('content') != [{'type': 'text', 'text': self._input['prompt']}]):
                     raise ValueError('Contexte Pi effectif divergent')
@@ -190,7 +199,10 @@ class PiOpenRouter:
                 process.stdout.close()
 
     def _exchange(self, operation, request):
-        wire = storage._strict_json(self._wire)
+        wire = self._wire_bytes
+        if sha256(wire.encode('utf-8')).hexdigest() != self._wire_sha256:
+            raise ValueError('Corps modifié avant émission')
+        payload = json.loads(wire)
         status, headers, raw, complete, started, clock = http.post(self._key, wire, self._timeout)
         redacted = self._key.encode() in raw
         document = None
@@ -225,7 +237,8 @@ class PiOpenRouter:
             sources=dict(provider='OpenRouter selected endpoint' if endpoint.get('provider') else None,
                 model='HTTP response /model' if model else None, revision='HTTP response /model; model slug, not hidden weight revision' if model else None,
                 access='Executor HTTPS request', channel_id='Executor HTTPS endpoint', route='OpenRouter selected endpoint tag' if endpoint.get('tag') else None),
-            routing=route, request=self._wire,
+            routing=route, request=payload,
+            outgoing=self._wire_proof,
             http=dict(endpoint=http.ENDPOINT, status=status, response_headers=headers, started_at=started,
                 received_at=datetime.now(timezone.utc).isoformat(), elapsed_seconds=time.monotonic()-clock,
                 complete=complete, credential_redacted=redacted, body_base64=b64encode(raw).decode(), body_sha256=sha256(raw).hexdigest()))
@@ -233,7 +246,7 @@ class PiOpenRouter:
             incident = 'MODEL_IDENTITY_MISMATCH'
         tag = endpoint.get('tag')
         if tag is not None and (type(tag) is not str or not any(
-                tag == allowed or tag.startswith(allowed + '/') for allowed in self._wire['provider']['only'])):
+                tag == allowed or tag.startswith(allowed + '/') for allowed in payload['provider']['only'])):
             incident = 'PROVIDER_ROUTE_MISMATCH'
         if type(route) is dict and (route.get('pipeline') or route.get('requested', self._input['model']) != self._input['model']):
             incident = 'HARNESS_ERROR'
@@ -243,7 +256,7 @@ class PiOpenRouter:
         observed['consumption'] = measured
         amount = measured['amount']
         return dict(receipt=dict(receipt_id='openrouter-'+operation['operation_id'], observed_configuration=observed,
-                        resources_seen=[p['id'] for p in request['pieces']],
+                        resources_seen=[p['name'] for p in request['outgoing']['pieces']],
                         result=dict(output=output, incident=incident, emission='ESTABLISHED')),
                     cost=dict(status='KNOWN' if amount is not None else 'UNKNOWN', amount=amount, currency='USD',
                         source='OpenRouter /usage/cost' if amount is not None else 'Coût financier absent ; réserve conservée'))

@@ -151,7 +151,11 @@ def package_check(store, dossier_id, revision, package, digest):
     if sha256(encode(package).encode()).hexdigest() != digest:
         raise IntegrityError('Empreinte du paquet divergente')
     _fields(package, ('instruction', 'deliverables', 'criteria', 'acceptable_ambiguities',
-                      'human_work', 'limits', 'pieces'), 'package')
+                      'human_work', 'limits', 'pieces') + (('outgoing_format',) if 'outgoing_format' in package else ()), 'package')
+    if 'outgoing_format' in package:
+        from .outgoing import FORMAT
+        if package['outgoing_format'] != FORMAT:
+            raise IntegrityError('Format sortant inconnu')
     for field in ('instruction', 'human_work'):
         _text(package[field], field)
     for field in ('deliverables', 'criteria', 'acceptable_ambiguities', 'limits'):
@@ -262,6 +266,31 @@ def piece_bytes(store, session_id, dossier_id, revision, piece_id):
     return store.read_piece(piece_id)
 
 
+def _usd_budget(reserved_amount, requested, budget):
+    if 'reserve_usd' not in requested:
+        return
+    if (budget['currency'] != 'USD' or _money(budget['limit']) > Decimal('100')
+            or (requested['reserve_usd'] is not None
+                and _money(reserved_amount) < _money(requested['reserve_usd']))):
+        raise ValueError('Configuration ou réservation OpenRouter divergente')
+
+
+def _closed_preparation_request(request):
+    from . import outgoing
+    return dict(outgoing_format=outgoing.FORMAT, outgoing=outgoing.preparation(request))
+
+
+def _closed_preparation_operation(operation, *, conserved_wire=None, state=None):
+    value = dict(operation_id=operation['operation_id'], phase=operation['phase'],
+                 requested_configuration=deepcopy(operation['requested_configuration']))
+    resolved = operation['state'] if state is None else state
+    if resolved == 'EMISSION_POSSIBLE':
+        value['state'] = resolved
+    if conserved_wire is not None:
+        value['conserved_wire'] = conserved_wire
+    return value
+
+
 def submit(store, session_id, dossier_id, body, source, transport):
     connection = connection_for(store)
     identifier(dossier_id)
@@ -302,6 +331,8 @@ def submit(store, session_id, dossier_id, body, source, transport):
         if connection.execute("SELECT 1 FROM s2_actions a JOIN operations o USING(operation_id) "
                               "WHERE o.state != 'RECEIVED' LIMIT 1").fetchone():
             raise ConflictError('Préparation active ou suspendue')
+        budget = store._budget(connection, authority['budget_id'], store._operations(connection))
+        _usd_budget(authority['reserve_amount'], authority['requested_configuration'], budget)
         revision = existing[1] if existing else 1
         if create:
             payload = dict(request=message, clarifications=[], reformulation='', validated_assumptions=[],
@@ -312,14 +343,16 @@ def submit(store, session_id, dossier_id, body, source, transport):
                                (dossier_id, revision, 'draft', '', '[]', '{}'))
         operation_id = secrets.token_hex(16)
         context = store.get_dossier(dossier_id, revision)
-        row = connection.execute('SELECT stage,explanation,package_json FROM s2_revisions WHERE dossier_id=? AND revision=?',
+        row = connection.execute('SELECT stage,explanation,package_json,package_sha256 FROM s2_revisions WHERE dossier_id=? AND revision=?',
                                  (dossier_id, revision)).fetchone()
         # Exact context lives in immutable operation resources, distinct from the candidate package
         request = dict(message=message, kind=kind, payload=context, stage=row[0], explanation=row[1],
                        package=None if row[2] is None else json.loads(row[2]))
         request['pieces_seen'] = []
+        if request['package'] is not None:
+            package_check(store, dossier_id, revision, request['package'], row[3])
         for piece in (request['package'] or {}).get('pieces', []):
-            request['pieces_seen'].append({'id': piece['id'], 'sha256': piece['sha256'],
+            request['pieces_seen'].append({'id': piece['id'], 'name': piece['name'], 'role': 'candidate', 'sha256': piece['sha256'],
                                            'content': store.read_piece(piece['id']).decode('utf-8')})
         resources = [encode(request)]
         operation = dict(operation_id=operation_id, phase='correction' if kind == 'correct' else 'preparation',
@@ -329,8 +362,7 @@ def submit(store, session_id, dossier_id, body, source, transport):
         if callable(getattr(transport, 'prepare', None)):
             # A refused body rolls back the dossier, intention and reserve together
             operation = store._operation_for_update(connection, operation_id, ('INTENT_RECORDED',))
-            budget = store._budget(connection, authority['budget_id'], store._operations(connection))
-            wire = transport.prepare(deepcopy(operation), deepcopy(request), deepcopy(budget))
+            wire = transport.prepare(_closed_preparation_operation(operation), _closed_preparation_request(request))
             _text(wire, 'prepared request')
             operation['resources'].append(wire)
             connection.execute('UPDATE operations SET resources_json=? WHERE operation_id=?',
@@ -383,16 +415,26 @@ def execute(data, operation_id, transport):
                                              requested_configuration=operation['requested_configuration'])):
                     return
                 budget = store._budget(connection, operation['budget_id'], store._operations(connection))
+                _usd_budget(operation['reserved_amount'], operation['requested_configuration'], budget)
                 if store._blocking_costs(store._operations(connection), budget, operation['phase']) or _sum_money((_money(budget['reserved']), _money(budget['spent']))) > _money(budget['limit']):
                     return
                 if any(row['operation_id'] != operation_id and row['budget_id'] == operation['budget_id']
                        and row['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS') for row in store._operations(connection)):
                     return
+                request = json.loads(operation['resources'][0])
+                closed_request = _closed_preparation_request(request)
+                closed_operation = _closed_preparation_operation(operation)
+                if callable(getattr(transport, 'prepare', None)):
+                    prepared = transport.prepare(deepcopy(closed_operation), deepcopy(closed_request))
+                    if len(operation['resources']) != 2 or prepared != operation['resources'][1]:
+                        raise ConflictError('Contenu sortant modifié depuis la réservation')
                 connection.execute("UPDATE operations SET state='EMISSION_POSSIBLE' WHERE operation_id=?", (operation_id,))
             emitted = True
             operation['state'] = 'EMISSION_POSSIBLE'
             request = json.loads(operation['resources'][0])
-            response = transport(deepcopy(operation), deepcopy(request))
+            closed_request = _closed_preparation_request(request)
+            response = transport(_closed_preparation_operation(operation, conserved_wire=(operation['resources'][1] if len(operation['resources']) > 1 else None)),
+                                 deepcopy(closed_request))
             _fields(response, ('receipt', 'cost'), 'transport response')
             try:
                 publish(store, operation, request, response)
@@ -443,30 +485,10 @@ def publish(store, operation, request, response):
     payload['reformulation'] = result['reformulation']
     payload['fictional_parameters'] = result['fictional_parameters']
     _payload_json(payload)
-    # Reject malformed model output before creating immutable piece files
+    generated = None
     if result['package'] is not None:
-        package = result['package']
-        _fields(package, ('instruction', 'deliverables', 'criteria', 'acceptable_ambiguities',
-                          'human_work', 'limits', 'pieces'), 'package')
-        for field in ('instruction', 'human_work'):
-            _text(package[field], field)
-        for field in ('deliverables', 'criteria', 'acceptable_ambiguities', 'limits'):
-            if type(package[field]) is not list:
-                raise ValueError('Liste requise')
-            for value in package[field]:
-                _text(value, field)
-        if not package['deliverables'] or not package['criteria'] or type(package['pieces']) is not list:
-            raise ValueError('Paquet incomplet')
-        roles = set()
-        for piece in package['pieces']:
-            _fields(piece, ('name', 'role', 'content'), 'piece')
-            _text(piece['name'], 'name')
-            if type(piece['content']) is not str or piece['role'] not in ('candidate', 'judge'):
-                raise ValueError('Pièce invalide')
-            piece['content'].encode('utf-8')
-            roles.add(piece['role'])
-        if roles != {'candidate', 'judge'}:
-            raise ValueError('Pièces candidates et référence distincte requises')
+        from . import outgoing
+        generated = outgoing.closed_generation(result['package'])
     connection = connection_for(store)
     with _transaction(connection, write=True):
         current = connection.execute('SELECT current_revision FROM s2_dossiers WHERE dossier_id=?', (dossier_id,)).fetchone()[0]
@@ -475,32 +497,27 @@ def publish(store, operation, request, response):
         revision = before + 1
         store.save_dossier(dossier_id, revision, payload)
         package, digest, checks = None, None, {}
-        if result['package'] is not None:
-            source = result['package']
-            _fields(source, ('instruction', 'deliverables', 'criteria', 'acceptable_ambiguities',
-                             'human_work', 'limits', 'pieces'), 'package')
-            package = {key: deepcopy(value) for key, value in source.items() if key != 'pieces'}
-            package['pieces'] = []
+        if generated is not None:
+            from .outgoing import FORMAT
+            package = dict(instruction=generated['candidate']['instruction'],
+                           deliverables=list(generated['candidate']['deliverables']),
+                           criteria=list(generated['candidate']['criteria']),
+                           acceptable_ambiguities=list(generated['candidate']['acceptable_ambiguities']),
+                           human_work=generated['internal']['human_work'],
+                           limits=list(generated['internal']['limits']), outgoing_format=FORMAT, pieces=[])
             checked = []
-            if type(source['pieces']) is not list:
-                raise ValueError('Pièces requises')
-            roles = set()
-            for piece in source['pieces']:
-                _fields(piece, ('name', 'role', 'content'), 'transport piece')
-                if type(piece['content']) is not str:
-                    raise ValueError('Texte de pièce requis')
-                raw = piece['content'].encode('utf-8')
-                meta = store._put_piece(connection, dossier_id, revision, secrets.token_hex(16),
-                                       name=piece['name'], role=piece['role'], media_type='text/plain; charset=utf-8', content=raw)
-                if store.read_piece(meta['piece_id']) != raw:
-                    raise IntegrityError('Pièce divergente')
-                roles.add(meta['role'])
-                checked.append({'id': meta['piece_id'], 'sha256': meta['sha256']})
-                if meta['role'] == 'candidate':
-                    package['pieces'].append(dict(id=meta['piece_id'], name=meta['name'],
-                                                  sha256=meta['sha256'], size_bytes=meta['size_bytes']))
-            if roles != {'candidate', 'judge'}:
-                raise IntegrityError('Pièces candidates et référence distincte requises')
+            for role, items in (('candidate', generated['candidate']['pieces']),
+                                ('judge', generated['judgment']['pieces'])):
+                for piece in items:
+                    raw = piece['content'].encode('utf-8')
+                    meta = store._put_piece(connection, dossier_id, revision, secrets.token_hex(16),
+                                           name=piece['name'], role=role, media_type='text/plain; charset=utf-8', content=raw)
+                    if store.read_piece(meta['piece_id']) != raw:
+                        raise IntegrityError('Pièce divergente')
+                    checked.append({'id': meta['piece_id'], 'sha256': meta['sha256']})
+                    if role == 'candidate':
+                        package['pieces'].append(dict(id=meta['piece_id'], name=meta['name'],
+                                                      sha256=meta['sha256'], size_bytes=meta['size_bytes']))
             digest = sha256(encode(package).encode()).hexdigest()
             package_check(store, dossier_id, revision, package, digest)
             # Do not expose judge piece identities in the requester projection
@@ -1164,6 +1181,8 @@ def render(value, csrf, path='/preparation', *, error=False):
             for campaign in value['campaigns']:
                 task = campaign['task']
                 campaigns += '<article><h3>Campagne ' + text(campaign['campaign_id']) + '</h3>'
+                if campaign.get('recovery_of'):
+                    campaigns += '<p>Reprise technique de ' + text(campaign['recovery_of']) + '. Les reçus et coûts précédents restent conservés.</p>'
                 if 'evaluations' in campaign:
                     campaigns += '<p><a href="' + text(url) + '/campaigns/' + text(campaign['campaign_id']) + '">Comparer les observations de cette campagne</a></p>'
                 campaigns += '<p>Tâche ' + text(task['dossier_id']) + ', version ' + text(task['version'])

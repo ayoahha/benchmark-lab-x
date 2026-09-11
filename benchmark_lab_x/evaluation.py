@@ -550,6 +550,49 @@ def prepare_report(store, campaign_id, attempt_id):
 
 
 
+def _review_piece(piece_id, name, raw):
+    return dict(piece_id=piece_id, name=name, sha256=sha256(raw).hexdigest(), content=raw.decode('utf-8'))
+
+
+def prepare_review(store, campaign_id, attempt_id):
+    """Closed judgment view; campaign and attempt ids stay in a local binding"""
+    from . import outgoing
+    connection = connection_for(store)
+    with _transaction(connection):
+        ctx = _context(store, connection, campaign_id, attempt_id)
+        resources = _resources(store, ctx)
+        contract = ctx['qualification']['contract']
+        spec = contract['specification']
+        package = contract['package']
+        task_pieces = [_review_piece(p['id'], p['name'], resources[p['id']]) for p in package['pieces']]
+        references = [_review_piece(p['id'], p['name'], resources[p['id']]) for p in contract['reference_pieces']]
+        output = None
+        output_id = ctx['attempt']['output_piece_id']
+        if output_id is not None:
+            meta = store.get_piece(output_id)
+            output = _review_piece(output_id, meta['name'], resources[output_id])
+        method = spec['method']
+        content = outgoing.closed_review(dict(
+            task=dict(instruction=package['instruction'], deliverables=list(package['deliverables']),
+                      criteria=list(package['criteria']), acceptable_ambiguities=list(package['acceptable_ambiguities']),
+                      pieces=task_pieces),
+            result_expected=spec['result_expected'],
+            obligations=[dict(id=x['id'], description=x['description'], tolerance=x['tolerance'],
+                              control_ids=list(x['control_ids'])) for x in spec['obligations']],
+            eliminatory_errors=[dict(id=x['id'], description=x['description'],
+                                     control_ids=list(x['control_ids'])) for x in spec['eliminatory_errors']],
+            method=dict(id=method['id'], version=method['version'], control_ids=list(method['control_ids']),
+                        expected_evidence=method['expected_evidence'], responsible_role=method['responsible_role']),
+            secondary_criteria=[dict(id=x['id'], measure=x['measure'], proof=x['proof'], unit=x['unit'],
+                                     favorable=x['favorable'], aggregation=x['aggregation'])
+                                for x in spec['secondary_criteria']],
+            limits=list(spec['limits']), output=output, references=references))
+        previous = _records(store, connection, attempt_id)
+        return dict(outgoing_format=outgoing.FORMAT, content=content, content_sha256=q.digest(content),
+                    binding=dict(campaign_id=campaign_id, attempt_id=attempt_id,
+                                 previous_evaluation_id=previous[-1]['evaluation_id'] if previous else None))
+
+
 def submit_report(store, request):
     """The private operator submits findings; the engine derives the verdict"""
     _fields(request, ('campaign_id', 'attempt_id', 'responsible', 'authority', 'report', 'previous_evaluation_id'), 'reviewed evaluation')
