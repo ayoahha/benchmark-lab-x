@@ -144,68 +144,8 @@ def is_excluded(name: str) -> bool:
 
 
 def assemble_prompt(task_dir: Path) -> tuple[str, dict[str, str], list[str]]:
-    """Assembler le message utilisateur sans réécrire les entrées de la carte
-
-    Les consignes viennent de prompt.txt ou du bloc cité sous
-    « Consignes visibles par le modèle » dans task.md. Seul le préfixe de
-    citation est retiré. Chaque fichier Markdown non exclu est ensuite ajouté
-    dans l’ordre lexical. Retourne le prompt, les entrées et les avertissements
-    """
-    warnings: list[str] = []
-    override = task_dir / "prompt.txt"
-    if override.exists():
-        # Canonical override: raw bytes decoded, no newline translation
-        instructions = override.read_bytes().decode("utf-8").strip()
-        if not instructions:
-            die(EXIT_PROMPT, "prompt.txt est vide")
-    else:
-        card = (task_dir / "task.md").read_bytes().decode("utf-8")
-        # Les cartes sont en français ; le titre suit le contrat tasks/TEMPLATE.md
-        m = re.search(
-            r"^## Consignes visibles par le modèle.*?\n(.*?)(?=^## )",
-            card,
-            re.DOTALL | re.MULTILINE,
-        )
-        if not m:
-            die(EXIT_PROMPT, "section « Consignes visibles par le modèle » absente de task.md")
-
-        def dequote(line: str) -> str:
-            # Remove exactly one "> " (or bare ">") quote prefix, nothing else
-            return line[2:] if line.startswith("> ") else line[1:]
-
-        quoted = [line for line in m.group(1).splitlines() if line.startswith(">")]
-        instructions = "\n".join(dequote(line) for line in quoted).strip()
-        if not instructions:
-            die(EXIT_PROMPT, "bloc de consignes vide dans task.md")
-
-    inputs: dict[str, str] = {}
-    for f in sorted(task_dir.glob("*.md")):
-        if is_excluded(f.name):
-            continue
-        if f.is_symlink():
-            warnings.append(f"lien symbolique refusé, non envoyé au modèle : {f.name}")
-            continue
-        # Byte-faithful read: raw bytes decoded, no newline translation, no rewrite
-        inputs[f.name] = f.read_bytes().decode("utf-8")
-
-    # Warn about non-md files and other paths not covered by the send set
-    covered = set(inputs) | EXCLUDED | {override.name if override.exists() else ""}
-    for path in sorted(task_dir.iterdir()):
-        if not path.is_file():
-            continue
-        name = path.name
-        if name in covered or is_excluded(name):
-            continue
-        if name.startswith("."):
-            continue
-        warnings.append(
-            f"fichier non envoyé au modèle, absent du manifeste d’entrée : {name}"
-        )
-
-    parts = [instructions]
-    for name, content in inputs.items():
-        parts.append(f"\n--- FILE: {name} ---\n{content}")
-    return "\n".join(parts), inputs, warnings
+    """New calls require the existing explicit instructions/input manifest"""
+    die(EXIT_PROMPT, "Manifeste explicite requis : utiliser le lock et ses rôles instructions/input ; aucune découverte de fichiers")
 
 
 def _redact_tokens(text: str) -> str:

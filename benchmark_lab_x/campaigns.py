@@ -185,9 +185,11 @@ def _entries(values, fields, label):
 
 
 def _manifest(value, contract):
-    _fields(value, _MANIFEST + (('financial_cost_policy',) if 'financial_cost_policy' in value else ()), 'manifest')
+    _fields(value, _MANIFEST + tuple(k for k in ('financial_cost_policy', 'recovery_of') if k in value), 'manifest')
     if value.get('financial_cost_policy', 'require_observed') not in ('require_observed', 'retain_reserve'):
         raise ValueError('Politique financière inconnue')
+    if 'recovery_of' in value:
+        identifier(value['recovery_of'])
     encode(value)
     identifier(value['campaign_id'])
     if type(value['version']) is not int or value['version'] < 1:
@@ -256,13 +258,16 @@ def _approved(store, connection, fingerprint, *, current=False):
 
 def create(store, manifest):
     value = deepcopy(manifest)
-    _fields(value, _MANIFEST + (('financial_cost_policy',) if 'financial_cost_policy' in value else ()), 'manifest')
+    _fields(value, _MANIFEST + tuple(k for k in ('financial_cost_policy', 'recovery_of') if k in value), 'manifest')
     _intact(store)
     connection = connection_for(store)
     try:
         with _transaction(connection, write=True):
             contract = _approved(store, connection, value['contract_sha256'], current=True)
             _manifest(value, contract)
+            if 'recovery_of' in value:
+                from .recovery import validate_link
+                validate_link(store, connection, value)
             fingerprint = q.digest(value)
             connection.execute('INSERT INTO s4_campaigns VALUES (?,?,?,?)',
                                (value['campaign_id'], value['contract_sha256'], encode(value), fingerprint))
@@ -286,6 +291,9 @@ def _load(store, connection, campaign_id):
         raise IntegrityError('Identité du manifeste divergente')
     contract = _approved(store, connection, row[0])
     _manifest(manifest, contract)
+    if 'recovery_of' in manifest:
+        from .recovery import validate_link
+        validate_link(store, connection, manifest)
     cells = connection.execute('SELECT cell_id, case_id, configuration_id FROM s4_cells '
                                'WHERE campaign_id=? ORDER BY cell_id', (campaign_id,)).fetchall()
     if cells != sorted(tuple(cell[k] for k in ('cell_id', 'case_id', 'configuration_id')) for cell in manifest['plan']):
@@ -367,17 +375,63 @@ def _admissions(connection, manifest, fingerprint):
 
 def _request(store, manifest, fingerprint, contract, cell):
     config = next(c for c in manifest['panel'] if c['id'] == cell['configuration_id'])
-    return dict(campaign_id=manifest['campaign_id'], manifest_sha256=fingerprint,
+    request = dict(campaign_id=manifest['campaign_id'], manifest_sha256=fingerprint,
                 contract_sha256=manifest['contract_sha256'], cell_id=cell['cell_id'], case_id=cell['case_id'],
                 requested_configuration=config, conditions=manifest['conditions'], package=contract['package'],
                 pieces=[dict(id=p['id'], sha256=p['sha256'], content=store.read_piece(p['id']).decode('utf-8'))
                         for p in contract['package']['pieces']])
+    if 'outgoing_format' in contract['package']:
+        from . import outgoing
+        from .preparation import package_check
+        package_check(store, contract['dossier_id'], contract['revision'], contract['package'], contract['package_sha256'])
+        request['outgoing_format'] = contract['package']['outgoing_format']
+        request['pieces'] = [dict(p, role=store.get_piece(p['id'])['role']) for p in request['pieces']]
+        request['outgoing'] = outgoing.candidate(contract['package'], request['pieces'])
+    return request
 
 
 def _engine():
     return {name: sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
             for name in ('campaigns.py', 'storage.py', 'preparation.py', 'qualification.py', 'runtime.py',
-                         'pi_openrouter.py', 'pi_bridge.mjs', 'openrouter_preparation.py')}
+                         'pi_openrouter.py', 'pi_bridge.mjs', 'openrouter_preparation.py', 'recovery.py', 'outgoing.py')}
+
+
+def _transport_view(request):
+    from . import outgoing
+    if request.get('outgoing_format') != outgoing.FORMAT:
+        raise ValueError('Ancien format sortant : nouvelle version de tâche requise')
+    content = request['outgoing']
+    outgoing_view = outgoing.closed_candidate(dict(
+        instruction=content['instruction'], deliverables=list(content['deliverables']),
+        criteria=list(content['criteria']), acceptable_ambiguities=list(content['acceptable_ambiguities']),
+        pieces=[dict(name=piece['name'], content=piece['content']) for piece in content['pieces']]))
+    config = request['requested_configuration']
+    conditions = request['conditions']
+    defaults = conditions.get('defaults') or {}
+    environment = conditions.get('environment') or {}
+    pi = conditions['pi']
+    return dict(
+        outgoing_format=outgoing.FORMAT,
+        outgoing=outgoing_view,
+        requested_configuration=dict(
+            provider=config['provider'], model=config['model'], revision=config['revision'],
+            access=config['access'], channel_id=config['channel_id'], route=config['route'],
+            parameters=deepcopy(config['parameters']), effort=config['effort'],
+            required_observations=list(config['required_observations'])),
+        conditions=dict(
+            pi=dict(package=pi['package'], version=pi['version'], sha256=pi['sha256']),
+            packages=list(conditions['packages']), tools=list(conditions['tools']),
+            skills=list(conditions['skills']), context_sha256=conditions['context_sha256'],
+            defaults={key: defaults[key] for key in ('system_prompt', 'timeout_seconds', 'context_window') if key in defaults},
+            environment={key: environment[key] for key in ('node_version', 'node_sha256', 'bridge_sha256') if key in environment},
+            frozen_at=conditions['frozen_at']))
+
+
+def _transport_operation(operation):
+    value = dict(operation_id=operation['operation_id'], phase=operation['phase'])
+    if operation.get('state') == 'EMISSION_POSSIBLE':
+        value['state'] = 'EMISSION_POSSIBLE'
+    return value
 
 
 def _attribution(receipt, configuration):
@@ -512,10 +566,17 @@ def verify_campaigns(store, connection):
         _inspect(store, connection, cid)
 
 
-def _retained_costs(snapshot):
+def _retained_costs(snapshot, store=None, connection=None):
     if snapshot['manifest'].get('financial_cost_policy') != 'retain_reserve':
         return set()
-    return {a['operation_id'] for a in snapshot['attempts']
+    attempts = list(snapshot['attempts'])
+    if snapshot['manifest'].get('recovery_of'):
+        from .recovery import parent
+        previous, _ = parent(store, connection, snapshot['manifest']['recovery_of'])
+        return _retained_costs(previous, store, connection) | {a['operation_id'] for a in attempts
+                if a['state'] == 'RECEIVED' and not a['attribution_incident']
+                and a['operation']['receipt']['result']['emission'] == 'ESTABLISHED'}
+    return {a['operation_id'] for a in attempts
             if a['state'] == 'RECEIVED' and not a['attribution_incident']
             and a['operation']['receipt']['result']['emission'] == 'ESTABLISHED'}
 
@@ -528,7 +589,7 @@ def _envelope(store, connection, snapshot, authority):
                           and op['budget_id'] == authority['budget_id'] and op['receipt'] is not None]
     if budget['currency'] != snapshot['manifest']['cost_basis']['unit']:
         raise BudgetError('Unité du budget différente de la base de coût')
-    retained = _retained_costs(snapshot)
+    retained = _retained_costs(snapshot, store, connection)
     if (set(budget['unknown_cost_operations']) - retained or Decimal(budget['available']) < 0
             or any(_attribution(op['receipt'], op['requested_configuration'])
                    or op['receipt']['result']['emission'] != 'ESTABLISHED' for op in dependent_receipts)
@@ -612,7 +673,7 @@ def _reserve(store, connection, snapshot, cell_id, attempt_id):
                      authority=authority['authority_id'], engine_version=FORMAT_IDENTITY + ':' + q.digest(engine),
                      requested_configuration=request['requested_configuration'], resources=[digest])
     store._reserve_intent(connection, operation, authority['budget_id'], authority['reserve_amounts'][cell_id],
-                          retained_cost_ids=_retained_costs(snapshot))
+                          retained_cost_ids=_retained_costs(snapshot, store, connection))
     execution_id = secrets.token_hex(16)
     connection.execute('INSERT INTO s4_attempts VALUES (?,?,?,?,?,?,?,?)',
                        (attempt_id, execution_id, campaign_id, cell_id, admission['admission_id'], encode(request), digest, encode(engine)))
@@ -727,8 +788,10 @@ def execute(data, attempt_id, transport=None):
                 raise ConflictError('Ordre de tentative non respecté')
             raw = connection.execute('SELECT request_json FROM s4_attempts WHERE operation_id=?', (attempt_id,)).fetchone()[0]
             request = json.loads(raw)
+            closed_request = _transport_view(request)
+            closed_operation = _transport_operation(attempt['operation'])
             if hasattr(transport, 'prepare'):
-                transport.prepare(deepcopy(attempt['operation']), deepcopy(request), deepcopy(snapshot['budget']))
+                transport.prepare(deepcopy(closed_operation), deepcopy(closed_request))
             connection.execute('INSERT INTO s4_emissions VALUES (?,?,?)', (attempt_id, admission['admission_id'], _now()))
             # Same S1 transition as mark_emission_possible, in the transaction that
             # also freezes the admission actually used by this worker
@@ -736,9 +799,10 @@ def execute(data, attempt_id, transport=None):
             connection.execute("UPDATE operations SET state='EMISSION_POSSIBLE' WHERE operation_id=?", (attempt_id,))
         operation['state'] = 'EMISSION_POSSIBLE'
         try:
-            response = deepcopy(transport(deepcopy(operation), deepcopy(request)))
+            response = deepcopy(transport(_transport_operation(operation), deepcopy(closed_request)))
             _fields(response, ('receipt', 'cost'), 'transport response')
             receipt, cost = response['receipt'], response['cost']
+            receipt['resources_seen'] = [p['id'] for p in request['pieces']]
             _result(receipt, cost)
             with _transaction(connection, write=True):
                 # A stop during the callback must not discard the late receipt
@@ -797,7 +861,7 @@ def projection(store, connection, dossier_id):
             budget['balance_status'] = 'INCONNU' if unresolved else 'KNOWN'
             if unresolved:
                 budget['available'] = None
-        result.append(dict(campaign_id=cid, manifest_sha256=snapshot['manifest_sha256'],
+        result.append(dict(recovery_of=manifest.get('recovery_of'), campaign_id=cid, manifest_sha256=snapshot['manifest_sha256'],
                            contract_sha256=manifest['contract_sha256'], task=snapshot['task'], version=manifest['version'],
                            panel=manifest['panel'], conditions=manifest['conditions'], cases=manifest['cases'],
                            cost_basis=manifest['cost_basis'], cells=snapshot['cells'], attempts=attempts, budget=budget,

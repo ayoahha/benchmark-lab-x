@@ -20,14 +20,14 @@ from benchmark_lab_x import preparation as prep, service, storage
 
 def response_for(operation, *, unknown=False):
     return {'receipt': {'receipt_id': 'fictional-' + operation['operation_id'],
-        'observed_configuration': {'model': 'fictional'}, 'resources_seen': operation['resources'],
+        'observed_configuration': {'model': 'fictional'}, 'resources_seen': [],
         'result': {'stage': 'preview', 'explanation': '', 'reformulation': 'Organiser les notes fictives',
             'fictional_parameters': {'atelier': 'inventé'},
-            'package': {'instruction': 'Organiser les notes fictives', 'deliverables': ['Liste des actions'],
+            'package': {'candidate': {'instruction': 'Organiser les notes fictives', 'deliverables': ['Liste des actions'],
                 'criteria': ['Toutes les actions présentes'], 'acceptable_ambiguities': [],
-                'human_work': 'Relire', 'limits': ['Exemple fictif'],
-                'pieces': [{'name': 'notes.txt', 'role': 'candidate', 'content': 'Action fictive : relire'},
-                           {'name': 'reference.txt', 'role': 'judge', 'content': 'Attendu fictif réservé'}]}}},
+                'pieces': [{'name': 'notes.txt', 'content': 'Action fictive : relire'}]},
+                'internal': {'human_work': 'Relire', 'limits': ['Exemple fictif']},
+                'judgment': {'pieces': [{'name': 'reference.txt', 'content': 'Attendu fictif réservé'}]}}}},
         'cost': {'status': 'UNKNOWN' if unknown else 'KNOWN', 'amount': None if unknown else '3',
                  'currency': 'TEST', 'source': 'Fictional review receipt'}}
 
@@ -83,9 +83,9 @@ class S2ReviewRegressions(unittest.TestCase):
                         def transport(op, request):
                             response = response_for(op, unknown=unknown)
                             if invalid == 'missing_criteria':
-                                del response['receipt']['result']['package']['criteria']
+                                del response['receipt']['result']['package']['candidate']['criteria']
                             elif invalid == 'empty_criteria':
-                                response['receipt']['result']['package']['criteria'] = []
+                                response['receipt']['result']['package']['candidate']['criteria'] = []
                             else:
                                 response['receipt']['result']['stage'] = 'invalid'
                             storage._receipt(response['receipt'], response['cost'])

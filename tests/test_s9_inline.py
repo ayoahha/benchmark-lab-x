@@ -26,7 +26,7 @@ class InlineExampleTests(unittest.TestCase):
 
                 def transport(op, request):
                     result = response_for(op)
-                    result['receipt']['result']['package']['pieces'][0]['content'] = content
+                    result['receipt']['result']['package']['candidate']['pieces'][0]['content'] = content
                     return result
 
                 prep.execute(data, operation, transport)

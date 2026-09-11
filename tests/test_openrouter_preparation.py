@@ -58,12 +58,13 @@ def result(stage='preview'):
                             'suspended': 'Préparation suspendue.'}[stage],
             'reformulation': 'Extraire les décisions et actions des notes françaises.',
             'fictional_parameters': {'association': 'Les Lanternes, inventée'},
-            'package': {'instruction': 'Relever décisions, propositions, actions, responsables et échéances ; signaler les inconnues.',
+            'package': {'candidate': {'instruction': 'Relever décisions, propositions, actions, responsables et échéances ; signaler les inconnues.',
                         'deliverables': ['Relevé structuré'], 'criteria': ['Respect des notes'],
-                        'acceptable_ambiguities': ['Reformulations fidèles'], 'human_work': 'Relire et confirmer les inconnues',
-                        'limits': ['Exercice fictif unique, sans action externe'],
-                        'pieces': [{'name': 'notes.txt', 'role': 'candidate', 'content': NOTES},
-                                   {'name': 'reference.txt', 'role': 'judge', 'content': REFERENCE}]}
+                        'acceptable_ambiguities': ['Reformulations fidèles'],
+                        'pieces': [{'name': 'notes.txt', 'content': NOTES}]},
+                        'internal': {'human_work': 'Relire et confirmer les inconnues',
+                                     'limits': ['Exercice fictif unique, sans action externe']},
+                        'judgment': {'pieces': [{'name': 'reference.txt', 'content': REFERENCE}]}}
                        if stage == 'preview' else None}
 
 
@@ -198,7 +199,7 @@ class OpenRouterPreparationTests(unittest.TestCase):
         _, before = self.execute(action_id='clarify', revision=2, kind='clarify', message=CLARIFICATION)
         prep.validate(self.store, self.session, 'd', prep.binding('d', 3, before['package_sha256']))
         changed = result()
-        changed['package']['criteria'].append('Propositions séparées des décisions ; responsable absent à confirmer')
+        changed['package']['candidate']['criteria'].append('Propositions séparées des décisions ; responsable absent à confirmer')
         self.http.getresponse.return_value.read.return_value = http_body(changed)
         operation, after = self.execute(action_id='correct', revision=3, kind='correct', message=CORRECTION)
         request = json.loads(operation['resources'][0])
@@ -224,7 +225,7 @@ class OpenRouterPreparationTests(unittest.TestCase):
 
     def test_bad_output_keeps_raw_receipt_without_orphan_piece(self):
         broken = result()
-        broken['package']['pieces'][1]['role'] = 'operator'
+        broken['package']['candidate']['pieces'][0]['role'] = 'judge'
         self.http.getresponse.return_value.read.return_value = http_body(broken)
         operation, view = self.execute()
         self.assertEqual('RECEIVED', operation['state'])
@@ -248,7 +249,7 @@ class OpenRouterPreparationTests(unittest.TestCase):
         variants.append((dict(valid, package=None, package_note=None), False))
         for path in ('package', 'piece'):
             nested = deepcopy(valid)
-            target = nested['package'] if path == 'package' else nested['package']['pieces'][0]
+            target = nested['package'] if path == 'package' else nested['package']['candidate']['pieces'][0]
             target['package_note'] = None
             variants.append((dict(nested, package_note=None), False))
         variants.extend([(dict(valid, stage='invalid', package_note=None), False), ([], False)])
@@ -303,9 +304,11 @@ class OpenRouterPreparationTests(unittest.TestCase):
         operation_id = self.submit()
         operation = self.store.inspect_operations()[0]
         request = json.loads(operation['resources'][0])
-        wire = self.transport.prepare(operation, request, self.store.inspect_budget('fixture'))
+        closed = prep._closed_preparation_request(request)
+        closed_op = prep._closed_preparation_operation(operation, conserved_wire=operation['resources'][1],
+                                                      state='EMISSION_POSSIBLE')
+        wire = self.transport.prepare(prep._closed_preparation_operation(operation), closed)
         self.assertEqual(wire, operation['resources'][1])
-        operation['state'] = 'EMISSION_POSSIBLE'
         choices = [{'finish_reason': 'length', 'message': {'role': 'assistant', 'content': '{}'}}]
         tools = [{'finish_reason': 'stop', 'message': {'role': 'assistant', 'content': '{}', 'tool_calls': [{'type': 'function'}]}}]
         for status, raw in [(200, b'not json'), (200, b'{"usage":NaN}'), (200, b'{"model":"x","model":"y"}'), (200, http_body(model='glm-5.3')),
@@ -316,7 +319,7 @@ class OpenRouterPreparationTests(unittest.TestCase):
                 self.http.reset_mock()
                 self.http.getresponse.return_value.status = status
                 self.http.getresponse.return_value.read.return_value = raw
-                response = self.transport(operation, request)
+                response = self.transport(closed_op, closed)
                 self.assertIsNone(response['receipt']['result'])
                 self.assertEqual('KNOWN' if raw in (http_body(choices=choices), http_body(choices=tools), http_body(model='glm-5.3')) else 'UNKNOWN', response['cost']['status'])
                 self.assertEqual(1, self.http.request.call_count)
@@ -324,7 +327,7 @@ class OpenRouterPreparationTests(unittest.TestCase):
         self.http.getresponse.return_value.status = 200
         self.http.getresponse.return_value.length = 17
         self.http.getresponse.return_value.read.return_value = http_body()
-        response = self.transport(operation, request)
+        response = self.transport(closed_op, closed)
         self.assertEqual('UNKNOWN', response['cost']['status'])
         self.assertIsNone(response['receipt']['result'])
         self.assertFalse(response['receipt']['observed_configuration']['http']['complete'])
@@ -361,18 +364,19 @@ class OpenRouterPreparationTests(unittest.TestCase):
         self.assertNotIn(KEY, storage._strict_json(self.store.inspect_operations()))
 
     def test_configuration_budget_and_size_refuse_before_emission(self):
-        for change in ['model', 'reserve', 'currency', 'limit', 'size']:
+        closed = prep._closed_preparation_request(dict(
+            message='x', kind='create', payload=dict(request='x', reformulation='', clarifications=[],
+                                                     validated_assumptions=[], fictional_parameters={}), package=None))
+        for change in ['model', 'size', 'format']:
             with self.subTest(change=change):
-                operation = {'operation_id': 'fixture', 'requested_configuration': assistant.configuration(ESTIMATE), 'phase': 'preparation', 'reserved_amount': RESERVE}
-                request = {'message': 'x'}
-                budget = {'currency': 'USD', 'limit': '100'}
+                operation = {'operation_id': 'fixture', 'requested_configuration': assistant.configuration(ESTIMATE),
+                             'phase': 'preparation', 'state': 'INTENT_RECORDED'}
+                request = deepcopy(closed)
                 if change == 'model': operation['requested_configuration']['model'] = 'glm-5.3'
-                if change == 'reserve': operation['reserved_amount'] = '0'
-                if change == 'currency': budget['currency'] = 'TEST'
-                if change == 'limit': budget['limit'] = '101'
-                if change == 'size': request['message'] *= assistant.MAX_REQUEST_BYTES
+                if change == 'size': request['outgoing']['message'] = 'x' * assistant.MAX_REQUEST_BYTES
+                if change == 'format': request = dict(outgoing_format='legacy', outgoing=request['outgoing'])
                 with self.assertRaises(ValueError):
-                    self.transport.prepare(operation, request, budget)
+                    self.transport.prepare(operation, request)
         self.authority['requested_configuration']['model'] = 'glm-5.3'
         prep.admit(self.store, self.authority)
         with self.assertRaises(ValueError):
@@ -380,6 +384,44 @@ class OpenRouterPreparationTests(unittest.TestCase):
         self.assertEqual([], self.store.inspect_operations())
         self.assertEqual('0', self.store.inspect_budget('fixture')['reserved'])
         self.assertEqual(self.authority, prep.admission(self.store))
+        self.http.request.assert_not_called()
+
+    def test_usd_envelope_refuses_before_http(self):
+        self.store.create_budget('other', '100', 'TEST')
+        self.store.create_budget('wide', '101', 'USD')
+        cases = [('reserve', dict(reserve_amount='0')),
+                 ('currency', dict(budget_id='other')),
+                 ('limit', dict(budget_id='wide'))]
+        for name, change in cases:
+            with self.subTest(change=name):
+                prep.close_admission(self.store)
+                prep.admit(self.store, dict(self.authority, **change))
+                self.http.request.reset_mock()
+                with self.assertRaises(ValueError):
+                    self.submit(action_id='case-' + name, request=NEED)
+                self.http.request.assert_not_called()
+                self.assertEqual([], self.store.inspect_operations())
+
+    def test_divergent_package_fingerprint_refuses_before_prepare(self):
+        _, view = self.execute()
+        raw, digest = self.store._connection.execute(
+            'SELECT package_json, package_sha256 FROM s2_revisions WHERE dossier_id=? AND revision=?',
+            ('d', view['revision'])).fetchone()
+        package = json.loads(raw)
+        package['instruction'] = 'Paquet altéré'
+        self.store._connection.execute(
+            'UPDATE s2_revisions SET package_json=? WHERE dossier_id=? AND revision=?',
+            (storage._strict_json(package), 'd', view['revision']))
+        self.assertEqual(digest, self.store._connection.execute(
+            'SELECT package_sha256 FROM s2_revisions WHERE dossier_id=? AND revision=?',
+            ('d', view['revision'])).fetchone()[0])
+        prepared = []
+        original = self.transport.prepare
+        self.transport.prepare = lambda *args, **kwargs: prepared.append(True) or original(*args, **kwargs)
+        self.http.request.reset_mock()
+        with self.assertRaises(storage.IntegrityError):
+            self.submit(action_id='tamper', revision=view['revision'], kind='correct', message=CORRECTION)
+        self.assertEqual([], prepared)
         self.http.request.assert_not_called()
 
     def test_reservation_uses_model_prices_without_provider_price_requirements(self):

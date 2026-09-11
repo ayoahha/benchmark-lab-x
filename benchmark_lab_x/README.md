@@ -549,7 +549,10 @@ Les commandes suivantes utilisent la même interface opérateur privée que l’
 python3 -B -m benchmark_lab_x.runtime inspect-pi --pi-package /chemin/pi-coding-agent --node /chemin/node
 python3 -B -m benchmark_lab_x.runtime reserve-candidate --data /chemin/prive/benchmark --authority /chemin/prive/reservation.json
 python3 -B -m benchmark_lab_x.runtime execute-candidate --data /chemin/prive/benchmark --authority /chemin/prive/tentative.json --pi-package /chemin/pi-coding-agent --node /chemin/node
+python3 -B -m benchmark_lab_x.runtime inspect-model-profile --data /chemin/prive/benchmark --authority /chemin/prive/identite-transport.json
 ```
+
+`identite-transport.json` contient exactement `provider`, `model`, `revision`, `access`, `channel_id` et `outgoing_format`. La commande ne cherche pas par le seul nom de modèle. Un profil retrouvé décrit une réponse de transport `COMPLETE`, pas un verdict de tâche.
 
 `inspect-pi` n’appelle aucun modèle. Il donne `package`, `version`, `sha256` à reprendre dans `conditions.pi`, et `bridge_sha256`, `node_version`, `node_sha256` à reprendre dans `conditions.environment`. L’empreinte Pi couvre les modules installés coding-agent, agent-core et pi-ai ainsi que le verrou de dépendances du paquet ; elle ne vérifie pas les octets installés de toutes les dépendances transitives. Ces dépendances restent à installer depuis le verrou et à qualifier dans l’environnement cible.
 

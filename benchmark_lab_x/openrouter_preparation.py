@@ -10,7 +10,7 @@ import re
 import time
 
 from .storage import _strict_json as encode, _unique_object, _money
-from . import openrouter_prices
+from . import openrouter_prices, outgoing
 
 
 MODEL = 'z-ai/glm-5.3-flash'
@@ -60,17 +60,22 @@ Réponds uniquement par un objet JSON avec exactement ces cinq champs :
  "fictional_parameters":{"paramètre":"valeur entièrement inventée"},
  "package":null}
 Pour preview seulement, package remplace null par un objet avec exactement :
-{"instruction":"consigne candidate", "deliverables":["livrable"],
- "criteria":["obligation vérifiable"], "acceptable_ambiguities":["ambiguïté"],
- "human_work":"relecture humaine restante", "limits":["portée limitée"],
- "pieces":[{"name":"notes.txt","role":"candidate","content":"texte inventé"},
- {"name":"reference.txt","role":"judge","content":"attendus étayés"}]}
-Les listes peuvent être vides sauf deliverables, criteria et pieces.
-Chaque pièce a exactement name, role (candidate ou judge) et content texte.
-Un preview contient au moins une pièce de chaque rôle. Sinon package est null
-et explanation explique la question ou l'arrêt. N'ajoute aucun autre champ.
-L'objet utilisateur contient message, kind, payload (besoin et accords), stage,
-explanation, package et pieces_seen (octets précédents à conserver si pertinent).
+{"candidate":{"instruction":"consigne candidate","deliverables":["livrable"],
+ "criteria":["obligation vérifiable"],"acceptable_ambiguities":["ambiguïté"],
+ "pieces":[{"name":"notes.txt","content":"texte inventé"}]},
+ "internal":{"human_work":"relecture humaine restante","limits":["portée limitée"]},
+ "judgment":{"pieces":[{"name":"reference.txt","content":"attendus étayés"}]}}
+Les listes candidate.deliverables, candidate.criteria, candidate.pieces et
+judgment.pieces sont non vides. Chaque pièce a exactement name et content texte.
+Aucun champ role : le conteneur fixe le rôle. Noms uniques entre candidate et
+judgment. Sinon package est null et explanation explique la question ou l'arrêt.
+N'ajoute aucun autre champ.
+L'objet utilisateur contient request, message, reformulation, clarifications,
+validated_assumptions, fictional_parameters et previous_candidate. Ce dernier
+contient seulement la consigne, les livrables, les critères publics, les ambiguïtés
+et les pièces candidates antérieures utiles. Reconstruis la référence de jugement
+sans ancien verdict ni ancienne référence. human_work et limits sont des notes
+internes : les contraintes nécessaires au candidat doivent être dans instruction.
 """
 
 
@@ -112,7 +117,7 @@ def configuration(estimate=None):
     value = {'provider': 'OpenRouter', 'model': MODEL, 'access': 'API', 'endpoint': ENDPOINT,
              'route': 'Native OpenRouter fallback within the three explicit endpoint slugs, in configured order',
              'reserve_basis': 'Indicative model token reference; explicit admission reserve remains counted, no invoice cap',
-             'parameters': deepcopy(PARAMETERS), 'prompt_sha256': sha256(SYSTEM_PROMPT.encode()).hexdigest(),
+             'outgoing_format': outgoing.FORMAT, 'parameters': deepcopy(PARAMETERS), 'prompt_sha256': sha256(SYSTEM_PROMPT.encode()).hexdigest(),
              'max_request_bytes': MAX_REQUEST_BYTES, 'max_response_bytes': MAX_RESPONSE_BYTES,
              'timeout_seconds': TIMEOUT_SECONDS, 'cost_method': deepcopy(USAGE_METHOD)}
     if estimate is not None:
@@ -173,25 +178,32 @@ class OpenRouterPreparation:
             raise ValueError('Clé OpenRouter explicite requise côté exécuteur')
         self._api_key = api_key
 
-    def prepare(self, operation, request, budget):
+    def prepare(self, operation, request):
         requested = operation['requested_configuration']
         expected = configuration(requested.get('reservation_estimate'))
         if ('reserve_usd' not in expected or requested != expected
-                or operation['phase'] not in ('preparation', 'correction')
-                or budget['currency'] != 'USD' or _money(budget['limit']) > Decimal('100')
-                or (expected['reserve_usd'] is not None
-                    and _money(operation['reserved_amount']) < _money(expected['reserve_usd']))):
+                or operation['phase'] not in ('preparation', 'correction')):
             raise ValueError('Configuration ou réservation OpenRouter divergente')
+        if request.get('outgoing_format') != outgoing.FORMAT:
+            raise ValueError('Ancien format sortant : nouvelle préparation requise')
+        content = outgoing.closed_preparation(request['outgoing'])
         wire = encode({'model': MODEL, **PARAMETERS, 'messages': [
-            {'role': 'system', 'content': SYSTEM_PROMPT}, {'role': 'user', 'content': encode(request)}]})
+            {'role': 'system', 'content': SYSTEM_PROMPT}, {'role': 'user', 'content': encode(content)}]})
         if len(wire.encode()) > MAX_REQUEST_BYTES or self._api_key in wire:
             raise ValueError('Requête hors limites')
+        self._wire = wire
+        self._wire_sha256 = sha256(wire.encode()).hexdigest()
         return wire
 
     def __call__(self, operation, request):
-        if operation['state'] != 'EMISSION_POSSIBLE' or len(operation['resources']) != 2:
+        if operation['state'] != 'EMISSION_POSSIBLE':
             raise ValueError('Intention HTTP persistée requise')
-        wire = operation['resources'][1]
+        if operation['requested_configuration'].get('outgoing_format') != outgoing.FORMAT:
+            raise ValueError('Ancienne intention : nouvelle préparation requise')
+        wire = operation.get('conserved_wire')
+        if (type(wire) is not str or getattr(self, '_wire_sha256', None) is None
+                or sha256(wire.encode()).hexdigest() != self._wire_sha256 or self._api_key in wire):
+            raise ValueError('Corps préparé divergent')
         expected_models = operation['requested_configuration']['model_identities']
         named_providers = {row['provider_name'] for row in operation['requested_configuration']['reservation_estimate']['endpoints']}
         status, safe_headers, raw, complete, started, clock = post(self._api_key, wire)
@@ -252,7 +264,7 @@ class OpenRouterPreparation:
         selected = route.get('endpoints', {}).get('available', []) if type(route) is dict and type(route.get('endpoints')) is dict else []
         providers = [row.get('provider') for row in selected if type(row) is dict and row.get('selected') is True] if type(selected) is list else []
         provider = providers[0] if len(providers) == 1 and type(providers[0]) is str and providers[0] in PROVIDERS.values() else None
-        observed = {'model': model if type(model) is str else None, 'revision': None,
+        observed = {'outgoing': outgoing.wire_proof(wire, json.loads(wire)['messages']), 'model': model if type(model) is str else None, 'revision': None,
                     'generation_id': (document.get('id') if type(document) is dict else None) or safe_headers.get('X-Generation-Id'),
                     'provider': provider, 'route': route if type(route) is dict else None,
                     'routing_limit': ('Reported internal attempt exceeds the number of permitted providers; no internal retry cap is documented'

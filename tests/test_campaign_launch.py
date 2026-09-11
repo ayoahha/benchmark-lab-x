@@ -122,7 +122,7 @@ class CampaignLaunch(unittest.TestCase):
         op, _ = p.submit(self.store, self.sid, 'fixture', dict(action_id='change', revision=view['revision'], kind='correct', message='Nouvelle consigne'), 'a'*40, True)
         def changed(operation, request):
             value = response_for(operation)
-            value['receipt']['result']['package']['instruction'] = 'Consigne révisée'
+            value['receipt']['result']['package']['candidate']['instruction'] = 'Consigne révisée'
             return value
         p.execute(self.data, op, changed)
         with self.assertRaises((ValueError, storage.ConflictError)):

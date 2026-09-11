@@ -272,7 +272,7 @@ class PiTransportTests(unittest.TestCase):
         request = json.loads(self.store._connection.execute(
             'SELECT request_json FROM s4_attempts WHERE operation_id=?', ('pi-intent',)).fetchone()[0])
         operation = next(o for o in self.store.inspect_operations() if o['operation_id'] == 'pi-intent')
-        self.transport.prepare(operation, request, self.store.inspect_budget('pi-offline'))
+        self.transport.prepare(c._transport_operation(operation), c._transport_view(request))
         clean = json.loads(self.raw)
         reflected = deepcopy(clean)
         reflected['choices'][0]['message']['content'] = self.transport._key
