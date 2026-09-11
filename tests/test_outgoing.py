@@ -103,8 +103,10 @@ class PreparationHTTP(unittest.TestCase):
     def test_queued_preparation_from_old_prompt_never_marks_emission(self):
         f=prep_fixture.OpenRouterPreparationTests();f.setUp();self.addCleanup(f.doCleanups)
         oid=f.submit()
-        with patch.object(assistant,'SYSTEM_PROMPT',assistant.SYSTEM_PROMPT+' Different format'):
-            prep.execute(f.data,oid,f.transport)
+        other=assistant.frozen_profile()
+        other['system']=other['system']+' Different format'
+        changed=assistant.OpenRouterPreparation(KEY, other)
+        prep.execute(f.data,oid,changed)
         op=next(x for x in f.store.inspect_operations() if x['operation_id']==oid)
         self.assertEqual('INTENT_RECORDED',op['state'])
         f.http.request.assert_not_called()
