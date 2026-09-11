@@ -1,12 +1,16 @@
-"""Receipt-driven recovery proposals; each emission still needs private admission"""
+"""Receipt-driven recovery; auto-execution needs a frozen owner preauthorization"""
 from base64 import b64decode
+from contextlib import closing
 from copy import deepcopy
 from decimal import Decimal
 from hashlib import sha256
 import json
+import os
+import sqlite3
 
 from . import campaigns as c, qualification as q, outgoing
-from .storage import BudgetError, ConflictError, IntegrityError, _fields, _money, _transaction
+from .preparation import identifier
+from .storage import BudgetError, ConflictError, IntegrityError, Store, _fields, _money, _transaction
 
 _IDENTITY = ('provider', 'model', 'revision', 'access', 'channel_id')
 _UNRECOVERABLE = {'MODEL_IDENTITY_MISMATCH', 'PROVIDER_ROUTE_MISMATCH', 'HARNESS_ERROR'}
@@ -144,70 +148,90 @@ def profile(store, identity):
     return None
 
 
+def derive_child(source_manifest, attempt, observed, capabilities, *, budget_id, earlier_output_chars=None):
+    """Pure child manifest from a receipt and frozen capabilities, without a live budget check"""
+    if observed['kind'] not in _RECOVERABLE:
+        raise ValueError('Aucune reprise automatique de ce reçu')
+    manifest = deepcopy(source_manifest)
+    cell = next(x for x in manifest['plan'] if x['cell_id'] == attempt['cell_id'])
+    config = next(x for x in manifest['panel'] if x['id'] == cell['configuration_id'])
+    if capabilities['id'] != config['model']:
+        raise ValueError('Capacités d’un autre modèle')
+    if source_manifest.get('recovery_of') and observed['kind'] == 'LENGTH':
+        if earlier_output_chars is None or observed['output_chars'] <= earlier_output_chars:
+            raise ValueError('Arrêt : aucune progression de sortie')
+    params = config['parameters']
+    allowed = params['provider']['only']
+    endpoints = [e for tag in allowed for e in capabilities['endpoints']
+                 if e['tag'] == tag and e['status'] == 0]
+    if observed['kind'] in ('ROUTE_ERROR', 'EMPTY_OUTPUT'):
+        if not observed['route']:
+            raise ValueError('Endpoint fautif non attribué')
+        endpoints = [e for e in endpoints if e['tag'] != observed['route']]
+    if not endpoints:
+        raise ValueError('Endpoints autorisés épuisés')
+    input_tokens = observed['usage'].get('prompt_tokens')
+    if type(input_tokens) is not int or input_tokens < 0:
+        raise ValueError('Quantité d’entrée non établie')
+    limit = min(manifest['conditions']['defaults']['context_window'] - input_tokens,
+                *(min(e['max_completion_tokens'], e['context_length'] - input_tokens) for e in endpoints))
+    if observed['kind'] == 'LENGTH':
+        params['max_tokens'] = min(params['max_tokens'] * 2, limit)
+        if params['max_tokens'] <= attempt['operation']['requested_configuration']['parameters']['max_tokens']:
+            raise ValueError('Limite modèle atteinte')
+    if params['max_tokens'] > limit:
+        raise ValueError('Limite endpoint atteinte')
+    for e in endpoints:
+        if not set(params).difference({'provider', 'stream'}) <= set(e['supported_parameters']):
+            raise ValueError('Paramètres non pris en charge')
+    tags = [e['tag'] for e in endpoints]
+    params['provider'].update(only=tags, order=tags)
+    config['route'] = 'OpenRouter ordered endpoints: ' + ','.join(tags)
+    # Reserve the full declared context as input, without a speculative discount
+    reserves = []
+    for e in endpoints:
+        pricing = e['pricing']
+        if pricing.keys() - {'prompt','completion','input_cache_read','input_cache_write','discount'}:
+            raise ValueError('Tarification additionnelle à vérifier')
+        reserves.append(_money(pricing['prompt']) * manifest['conditions']['defaults']['context_window']
+                        + _money(pricing['completion']) * params['max_tokens'])
+    reserve = max(reserves)
+    manifest.update(campaign_id='recovery-' + q.digest([attempt['operation_id'], params])[:40],
+                    recovery_of=attempt['operation_id'], panel=[config], plan=[cell],
+                    attempt_policy=dict(retries=False, order=[cell['cell_id']],
+                    reason='Reprise technique liée au reçu ' + attempt['operation_id'] + ' ; aucune sélection sémantique'))
+    return dict(manifest=manifest, reserve_amount=str(reserve), budget_id=budget_id,
+                source_receipt=observed, capabilities_sha256=q.digest(capabilities))
+
+
+def _progress_chars(store, connection, source_manifest, observed):
+    if not source_manifest.get('recovery_of') or observed['kind'] != 'LENGTH':
+        return None
+    _, earlier = parent(store, connection, source_manifest['recovery_of'])
+    return observation(earlier)['output_chars']
+
+
+def _proposal(store, connection, operation_id, capabilities):
+    """Shared proposal body; caller owns the enclosing transaction"""
+    snapshot, attempt = parent(store, connection, operation_id)
+    contract = c._approved(store, connection, snapshot['manifest']['contract_sha256'])
+    if contract['package'].get('outgoing_format') != outgoing.FORMAT:
+        raise ValueError('Ancien contenu : nouvelle comparaison requise')
+    observed = observation(attempt)
+    proposal = derive_child(snapshot['manifest'], attempt, observed, capabilities,
+                            budget_id=snapshot['admissions'][-1]['authority']['budget_id'],
+                            earlier_output_chars=_progress_chars(store, connection, snapshot['manifest'], observed))
+    budget = c._envelope(store, connection, snapshot, snapshot['admissions'][-1]['authority'])
+    if _money(proposal['reserve_amount']) > Decimal(budget['available']):
+        raise BudgetError('Budget de reprise insuffisant')
+    return proposal
+
+
 def propose(store, operation_id, capabilities):
-    """No call or write: adapt from a receipt and freshly supplied public metadata"""
+    """No call or write: adapt from a receipt and already supplied public metadata"""
     connection = c.connection_for(store)
     with _transaction(connection):
-        snapshot, attempt = parent(store, connection, operation_id)
-        contract = c._approved(store, connection, snapshot['manifest']['contract_sha256'])
-        if contract['package'].get('outgoing_format') != outgoing.FORMAT:
-            raise ValueError('Ancien contenu : nouvelle comparaison requise')
-        observed = observation(attempt)
-        if observed['kind'] not in _RECOVERABLE:
-            raise ValueError('Aucune reprise automatique de ce reçu')
-        manifest = deepcopy(snapshot['manifest'])
-        cell = next(x for x in manifest['plan'] if x['cell_id'] == attempt['cell_id'])
-        config = next(x for x in manifest['panel'] if x['id'] == cell['configuration_id'])
-        if capabilities['id'] != config['model']:
-            raise ValueError('Capacités d’un autre modèle')
-        if manifest.get('recovery_of') and observed['kind'] == 'LENGTH':
-            _, earlier = parent(store, connection, manifest['recovery_of'])
-            if observed['output_chars'] <= observation(earlier)['output_chars']:
-                raise ValueError('Arrêt : aucune progression de sortie')
-        params = config['parameters']
-        allowed = params['provider']['only']
-        endpoints = [e for tag in allowed for e in capabilities['endpoints']
-                     if e['tag'] == tag and e['status'] == 0]
-        if observed['kind'] in ('ROUTE_ERROR', 'EMPTY_OUTPUT'):
-            if not observed['route']:
-                raise ValueError('Endpoint fautif non attribué')
-            endpoints = [e for e in endpoints if e['tag'] != observed['route']]
-        if not endpoints:
-            raise ValueError('Endpoints autorisés épuisés')
-        input_tokens = observed['usage'].get('prompt_tokens')
-        if type(input_tokens) is not int or input_tokens < 0:
-            raise ValueError('Quantité d’entrée non établie')
-        limit = min(manifest['conditions']['defaults']['context_window'] - input_tokens,
-                    *(min(e['max_completion_tokens'], e['context_length'] - input_tokens) for e in endpoints))
-        if observed['kind'] == 'LENGTH':
-            params['max_tokens'] = min(params['max_tokens'] * 2, limit)
-            if params['max_tokens'] <= attempt['operation']['requested_configuration']['parameters']['max_tokens']:
-                raise ValueError('Limite modèle atteinte')
-        if params['max_tokens'] > limit:
-            raise ValueError('Limite endpoint atteinte')
-        for e in endpoints:
-            if not set(params).difference({'provider', 'stream'}) <= set(e['supported_parameters']):
-                raise ValueError('Paramètres non pris en charge')
-        tags = [e['tag'] for e in endpoints]
-        params['provider'].update(only=tags, order=tags)
-        config['route'] = 'OpenRouter ordered endpoints: ' + ','.join(tags)
-        # Reserve the full declared context as input, without a speculative discount
-        reserves = []
-        for e in endpoints:
-            pricing = e['pricing']
-            if pricing.keys() - {'prompt','completion','input_cache_read','input_cache_write','discount'}:
-                raise ValueError('Tarification additionnelle à vérifier')
-            reserves.append(_money(pricing['prompt']) * manifest['conditions']['defaults']['context_window']
-                            + _money(pricing['completion']) * params['max_tokens'])
-        reserve = max(reserves)
-        budget = c._envelope(store, connection, snapshot, snapshot['admissions'][-1]['authority'])
-        if reserve > Decimal(budget['available']):
-            raise BudgetError('Budget de reprise insuffisant')
-        manifest.update(campaign_id='recovery-' + q.digest([operation_id, params])[:40], recovery_of=operation_id,
-                        panel=[config], plan=[cell], attempt_policy=dict(retries=False, order=[cell['cell_id']],
-                        reason='Reprise technique liée au reçu ' + operation_id + ' ; aucune sélection sémantique'))
-        return dict(manifest=manifest, reserve_amount=str(reserve), budget_id=budget['budget_id'],
-                    source_receipt=observed, capabilities_sha256=q.digest(capabilities))
+        return _proposal(store, connection, operation_id, capabilities)
 
 
 def starting_configuration(store, configuration, *, content_format=None):
@@ -222,3 +246,209 @@ def starting_configuration(store, configuration, *, content_format=None):
     proposed['route'] = learned['route']
     proposed['effort'] = learned['effort']
     return dict(configuration=proposed, profile=learned)
+
+
+def _capability(value):
+    _fields(value, ('id', 'endpoints'), 'frozen capabilities')
+    c._present(value['id'], 'identifiant de modèle')
+    if type(value['endpoints']) is not list or not value['endpoints']:
+        raise ValueError('Endpoints figés requis')
+    for endpoint in value['endpoints']:
+        needed = ('tag', 'status', 'max_completion_tokens', 'context_length', 'supported_parameters', 'pricing')
+        if type(endpoint) is not dict or any(key not in endpoint for key in needed):
+            raise ValueError('Endpoint figé incomplet')
+        c._present(endpoint['tag'], 'étiquette d’endpoint')
+        if type(endpoint['status']) is not int:
+            raise ValueError('Statut d’endpoint figé requis')
+        if type(endpoint['max_completion_tokens']) is not int or endpoint['max_completion_tokens'] < 0:
+            raise ValueError('Plafond de sortie figé requis')
+        if type(endpoint['context_length']) is not int or endpoint['context_length'] < 0:
+            raise ValueError('Contexte figé requis')
+        q._texts(endpoint['supported_parameters'], 'supported_parameters', unique=True)
+        pricing = endpoint['pricing']
+        if type(pricing) is not dict:
+            raise ValueError('Tarifs figés requis')
+        if pricing.keys() - {'prompt', 'completion', 'input_cache_read', 'input_cache_write', 'discount'}:
+            raise ValueError('Tarification additionnelle à vérifier')
+        for key in ('prompt', 'completion'):
+            if key not in pricing:
+                raise ValueError('Tarifs figés requis')
+            _money(pricing[key])
+    q.digest(value)
+
+
+def validate_grant(grant, *, purpose, recovery):
+    if purpose != 'start' or recovery:
+        raise ValueError('Préautorisation figée à l’admission propriétaire initiale')
+    _fields(grant, ('capabilities',), 'technical recovery')
+    capabilities = grant['capabilities']
+    if type(capabilities) is dict:
+        items = [capabilities]
+    elif type(capabilities) is list and capabilities:
+        items = capabilities
+    else:
+        raise ValueError('Capacités figées requises')
+    seen = set()
+    for item in items:
+        _capability(item)
+        if item['id'] in seen:
+            raise ValueError('Capacités dupliquées')
+        seen.add(item['id'])
+
+
+def validate_derived_from(value):
+    _fields(value, ('admission_id', 'operation_id', 'manifest_sha256'), 'derived recovery authority')
+    identifier(value['admission_id'])
+    identifier(value['operation_id'])
+    q._hash(value['manifest_sha256'])
+
+
+def bind_derived(store, connection, manifest, authority, *, stored=False):
+    error = IntegrityError if stored else ValueError
+    derived = authority['derived_from']
+    if manifest.get('recovery_of') != derived['operation_id']:
+        raise error('Admission dérivée sans reçu source')
+    row = connection.execute('SELECT record_json, record_sha256 FROM s4_admissions WHERE admission_id=?',
+                             (derived['admission_id'],)).fetchone()
+    if row is None:
+        raise error('Admission propriétaire absente')
+    source = q._decode(row[0], row[1])
+    owner = source['authority']
+    if 'technical_recovery' not in owner:
+        raise error('Préautorisation propriétaire absente')
+    if owner['manifest_sha256'] != derived['manifest_sha256']:
+        raise error('Empreinte propriétaire divergente')
+    for key in ('actor', 'authority_id', 'execution_authority', 'candidate_authority', 'budget_authority', 'budget_id'):
+        if authority[key] != owner[key]:
+            raise error('Autorité dérivée divergente')
+    try:
+        parent_snapshot, attempt = parent(store, connection, derived['operation_id'])
+        observed = observation(attempt)
+        capabilities = frozen_capabilities(owner['technical_recovery'],
+                                           attempt['operation']['requested_configuration']['model'])
+        expected = derive_child(parent_snapshot['manifest'], attempt, observed, capabilities,
+                                budget_id=owner['budget_id'],
+                                earlier_output_chars=_progress_chars(store, connection, parent_snapshot['manifest'], observed))
+    except (ValueError, ConflictError, IntegrityError) as exc:
+        raise error('Reprise dérivée non reconstruite') from exc
+    cell = expected['manifest']['plan'][0]['cell_id']
+    if (q.digest(manifest) != q.digest(expected['manifest'])
+            or authority['budget_id'] != expected['budget_id']
+            or authority['reserve_amounts'] != {cell: expected['reserve_amount']}):
+        raise error('Manifeste dérivé non conforme à la préautorisation')
+
+
+def frozen_capabilities(grant, model):
+    capabilities = grant['capabilities']
+    items = [capabilities] if type(capabilities) is dict else list(capabilities)
+    match = [item for item in items if item['id'] == model]
+    if len(match) != 1:
+        raise ValueError('Capacités d’un autre modèle')
+    return deepcopy(match[0])
+
+
+def _owner_grant(store, connection, snapshot):
+    current = snapshot
+    while current['manifest'].get('recovery_of'):
+        current, _ = parent(store, connection, current['manifest']['recovery_of'])
+    start = next((record for record in current['admissions'] if record['authority']['purpose'] == 'start'), None)
+    if start is None:
+        return None, None
+    return start, start['authority'].get('technical_recovery')
+
+
+def _derive_authority(owner_record, snapshot, operation_id, reserve_amount, budget_id):
+    owner = owner_record['authority']
+    cell = snapshot['manifest']['plan'][0]['cell_id']
+    return dict(
+        actor=owner['actor'], authority_id=owner['authority_id'], purpose='start',
+        manifest_sha256=snapshot['manifest_sha256'], execution_authority=owner['execution_authority'],
+        candidate_authority=owner['candidate_authority'], budget_authority=owner['budget_authority'],
+        budget_id=budget_id, allowed_cells=[cell], reserve_amounts={cell: reserve_amount},
+        derived_from=dict(admission_id=owner_record['admission_id'], operation_id=operation_id,
+                          manifest_sha256=owner['manifest_sha256']))
+
+
+def _derive_evidence(owner_record, snapshot):
+    source = owner_record['evidence']
+    config = snapshot['manifest']['panel'][0]
+    channel = deepcopy(source['channels'][config['id']])
+    channel['route'] = config['route']
+    return dict(pi_sha256=source['pi_sha256'], context_sha256=source['context_sha256'],
+                channels={config['id']: channel}, confinement=deepcopy(source['confinement']))
+
+
+def _next_preauthorized_attempt(store, operation_id):
+    c._intact(store)
+    connection = c.connection_for(store)
+    try:
+        with _transaction(connection, write=True):
+            snapshot, attempt = parent(store, connection, operation_id)
+            if (attempt['state'] != 'RECEIVED' or attempt['attribution_incident']
+                    or snapshot['admission'] is None
+                    or os.path.lexists(store._root / 'restore.json')):
+                return None
+            owner, grant = _owner_grant(store, connection, snapshot)
+            if grant is None:
+                return None
+            try:
+                observed = observation(attempt)
+            except (ValueError, ConflictError, IntegrityError):
+                return None
+            if observed['kind'] not in _RECOVERABLE:
+                return None
+            model = attempt['operation']['requested_configuration']['model']
+            try:
+                capabilities = frozen_capabilities(grant, model)
+            except ValueError:
+                return None
+            proposal = _proposal(store, connection, operation_id, capabilities)
+            cid = proposal['manifest']['campaign_id']
+            try:
+                c._create(store, connection, deepcopy(proposal['manifest']))
+            except ConflictError:
+                existing = c._inspect(store, connection, cid)
+                if existing['manifest_sha256'] != q.digest(proposal['manifest']):
+                    return None
+            snap = c._inspect(store, connection, cid)
+            if snap['admission'] is None:
+                if snap['admissions']:
+                    return None
+                authority = _derive_authority(owner, snap, operation_id,
+                                              proposal['reserve_amount'], proposal['budget_id'])
+                evidence = _derive_evidence(owner, snap)
+                c._admit(store, connection, cid, authority, evidence)
+                snap = c._inspect(store, connection, cid)
+            admission = snap['admission']
+            if admission is None:
+                raise ConflictError('Admission dérivée absente')
+            cell = snap['manifest']['plan'][0]['cell_id']
+            existing_attempt = next((row for row in snap['attempts'] if row['cell_id'] == cell), None)
+            if existing_attempt is not None:
+                if existing_attempt['state'] != 'INTENT_RECORDED':
+                    return None
+                return existing_attempt['operation_id']
+            oid = 'recovery-' + q.digest([cid, cell, admission['admission_id']])[:40]
+            try:
+                c._reserve(store, connection, snap, cell, oid)
+            except sqlite3.IntegrityError:
+                snap = c._inspect(store, connection, cid)
+                existing_attempt = next((row for row in snap['attempts'] if row['cell_id'] == cell), None)
+                if existing_attempt and existing_attempt['state'] == 'INTENT_RECORDED':
+                    return existing_attempt['operation_id']
+                raise
+            return oid
+    except (ValueError, KeyError, ConflictError, BudgetError, IntegrityError, sqlite3.IntegrityError):
+        return None
+
+
+def continue_preauthorized(data, operation_id, transport):
+    """Create, admit, reserve and execute the next frozen recovery, or stop"""
+    try:
+        with closing(Store(data)) as store:
+            nxt = _next_preauthorized_attempt(store, operation_id)
+        if nxt is None:
+            return
+        c.execute(data, nxt, transport)
+    except (ValueError, KeyError, ConflictError, BudgetError, IntegrityError):
+        return
