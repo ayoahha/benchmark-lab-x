@@ -46,7 +46,7 @@ def executor_health(path):
         return result
 
 
-def serve_executor(data, socket_path, source, *, transport=None):
+def serve_executor(data, socket_path, source, *, transport=None, candidate_transport=None, candidate_transport_factory=None):
     data, socket_path = Path(data), Path(socket_path)
     with closing(Store(data)) as store:
         lock_fd = os.open(data / 'executor.lock', os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -78,13 +78,17 @@ def serve_executor(data, socket_path, source, *, transport=None):
                             try:
                                 code, value, cookie, start = preparation.dispatch(
                                     store, message['method'], message['path'], message['token'], message['body'],
-                                    source, transport)
-                                if start:
+                                    source, transport, candidate_transport=candidate_transport or candidate_transport_factory)
+                                if isinstance(start, dict):
+                                    from .campaigns import execute_launch
+                                    threading.Thread(target=execute_launch, args=(data, start['candidate_attempts'], candidate_transport),
+                                                     kwargs={'transport_factory': candidate_transport_factory}, daemon=True).start()
+                                elif start:
                                     threading.Thread(target=preparation.execute, args=(data, start, transport), daemon=True).start()
                                 result = {'status': code, 'value': value.hex() if isinstance(value, bytes) else value,
                                           'piece': isinstance(value, bytes), 'cookie': cookie}
                             except preparation.Denied:
-                                result = {'status': 403, 'value': {'error': 'Accès refusé : session, CSRF ou admission requis.'}}
+                                result = {'status': 403, 'value': {'error': 'Cette action n’est pas autorisée pour votre session. Retrouvez votre dossier ou demandez au responsable de vérifier son autorisation.'}}
                             except (ConflictError, BudgetError):
                                 result = {'status': 409, 'value': {'error': 'Action refusée : révision périmée, opération en attente ou budget indisponible. Consultez le dossier courant.'}}
                             except (ValueError, KeyError, TypeError, sqlite3.Error):
@@ -202,6 +206,10 @@ def serve_web(address, port, public, socket_path, source):
                 if result.get('cookie'):
                     token = result['cookie']
                     headers['Set-Cookie'] = ('benchmark_session=' + token + '; HttpOnly; Secure; SameSite=Strict; Path=/preparation')
+                if self.command == 'POST' and self.path.endswith('/start') and result['status'] < 400 and not wants_json:
+                    headers['Location'] = self.path[:-5] + 'conditions'
+                    self.respond(303, b'', 'text/html; charset=utf-8', headers)
+                    return
                 if result.get('piece'):
                     headers['Content-Disposition'] = 'inline; filename="piece.txt"'
                     self.respond(result['status'], bytes.fromhex(result['value']), 'text/plain; charset=utf-8', headers)
@@ -227,7 +235,7 @@ def serve_web(address, port, public, socket_path, source):
                 self.respond(400, value if wants_json else preparation.render(value, '', error=True),
                              'application/json' if wants_json else 'text/html; charset=utf-8')
             except OSError:
-                value = {'error': 'Exécuteur indisponible : état de l’assistant et de l’admission non vérifiable. '
+                value = {'error': 'Service temporairement indisponible : l’état de votre demande ne peut pas être vérifié. '
                          'Aucune nouvelle soumission disponible. Consultez le dossier avant tout nouvel envoi ; '
                          'un envoi précédent peut avoir été enregistré.', 'unavailable': True}
                 self.respond(503, value if wants_json else preparation.render(value, '', error=True),

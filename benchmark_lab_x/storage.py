@@ -856,7 +856,7 @@ class Store:
         with _transaction(connection, write=True):
             self._reserve_intent(connection, operation, budget_id, amount)
 
-    def _reserve_intent(self, connection, operation, budget_id, amount):
+    def _reserve_intent(self, connection, operation, budget_id, amount, *, retained_cost_ids=()):
         """Shared reservation body; caller owns the enclosing transaction."""
         _operation(operation)
         _text(budget_id, 'budget_id')
@@ -873,7 +873,7 @@ class Store:
             (operation['dossier_id'], operation['revision']),
         ).fetchone():
             raise KeyError((operation['dossier_id'], operation['revision']))
-        if (self._blocking_costs(operations, budget, operation['phase']) or any(
+        if (set(self._blocking_costs(operations, budget, operation['phase'])) - set(retained_cost_ids) or any(
                 row['budget_id'] == budget_id and row['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS')
                 for row in operations)):
             raise BudgetError('unresolved effects or costs block this envelope')
