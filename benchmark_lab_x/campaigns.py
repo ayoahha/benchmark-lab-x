@@ -261,21 +261,26 @@ def create(store, manifest):
     _fields(value, _MANIFEST + tuple(k for k in ('financial_cost_policy', 'recovery_of') if k in value), 'manifest')
     _intact(store)
     connection = connection_for(store)
+    with _transaction(connection, write=True):
+        return _create(store, connection, value)
+
+
+def _create(store, connection, value):
+    """Shared creation body; caller owns the enclosing transaction"""
     try:
-        with _transaction(connection, write=True):
-            contract = _approved(store, connection, value['contract_sha256'], current=True)
-            _manifest(value, contract)
-            if 'recovery_of' in value:
-                from .recovery import validate_link
-                validate_link(store, connection, value)
-            fingerprint = q.digest(value)
-            connection.execute('INSERT INTO s4_campaigns VALUES (?,?,?,?)',
-                               (value['campaign_id'], value['contract_sha256'], encode(value), fingerprint))
-            for cell in value['plan']:
-                connection.execute('INSERT INTO s4_cells VALUES (?,?,?,?)',
-                                   (value['campaign_id'], cell['cell_id'], cell['case_id'], cell['configuration_id']))
-            connection.execute('INSERT INTO s4_status VALUES (?,NULL,NULL,NULL)', (value['campaign_id'],))
-            return dict(manifest=value, manifest_sha256=fingerprint)
+        contract = _approved(store, connection, value['contract_sha256'], current=True)
+        _manifest(value, contract)
+        if 'recovery_of' in value:
+            from .recovery import validate_link
+            validate_link(store, connection, value)
+        fingerprint = q.digest(value)
+        connection.execute('INSERT INTO s4_campaigns VALUES (?,?,?,?)',
+                           (value['campaign_id'], value['contract_sha256'], encode(value), fingerprint))
+        for cell in value['plan']:
+            connection.execute('INSERT INTO s4_cells VALUES (?,?,?,?)',
+                               (value['campaign_id'], cell['cell_id'], cell['case_id'], cell['configuration_id']))
+        connection.execute('INSERT INTO s4_status VALUES (?,NULL,NULL,NULL)', (value['campaign_id'],))
+        return dict(manifest=value, manifest_sha256=fingerprint)
     except sqlite3.IntegrityError as error:
         raise ConflictError('Identité de campagne déjà utilisée') from error
 
@@ -302,7 +307,19 @@ def _load(store, connection, campaign_id):
 
 
 def _authority(value, manifest, fingerprint):
-    _fields(value, _AUTHORITY + (('browser_launch',) if 'browser_launch' in value else ()), 'campaign authority')
+    extra = tuple(key for key in ('browser_launch', 'technical_recovery', 'derived_from') if key in value)
+    _fields(value, _AUTHORITY + extra, 'campaign authority')
+    if 'technical_recovery' in value and 'derived_from' in value:
+        raise ValueError('Préautorisation propriétaire distincte de l’admission dérivée')
+    if 'derived_from' in value and 'browser_launch' in value:
+        raise ValueError('Admission dérivée sans nouveau lancement')
+    if 'technical_recovery' in value:
+        from .recovery import validate_grant
+        validate_grant(value['technical_recovery'], purpose=value.get('purpose'),
+                       recovery='recovery_of' in manifest)
+    if 'derived_from' in value:
+        from .recovery import validate_derived_from
+        validate_derived_from(value['derived_from'])
     if 'browser_launch' in value:
         grant = value['browser_launch']
         _fields(grant, ('session_id', 'estimate'), 'browser launch')
@@ -355,7 +372,7 @@ def _evidence(value, manifest):
         raise ValueError('Confinement des outils non qualifié dans ce transport fictif')
 
 
-def _admissions(connection, manifest, fingerprint):
+def _admissions(store, connection, manifest, fingerprint):
     result = {}
     for aid, raw, digest in connection.execute('SELECT admission_id, record_json, record_sha256 '
                                              'FROM s4_admissions WHERE campaign_id=? ORDER BY rowid',
@@ -367,6 +384,9 @@ def _admissions(connection, manifest, fingerprint):
         _date(record['created_at'])
         _authority(record['authority'], manifest, fingerprint)
         _evidence(record['evidence'], manifest)
+        if 'derived_from' in record['authority']:
+            from .recovery import bind_derived
+            bind_derived(store, connection, manifest, record['authority'], stored=True)
         if record['authority']['purpose'] != ('resume' if result else 'start'):
             raise IntegrityError('Chronologie des admissions divergente')
         result[aid] = record
@@ -459,7 +479,7 @@ def _result(receipt, cost):
 
 def _inspect(store, connection, campaign_id):
     manifest, fingerprint, contract = _load(store, connection, campaign_id)
-    admissions = _admissions(connection, manifest, fingerprint)
+    admissions = _admissions(store, connection, manifest, fingerprint)
     status = connection.execute('SELECT admission_id, stop_reason, stopped_at FROM s4_status WHERE campaign_id=?',
                                 (campaign_id,)).fetchone()
     if status is None or (status[0] is not None and status[0] not in admissions):
@@ -615,33 +635,42 @@ def admit(store, campaign_id, authority, evidence, *, owner_launch=False, estima
     _intact(store)
     connection = connection_for(store)
     with _transaction(connection, write=True):
-        snapshot = _inspect(store, connection, campaign_id)
-        if owner_launch:
-            session_id = connection.execute('SELECT session_id FROM s2_dossiers WHERE dossier_id=?',
-                                            (snapshot['task']['dossier_id'],)).fetchone()[0]
-            authority['browser_launch'] = dict(session_id=session_id, estimate=deepcopy(estimate))
-        elif 'browser_launch' in authority or estimate is not None:
-            raise ValueError('Permission privée explicite de lancement propriétaire requise')
-        budget = _eligible(store, connection, snapshot, authority, evidence)
-        if snapshot['admission'] is not None or authority['purpose'] != ('resume' if snapshot['admissions'] else 'start'):
-            raise ConflictError('Arrêt puis autorité de reprise explicite requis')
-        if snapshot['admissions'] and authority['budget_id'] != snapshot['admissions'][-1]['authority']['budget_id']:
-            raise BudgetError('Une reprise ne change pas l’enveloppe')
-        by_cell = {a['cell_id']: a for a in snapshot['attempts']}
-        needed = []
-        for cid in authority['allowed_cells']:
-            attempt = by_cell.get(cid)
-            if attempt is None:
-                needed.append(_money(authority['reserve_amounts'][cid]))
-            elif attempt['state'] != 'INTENT_RECORDED' or attempt['operation']['reserved_amount'] != authority['reserve_amounts'][cid]:
-                raise ConflictError('Cellule déjà émise ou réserve divergente')
-        if _sum_money(needed) > Decimal(budget['available']):
-            raise BudgetError('Enveloppe insuffisante pour les cellules autorisées')
-        aid = secrets.token_hex(16)
-        record = dict(admission_id=aid, campaign_id=campaign_id, authority=authority, evidence=evidence, created_at=_now())
-        connection.execute('INSERT INTO s4_admissions VALUES (?,?,?,?)', (aid, campaign_id, encode(record), q.digest(record)))
-        connection.execute('UPDATE s4_status SET admission_id=?, stop_reason=NULL, stopped_at=NULL WHERE campaign_id=?', (aid, campaign_id))
-        return record
+        return _admit(store, connection, campaign_id, authority, evidence,
+                      owner_launch=owner_launch, estimate=estimate)
+
+
+def _admit(store, connection, campaign_id, authority, evidence, *, owner_launch=False, estimate=None):
+    """Shared admission body; caller owns the enclosing transaction"""
+    snapshot = _inspect(store, connection, campaign_id)
+    if owner_launch:
+        session_id = connection.execute('SELECT session_id FROM s2_dossiers WHERE dossier_id=?',
+                                        (snapshot['task']['dossier_id'],)).fetchone()[0]
+        authority['browser_launch'] = dict(session_id=session_id, estimate=deepcopy(estimate))
+    elif 'browser_launch' in authority or estimate is not None:
+        raise ValueError('Permission privée explicite de lancement propriétaire requise')
+    budget = _eligible(store, connection, snapshot, authority, evidence)
+    if 'derived_from' in authority:
+        from .recovery import bind_derived
+        bind_derived(store, connection, snapshot['manifest'], authority)
+    if snapshot['admission'] is not None or authority['purpose'] != ('resume' if snapshot['admissions'] else 'start'):
+        raise ConflictError('Arrêt puis autorité de reprise explicite requis')
+    if snapshot['admissions'] and authority['budget_id'] != snapshot['admissions'][-1]['authority']['budget_id']:
+        raise BudgetError('Une reprise ne change pas l’enveloppe')
+    by_cell = {a['cell_id']: a for a in snapshot['attempts']}
+    needed = []
+    for cid in authority['allowed_cells']:
+        attempt = by_cell.get(cid)
+        if attempt is None:
+            needed.append(_money(authority['reserve_amounts'][cid]))
+        elif attempt['state'] != 'INTENT_RECORDED' or attempt['operation']['reserved_amount'] != authority['reserve_amounts'][cid]:
+            raise ConflictError('Cellule déjà émise ou réserve divergente')
+    if _sum_money(needed) > Decimal(budget['available']):
+        raise BudgetError('Enveloppe insuffisante pour les cellules autorisées')
+    aid = secrets.token_hex(16)
+    record = dict(admission_id=aid, campaign_id=campaign_id, authority=authority, evidence=evidence, created_at=_now())
+    connection.execute('INSERT INTO s4_admissions VALUES (?,?,?,?)', (aid, campaign_id, encode(record), q.digest(record)))
+    connection.execute('UPDATE s4_status SET admission_id=?, stop_reason=NULL, stopped_at=NULL WHERE campaign_id=?', (aid, campaign_id))
+    return record
 
 
 def reserve(store, campaign_id, cell_id, attempt_id):
@@ -744,14 +773,42 @@ def execute_launch(data, attempts, transport=None, *, transport_factory=None):
             break
 
 
+def _recovery_descendants(connection, campaign_id):
+    children = {}
+    for cid, raw, digest in connection.execute(
+            'SELECT campaign_id, manifest_json, manifest_sha256 FROM s4_campaigns'):
+        parent_oid = q._decode(raw, digest).get('recovery_of')
+        if parent_oid:
+            children.setdefault(parent_oid, []).append(cid)
+    found = []
+    pending = [row[0] for row in connection.execute(
+        'SELECT operation_id FROM s4_attempts WHERE campaign_id=?', (campaign_id,))]
+    seen = set()
+    while pending:
+        oid = pending.pop()
+        for cid in children.get(oid, ()):
+            if cid in seen:
+                continue
+            seen.add(cid)
+            found.append(cid)
+            pending.extend(row[0] for row in connection.execute(
+                'SELECT operation_id FROM s4_attempts WHERE campaign_id=?', (cid,)))
+    return found
+
+
 def stop(store, campaign_id, reason='OPERATOR_STOP'):
     _present(reason, 'stop reason')
     connection = connection_for(store)
     with _transaction(connection, write=True):
         if not connection.execute('SELECT 1 FROM s4_campaigns WHERE campaign_id=?', (campaign_id,)).fetchone():
             raise KeyError(campaign_id)
+        now = _now()
         connection.execute('UPDATE s4_status SET admission_id=NULL, stop_reason=?, stopped_at=? WHERE campaign_id=?',
-                           (reason, _now(), campaign_id))
+                           (reason, now, campaign_id))
+        for descendant in _recovery_descendants(connection, campaign_id):
+            connection.execute('UPDATE s4_status SET admission_id=NULL, stop_reason=?, stopped_at=? '
+                               'WHERE campaign_id=? AND admission_id IS NOT NULL',
+                               (reason, now, descendant))
 
 
 def close_admission(store, reason):
@@ -767,6 +824,7 @@ def execute(data, attempt_id, transport=None):
     if not callable(transport):
         raise ValueError('Transport injecté par le lanceur de confiance requis')
     from .runtime import worker_lock
+    received = False
     with closing(storage.Store(data)) as store, worker_lock(store, shared=True):
         _intact(store)
         connection = connection_for(store)
@@ -818,6 +876,7 @@ def execute(data, attempt_id, transport=None):
                 if _attribution(receipt, request['requested_configuration']) or (cost['status'] == 'UNKNOWN' and snapshot['manifest'].get('financial_cost_policy') != 'retain_reserve') or receipt['result']['emission'] != 'ESTABLISHED':
                     connection.execute('UPDATE s4_status SET admission_id=NULL, stop_reason=?, stopped_at=? WHERE campaign_id=?',
                                        ('ACQUISITION_EVIDENCE_INCOMPLETE', _now(), snapshot['manifest']['campaign_id']))
+            received = True
         except Exception:
             # Exception text can contain private bytes. Preserve a fixed technical
             # reason; neither an unusable response nor an exception settles cost
@@ -828,6 +887,9 @@ def execute(data, attempt_id, transport=None):
                                        ('ACQUISITION_RECEIPT_NOT_VERIFIED', attempt_id))
                 connection.execute('UPDATE s4_status SET admission_id=NULL, stop_reason=?, stopped_at=? WHERE campaign_id=?',
                                    ('ACQUISITION_RECEIPT_NOT_VERIFIED', _now(), snapshot['manifest']['campaign_id']))
+    if received:
+        from .recovery import continue_preauthorized
+        continue_preauthorized(data, attempt_id, transport)
 
 
 def projection(store, connection, dossier_id):
