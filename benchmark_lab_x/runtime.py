@@ -207,7 +207,8 @@ def main(argv=None):
     parser.add_argument('--public', type=Path)
     parser.add_argument('--listen', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
-    parser.add_argument('--preparation-assistant', choices=('glm-5.3-flash',))
+    parser.add_argument('--preparation-assistant', metavar='ALIAS_OR_PROFILE',
+                        help='Alias glm-5.3-flash ou chemin d’un profil JSON local')
     parser.add_argument('--candidate-pi', action='store_true', help='Charger le transport candidat Pi/OpenRouter dans l’exécuteur privé')
     parser.add_argument('--model')
     parser.add_argument('--pi-package', type=Path)
@@ -220,7 +221,7 @@ def main(argv=None):
     try:
         if args.candidate_pi and args.action != 'executor':
             raise ValueError('Transport candidat réservé à l’exécuteur')
-        if args.preparation_assistant and args.action not in ('executor', 'forecast-prices'):
+        if args.preparation_assistant is not None and args.action not in ('executor', 'forecast-prices'):
             raise ValueError('Assistant réservé à l’exécuteur')
         if args.action == 'inspect-pi':
             from .pi_openrouter import identity
@@ -230,10 +231,17 @@ def main(argv=None):
             return 0
         if args.action == 'forecast-prices':
             from .openrouter_prices import forecast
+            profile = None
+            if args.preparation_assistant is not None:
+                from .openrouter_preparation import configuration, load_profile
+                profile = load_profile(args.preparation_assistant)
+                if args.model != profile['model']:
+                    raise ValueError('Modèle distinct du profil de préparation')
+                if args.output_tokens != profile['parameters']['max_tokens']:
+                    raise ValueError('Limite de sortie distincte du profil de préparation')
             result = forecast(args.model, args.input_tokens, args.output_tokens, args.cached_input_tokens)
-            if args.preparation_assistant:
-                from .openrouter_preparation import configuration
-                configured = configuration(result)
+            if profile is not None:
+                configured = configuration(result, profile)
                 result['preparation'] = {'requested_configuration': configured, 'reserve_amount': configured['reserve_usd']}
             print(encode(result))
             return 0
@@ -250,7 +258,11 @@ def main(argv=None):
                     raise ValueError('Données requises')
                 transport = None
                 candidate_factory = None
-                key = os.environ.pop('OPENROUTER_API_KEY', '') if args.preparation_assistant or args.candidate_pi else ''
+                profile = None
+                if args.preparation_assistant is not None:
+                    from .openrouter_preparation import OpenRouterPreparation, load_profile
+                    profile = load_profile(args.preparation_assistant)
+                key = os.environ.pop('OPENROUTER_API_KEY', '') if args.preparation_assistant is not None or args.candidate_pi else ''
                 if args.candidate_pi:
                     from .pi_openrouter import PiOpenRouter, identity
                     if args.pi_package is None or args.node is None:
@@ -258,9 +270,8 @@ def main(argv=None):
                     identity(args.pi_package, args.node)
                     PiOpenRouter(key, args.pi_package, args.node)
                     candidate_factory = lambda: PiOpenRouter(key, args.pi_package, args.node)
-                if args.preparation_assistant:
-                    from .openrouter_preparation import OpenRouterPreparation
-                    transport = OpenRouterPreparation(key)
+                if args.preparation_assistant is not None:
+                    transport = OpenRouterPreparation(key, profile)
                 serve_executor(args.data, args.socket, release_identity(), transport=transport, candidate_transport_factory=candidate_factory)
             return 0
         if args.data is None:

@@ -17,6 +17,9 @@ Mode d’accès déclaré au modèle. Les appels courants du produit utilisent e
 ### Configuration demandée
 Cible figée du panel de campagne : modèle, fournisseur, accès, route, paramètres et effort requis, avec les identités exactes attendues. Sa présence dans un manifeste ne prouve ni disponibilité ni exécution.
 
+### Profil d’assistant de préparation
+Configuration OpenRouter explicite chargée au démarrage pour l’assistance de préparation et de correction. Elle fige l’identité, les paramètres, les routes, le système et les limites, et lie leur empreinte à la configuration demandée. L’alias `glm-5.3-flash` désigne le profil historique de compatibilité. Un chemin JSON local désigne un autre profil déjà approuvé. Ce n’est ni un panel candidat, ni une base de modèles, ni un choix de production.
+
 ### Configuration observée
 Valeurs établies pour une tentative, avec leurs sources, reliées à la configuration demandée et aux [conditions de test communes](#conditions-de-test-communes). Une valeur absente reste `INCONNU`. Les champs et relations sont définis dans l’[ARD](docs/ARD.md#43-configuration-demandée-et-configuration-observée).
 _À éviter_ : modèle seul, solution complète.

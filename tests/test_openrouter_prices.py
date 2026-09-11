@@ -79,8 +79,21 @@ class OpenRouterPricesTests(unittest.TestCase):
         self.assertEqual('0.033768', value['reserve_amount'])
         self.assertEqual(MODEL, value['requested_configuration']['model'])
         self.assertEqual('OpenRouter', value['requested_configuration']['provider'])
+        self.assertEqual(assistant.ASSISTANT, value['requested_configuration']['profile_id'])
+        self.assertEqual(assistant.profile_digest(assistant.HISTORICAL_PROFILE),
+                         value['requested_configuration']['profile_sha256'])
         self.assertIn('reservation_estimate', value['requested_configuration'])
         store.assert_not_called()
+
+    def test_forecast_refuses_model_distinct_from_profile_before_http(self):
+        self.responses()
+        with redirect_stdout(io.StringIO()) as output, patch.object(assistant, 'HTTPSConnection') as inference:
+            self.assertEqual(78, runtime.main(['forecast-prices', '--model', 'openrouter/auto',
+                                              '--input-tokens', '1000', '--output-tokens', '16384',
+                                              '--preparation-assistant', assistant.ASSISTANT]))
+        self.assertEqual('HOLD', json.loads(output.getvalue())['state'])
+        self.http.request.assert_not_called()
+        inference.assert_not_called()
 
     def test_missing_prices_do_not_hide_known_components_and_zero_is_explicit(self):
         self.responses([{**ENDPOINT, 'pricing': {'prompt': '0', 'completion': '0.000002'}}])
