@@ -555,7 +555,7 @@ def verify_preparation(store, connection):
         encode(json.loads(raw, object_pairs_hook=_unique_object))
 
 
-def dispatch(store, method, path, token, body, source, transport):
+def dispatch(store, method, path, token, body, source, transport, *, candidate_transport=None):
     """Executor-side authorization: HTTP fields can never claim an operator role."""
     if method == 'GET' and path == '/preparation':
         session_id, csrf, token = session(store, token, create=True)
@@ -598,6 +598,22 @@ def dispatch(store, method, path, token, body, source, transport):
         if type(supplied) is not str or not hmac.compare_digest(supplied.encode(), csrf.encode()):
             raise Denied('Protection CSRF requise')
         body = {key: value for key, value in body.items() if key != 'csrf_token'}
+    launch_route = re.fullmatch(r'/preparation/dossiers/([A-Za-z0-9_-]{1,128})/campaigns/([A-Za-z0-9_-]{1,128})/(conditions|start)', path)
+    if launch_route:
+        from . import campaigns
+        dossier_id, campaign_id, action = launch_route.groups()
+        if method == 'POST' and action == 'start':
+            if not callable(candidate_transport):
+                raise Denied('Acquisition indisponible')
+            attempts = campaigns.launch(store, session_id, dossier_id, campaign_id, body)
+            value = campaigns.launch_view(store, session_id, dossier_id, campaign_id)
+            value['can_launch'] = False
+            return 202, value, None, {'candidate_attempts': attempts} if attempts else None
+        if method == 'GET' and action == 'conditions':
+            value = campaigns.launch_view(store, session_id, dossier_id, campaign_id)
+            value['can_launch'] = value['can_launch'] and callable(candidate_transport)
+            return 200, value, None, None
+        raise Denied('Action inaccessible')
     if method == 'POST' and path == '/preparation/dossiers':
         _fields(body, ('dossier_id', 'action_id', 'request'), 'create')
         operation_id, start = submit(store, session_id, body['dossier_id'], body, source, transport)
@@ -836,6 +852,7 @@ def render_comparison(value):
         if not rows:
             continue
         content += '<section class="comparison-results"><h2>Cas ' + text(case['id']) + '</h2>'
+        content += '<p class="table-hint">Sur petit écran, faites défiler le tableau horizontalement pour lire coûts et preuves.</p>'
         content += '<div class="table-scroll" role="region" tabindex="0" aria-label="Observations du cas ' + text(case['id']) + '">'
         content += '<table><caption>Cas ' + text(case['id']) + ' · valeurs par tentative, sans agrégation</caption><thead><tr>'
         for title in ('Configuration et tentative', 'Verdict et motif', 'Coût observé', 'Mesures prévues', 'Preuves'):
@@ -901,6 +918,36 @@ def render(value, csrf, path='/preparation', *, error=False):
     if error:
         title = 'Préparation indisponible' if value.get('unavailable') else 'Action non aboutie'
         content = '<p role="alert">' + text(value['error']) + '</p><p><a href="/preparation">Retrouver mes dossiers</a></p>'
+    elif value.get('kind') == 'campaign_launch':
+        campaign = value['campaign']
+        base = '/preparation/dossiers/' + value['dossier_id'] + '/campaigns/' + campaign['campaign_id']
+        title = 'Examiner puis lancer la comparaison'
+        content = '<p>Le responsable prépare et autorise cette campagne. Votre confirmation déclenche uniquement les essais qu’il a admis.</p>'
+        content += '<p><a href="' + text('/preparation/dossiers/' + value['dossier_id']) + '">Revenir à l’épreuve</a></p>'
+        content += section('Critères fixés', '<p>' + text(value['criteria']['result_expected']) + '</p>' + listing(
+            [item['description'] for item in value['criteria']['obligations']] +
+            ['Erreur éliminatoire : ' + item['description'] for item in value['criteria']['eliminatory_errors']]))
+        content += section('Modèles et conditions', listing([item['model'] + ' · ' + item['revision'] for item in campaign['panel']]) +
+            '<p>Pi : ' + text(campaign['conditions']['pi']['package']) + ' · ' + text(campaign['conditions']['pi']['version']) +
+            '. Conditions figées le ' + text(campaign['conditions']['frozen_at']) + '.</p>' +
+            '<details><summary>Configurations et conditions exactes</summary><pre>' + text(encode(dict(panel=campaign['panel'], conditions=campaign['conditions']))) + '</pre></details>')
+        estimate = value['estimate']
+        content += '<h2>Coût et autorisation</h2><p>Estimation indicative : ' + text(
+            estimate['amount'] + ' ' + estimate['currency'] if estimate else 'non fournie par le responsable') + '.</p>'
+        if estimate:
+            content += '<p>' + text(estimate['assumptions']) + ' Source : ' + text(estimate['source']) + '.</p>'
+        budget = campaign['budget']
+        if budget:
+            content += '<p>Enveloppe autorisée : ' + text(budget['limit']) + ' ' + text(budget['currency']) + '.</p>'
+        content += '<p>Réserves prévues par essai : ' + text(', '.join(key + ' : ' + amount for key, amount in campaign['reserve_amounts'].items()) if campaign['reserve_amounts'] else 'non autorisées') + '.</p>'
+        content += '<p>Estimation, réservation et coût observé sont distincts. La réserve ne garantit pas un plafond de facturation.</p>'
+        if value['can_launch']:
+            content += form(base + '/start', {'manifest_sha256': campaign['manifest_sha256'], 'admission_id': value['admission_id']},
+                '<label><input type="checkbox" name="confirm" value="yes" required> Je confirme le lancement des essais autorisés présentés.</label><button type="submit">Lancer la comparaison autorisée</button>')
+        else:
+            content += '<p role="status">' + ('Lancement enregistré. Consultez les essais et leurs résultats ci-dessous.' if campaign['attempts'] else 'Lancement indisponible. Le responsable doit vérifier les autorisations et la disponibilité de l’exécution.') + '</p>'
+        content += section('Suivi des essais', listing([cell['cell_id'] + ' : ' + {'NOT_STARTED': 'non démarré', 'INTENT_RECORDED': 'en attente', 'EMISSION_POSSIBLE': 'en cours', 'RECEIVED': 'réponse reçue, consulter l’évaluation', 'AMBIGUOUS': 'état incertain, vérification requise'}.get(cell['state'], cell['state']) for cell in campaign['cells']]))
+        content += '<p><a href="' + text(base + '/conditions') + '">Actualiser le suivi</a> · <a href="' + text(base) + '">Comparer les résultats et lire les preuves</a></p>'
     elif value.get('kind') == 'home':
         title = 'Quel modèle pour votre travail ?'
         content = '<p class="lead">Décrivez une tâche de votre travail, sans donnée personnelle ni information confidentielle. '
@@ -1002,6 +1049,10 @@ def render(value, csrf, path='/preparation', *, error=False):
         content += f'<p><a href="{text(path)}">Actualiser cet état</a> · <a href="{text(url)}">Révision courante</a></p>'
         if revision > 1:
             content += f'<p><a href="{text(url)}/revisions/{revision - 1}">Consulter la révision précédente</a></p>'
+        if editable and value['package'] is None:
+            content += section('Votre réponse', form(url + '/messages',
+                {'action_id': secrets.token_hex(16), 'revision': revision, 'kind': 'clarify'},
+                '<label for="message">Votre précision</label><textarea id="message" name="message" rows="3" required' + disabled + '></textarea><button type="submit"' + disabled + '>Envoyer ma réponse</button>'))
         payload = value['payload']
         content += section('Besoin conservé', '<p>' + text(payload['request']) + '</p>', 'besoin')
         if value.get('task_index'):
@@ -1066,6 +1117,11 @@ def render(value, csrf, path='/preparation', *, error=False):
         content += '<section id="validation"><h2>Validation du besoin</h2>'
         if value['validation']:
             content += '<p role="status">Votre validation est enregistrée pour ce dossier, cette révision et cette empreinte.</p>'
+            current_campaigns = [c for c in value.get('campaigns', []) if c['task']['revision'] == revision]
+            for campaign in current_campaigns:
+                content += '<p><a class="button" href="' + text(url + '/campaigns/' + campaign['campaign_id'] + '/conditions') + '">Examiner les conditions et suivre la comparaison</a></p>'
+            if not current_campaigns:
+                content += '<p>En attente de préparation des conditions par le responsable.</p>'
         elif package:
             content += '<p role="status">Validation du besoin : nouvelle validation requise pour le paquet présenté.</p>'
         else:
@@ -1075,7 +1131,7 @@ def render(value, csrf, path='/preparation', *, error=False):
             content += form(url + '/validation', binding(dossier_id, revision, value['package_sha256']),
                             '<button type="submit">Valider cette révision et ce paquet exacts</button>')
         content += '</section>'
-        if editable:
+        if editable and value['package'] is not None:
             content += section('Préciser ou corriger cet exemple', form(url + '/messages',
                 {'action_id': secrets.token_hex(16), 'revision': revision},
                 '<p>Indiquez ce qui doit changer. Les accords non touchés et les révisions précédentes sont conservés. Une modification du paquet demande une nouvelle validation.</p>'
@@ -1172,7 +1228,7 @@ def render(value, csrf, path='/preparation', *, error=False):
                 campaigns += '</article>'
             if not value['campaigns']:
                 campaigns += '<p>Aucune campagne liée à ce dossier.</p>'
-            content += section('Comparaisons de ce dossier', campaigns)
+            content += '<details><summary>Historique et détails des comparaisons de ce dossier</summary>' + campaigns + '</details>'
     if state and s9:
         reasons = {
             'open': 'Échanges disponibles. Chaque envoi reste vérifié par le serveur avant admission.',

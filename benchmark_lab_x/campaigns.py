@@ -185,7 +185,9 @@ def _entries(values, fields, label):
 
 
 def _manifest(value, contract):
-    _fields(value, _MANIFEST, 'manifest')
+    _fields(value, _MANIFEST + (('financial_cost_policy',) if 'financial_cost_policy' in value else ()), 'manifest')
+    if value.get('financial_cost_policy', 'require_observed') not in ('require_observed', 'retain_reserve'):
+        raise ValueError('Politique financière inconnue')
     encode(value)
     identifier(value['campaign_id'])
     if type(value['version']) is not int or value['version'] < 1:
@@ -254,7 +256,7 @@ def _approved(store, connection, fingerprint, *, current=False):
 
 def create(store, manifest):
     value = deepcopy(manifest)
-    _fields(value, _MANIFEST, 'manifest')
+    _fields(value, _MANIFEST + (('financial_cost_policy',) if 'financial_cost_policy' in value else ()), 'manifest')
     _intact(store)
     connection = connection_for(store)
     try:
@@ -292,7 +294,19 @@ def _load(store, connection, campaign_id):
 
 
 def _authority(value, manifest, fingerprint):
-    _fields(value, _AUTHORITY, 'campaign authority')
+    _fields(value, _AUTHORITY + (('browser_launch',) if 'browser_launch' in value else ()), 'campaign authority')
+    if 'browser_launch' in value:
+        grant = value['browser_launch']
+        _fields(grant, ('session_id', 'estimate'), 'browser launch')
+        identifier(grant['session_id'])
+        estimate = grant['estimate']
+        if estimate is not None:
+            _fields(estimate, ('amount', 'currency', 'assumptions', 'source'), 'estimate')
+            _money(estimate['amount'])
+            if estimate['currency'] != manifest['cost_basis']['unit']:
+                raise ValueError('Unité de prévision divergente')
+            _present(estimate['assumptions'], 'assumptions')
+            _present(estimate['source'], 'source')
     encode(value)
     for key in ('actor', 'authority_id', 'execution_authority', 'candidate_authority', 'budget_authority', 'budget_id'):
         _present(value[key], key)
@@ -498,6 +512,14 @@ def verify_campaigns(store, connection):
         _inspect(store, connection, cid)
 
 
+def _retained_costs(snapshot):
+    if snapshot['manifest'].get('financial_cost_policy') != 'retain_reserve':
+        return set()
+    return {a['operation_id'] for a in snapshot['attempts']
+            if a['state'] == 'RECEIVED' and not a['attribution_incident']
+            and a['operation']['receipt']['result']['emission'] == 'ESTABLISHED'}
+
+
 def _envelope(store, connection, snapshot, authority):
     operations = store._operations(connection)
     budget = store._budget(connection, authority['budget_id'], operations)
@@ -506,12 +528,14 @@ def _envelope(store, connection, snapshot, authority):
                           and op['budget_id'] == authority['budget_id'] and op['receipt'] is not None]
     if budget['currency'] != snapshot['manifest']['cost_basis']['unit']:
         raise BudgetError('Unité du budget différente de la base de coût')
-    if (budget['unknown_cost_operations'] or Decimal(budget['available']) < 0
+    retained = _retained_costs(snapshot)
+    if (set(budget['unknown_cost_operations']) - retained or Decimal(budget['available']) < 0
             or any(_attribution(op['receipt'], op['requested_configuration'])
                    or op['receipt']['result']['emission'] != 'ESTABLISHED' for op in dependent_receipts)
             or any(op['budget_id'] == authority['budget_id'] and op['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS') for op in operations)
             or any(a['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS') or a['attribution_incident']
-                   or (a['operation']['observed_cost'] is not None and a['operation']['observed_cost']['status'] == 'UNKNOWN')
+                   or (a['operation']['observed_cost'] is not None and a['operation']['observed_cost']['status'] == 'UNKNOWN'
+                       and a['operation_id'] not in retained)
                    or (a['operation']['receipt'] is not None and a['operation']['receipt']['result']['emission'] != 'ESTABLISHED')
                    for a in snapshot['attempts'])):
         raise BudgetError('Effets, attribution ou solde non établis')
@@ -525,12 +549,18 @@ def _eligible(store, connection, snapshot, authority, evidence):
     return _envelope(store, connection, snapshot, authority)
 
 
-def admit(store, campaign_id, authority, evidence):
+def admit(store, campaign_id, authority, evidence, *, owner_launch=False, estimate=None):
     authority, evidence = deepcopy(authority), deepcopy(evidence)
     _intact(store)
     connection = connection_for(store)
     with _transaction(connection, write=True):
         snapshot = _inspect(store, connection, campaign_id)
+        if owner_launch:
+            session_id = connection.execute('SELECT session_id FROM s2_dossiers WHERE dossier_id=?',
+                                            (snapshot['task']['dossier_id'],)).fetchone()[0]
+            authority['browser_launch'] = dict(session_id=session_id, estimate=deepcopy(estimate))
+        elif 'browser_launch' in authority or estimate is not None:
+            raise ValueError('Permission privée explicite de lancement propriétaire requise')
         budget = _eligible(store, connection, snapshot, authority, evidence)
         if snapshot['admission'] is not None or authority['purpose'] != ('resume' if snapshot['admissions'] else 'start'):
             raise ConflictError('Arrêt puis autorité de reprise explicite requis')
@@ -560,27 +590,97 @@ def reserve(store, campaign_id, cell_id, attempt_id):
     connection = connection_for(store)
     with _transaction(connection, write=True):
         snapshot = _inspect(store, connection, campaign_id)
+        return _reserve(store, connection, snapshot, cell_id, attempt_id)
+
+
+def _reserve(store, connection, snapshot, cell_id, attempt_id):
+    campaign_id = snapshot['manifest']['campaign_id']
+    admission = snapshot['admission']
+    if admission is None or cell_id not in admission['authority']['allowed_cells']:
+        raise ValueError('Admission explicite de cette cellule requise')
+    _eligible(store, connection, snapshot, admission['authority'], admission['evidence'])
+    cell = next(c for c in snapshot['cells'] if c['cell_id'] == cell_id)
+    if cell['state'] != 'NOT_STARTED':
+        raise ConflictError('Tentative déjà enregistrée pour cette cellule')
+    manifest = snapshot['manifest']
+    contract = _approved(store, connection, manifest['contract_sha256'])
+    request = _request(store, manifest, snapshot['manifest_sha256'], contract, cell)
+    engine = _engine()
+    digest = q.digest(request)
+    authority = admission['authority']
+    operation = dict(operation_id=attempt_id, phase='acquisition', dossier_id=contract['dossier_id'], revision=contract['revision'],
+                     authority=authority['authority_id'], engine_version=FORMAT_IDENTITY + ':' + q.digest(engine),
+                     requested_configuration=request['requested_configuration'], resources=[digest])
+    store._reserve_intent(connection, operation, authority['budget_id'], authority['reserve_amounts'][cell_id],
+                          retained_cost_ids=_retained_costs(snapshot))
+    execution_id = secrets.token_hex(16)
+    connection.execute('INSERT INTO s4_attempts VALUES (?,?,?,?,?,?,?,?)',
+                       (attempt_id, execution_id, campaign_id, cell_id, admission['admission_id'], encode(request), digest, encode(engine)))
+    return dict(operation_id=attempt_id, execution_id=execution_id, cell_id=cell_id, output_piece_id=None)
+
+def launch_view(store, session_id, dossier_id, campaign_id):
+    from .preparation import owner
+    connection = connection_for(store)
+    with _transaction(connection):
+        owner(connection, session_id, dossier_id)
+        snapshot = _inspect(store, connection, campaign_id)
+        if snapshot['task']['dossier_id'] != dossier_id:
+            raise ValueError('Campagne étrangère au dossier')
+        projected = next(row for row in projection(store, connection, dossier_id) if row['campaign_id'] == campaign_id)
         admission = snapshot['admission']
-        if admission is None or cell_id not in admission['authority']['allowed_cells']:
-            raise ValueError('Admission explicite de cette cellule requise')
+        grant = admission['authority'].get('browser_launch') if admission else None
+        eligible = False
+        if grant and grant['session_id'] == session_id:
+            try:
+                _eligible(store, connection, snapshot, admission['authority'], admission['evidence'])
+                eligible = not snapshot['restore_pending'] and not snapshot['attempts']
+            except (ValueError, ConflictError, BudgetError):
+                pass
+        contract = _approved(store, connection, snapshot['manifest']['contract_sha256'])
+        return dict(kind='campaign_launch', dossier_id=dossier_id, campaign=projected,
+                    criteria={key: contract['specification'][key] for key in ('result_expected', 'obligations', 'eliminatory_errors', 'limits')}, can_launch=eligible,
+                    admission_id=admission['admission_id'] if grant else None,
+                    estimate=grant['estimate'] if grant else None)
+
+
+def launch(store, session_id, dossier_id, campaign_id, body):
+    from .preparation import owner, Denied
+    _fields(body, ('manifest_sha256', 'admission_id', 'confirm'), 'launch')
+    if body['confirm'] != 'yes':
+        raise ValueError('Confirmation requise')
+    _intact(store)
+    connection = connection_for(store)
+    with _transaction(connection, write=True):
+        owner(connection, session_id, dossier_id)
+        snapshot = _inspect(store, connection, campaign_id)
+        admission = snapshot['admission']
+        if snapshot['task']['dossier_id'] != dossier_id or not admission:
+            raise Denied('Campagne non autorisée')
+        grant = admission['authority'].get('browser_launch')
+        if not grant or grant['session_id'] != session_id:
+            raise Denied('Lancement non autorisé')
+        if (body['manifest_sha256'], body['admission_id']) != (snapshot['manifest_sha256'], admission['admission_id']):
+            raise ConflictError('Conditions périmées')
+        # Existing intentions are a receipt, never permission to redispatch a worker
+        if snapshot['attempts']:
+            return []
         _eligible(store, connection, snapshot, admission['authority'], admission['evidence'])
-        cell = next(c for c in snapshot['cells'] if c['cell_id'] == cell_id)
-        if cell['state'] != 'NOT_STARTED':
-            raise ConflictError('Tentative déjà enregistrée pour cette cellule')
-        manifest = snapshot['manifest']
-        contract = _approved(store, connection, manifest['contract_sha256'])
-        request = _request(store, manifest, snapshot['manifest_sha256'], contract, cell)
-        engine = _engine()
-        digest = q.digest(request)
-        authority = admission['authority']
-        operation = dict(operation_id=attempt_id, phase='acquisition', dossier_id=contract['dossier_id'], revision=contract['revision'],
-                         authority=authority['authority_id'], engine_version=FORMAT_IDENTITY + ':' + q.digest(engine),
-                         requested_configuration=request['requested_configuration'], resources=[digest])
-        store._reserve_intent(connection, operation, authority['budget_id'], authority['reserve_amounts'][cell_id])
-        execution_id = secrets.token_hex(16)
-        connection.execute('INSERT INTO s4_attempts VALUES (?,?,?,?,?,?,?,?)',
-                           (attempt_id, execution_id, campaign_id, cell_id, admission['admission_id'], encode(request), digest, encode(engine)))
-        return dict(operation_id=attempt_id, execution_id=execution_id, cell_id=cell_id, output_piece_id=None)
+        attempts = []
+        for cell in snapshot['manifest']['attempt_policy']['order']:
+            if cell in admission['authority']['allowed_cells']:
+                aid = 'web-' + q.digest([campaign_id, cell, admission['admission_id']])[:40]
+                _reserve(store, connection, snapshot, cell, aid)
+                attempts.append(aid)
+        return attempts
+
+
+def execute_launch(data, attempts, transport=None, *, transport_factory=None):
+    for attempt_id in attempts:
+        try:
+            execute(data, attempt_id, transport_factory() if transport_factory else transport)
+        except (ValueError, ConflictError, BudgetError, IntegrityError):
+            # An interruption leaves the remaining intentions for private inspection
+            break
 
 
 def stop(store, campaign_id, reason='OPERATOR_STOP'):
@@ -651,7 +751,7 @@ def execute(data, attempt_id, transport=None):
                                      name='Sortie brute ' + attempt_id, role='judge', media_type='text/plain; charset=utf-8', content=output.encode('utf-8'))
                 connection.execute('INSERT INTO s4_results VALUES (?,?,?,?,?)',
                                    (attempt_id, output_id, q.digest(receipt), q.digest(cost), _now()))
-                if _attribution(receipt, request['requested_configuration']) or cost['status'] == 'UNKNOWN' or receipt['result']['emission'] != 'ESTABLISHED':
+                if _attribution(receipt, request['requested_configuration']) or (cost['status'] == 'UNKNOWN' and snapshot['manifest'].get('financial_cost_policy') != 'retain_reserve') or receipt['result']['emission'] != 'ESTABLISHED':
                     connection.execute('UPDATE s4_status SET admission_id=NULL, stop_reason=?, stopped_at=? WHERE campaign_id=?',
                                        ('ACQUISITION_EVIDENCE_INCOMPLETE', _now(), snapshot['manifest']['campaign_id']))
         except Exception:

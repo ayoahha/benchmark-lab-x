@@ -201,12 +201,14 @@ def main(argv=None):
     parser.add_argument('action', choices=campaign_actions + ('inspect-pi', 'reserve-candidate', 'execute-candidate', 'prepare-evaluation', 'evaluate-attempt', 'initialize-reconciliation', 'reconcile-cost', 'inspect-cost', 'forecast-prices', 'initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
     parser.add_argument('--data', type=Path)
     parser.add_argument('--authority', type=Path)
+    parser.add_argument('--allow-owner-launch', action='store_true', help='Autoriser explicitement le propriétaire à déclencher les cellules admises')
     parser.add_argument('--destination', type=Path)
     parser.add_argument('--socket', type=Path)
     parser.add_argument('--public', type=Path)
     parser.add_argument('--listen', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--preparation-assistant', choices=('glm-5.3-flash',))
+    parser.add_argument('--candidate-pi', action='store_true', help='Charger le transport candidat Pi/OpenRouter dans l’exécuteur privé')
     parser.add_argument('--model')
     parser.add_argument('--pi-package', type=Path)
     parser.add_argument('--node', type=Path)
@@ -216,6 +218,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
+        if args.candidate_pi and args.action != 'executor':
+            raise ValueError('Transport candidat réservé à l’exécuteur')
         if args.preparation_assistant and args.action not in ('executor', 'forecast-prices'):
             raise ValueError('Assistant réservé à l’exécuteur')
         if args.action == 'inspect-pi':
@@ -245,10 +249,19 @@ def main(argv=None):
                 if args.data is None:
                     raise ValueError('Données requises')
                 transport = None
+                candidate_factory = None
+                key = os.environ.pop('OPENROUTER_API_KEY', '') if args.preparation_assistant or args.candidate_pi else ''
+                if args.candidate_pi:
+                    from .pi_openrouter import PiOpenRouter, identity
+                    if args.pi_package is None or args.node is None:
+                        raise ValueError('Installation Pi et Node explicites requis')
+                    identity(args.pi_package, args.node)
+                    PiOpenRouter(key, args.pi_package, args.node)
+                    candidate_factory = lambda: PiOpenRouter(key, args.pi_package, args.node)
                 if args.preparation_assistant:
                     from .openrouter_preparation import OpenRouterPreparation
-                    transport = OpenRouterPreparation(os.environ.pop('OPENROUTER_API_KEY', ''))
-                serve_executor(args.data, args.socket, release_identity(), transport=transport)
+                    transport = OpenRouterPreparation(key)
+                serve_executor(args.data, args.socket, release_identity(), transport=transport, candidate_transport_factory=candidate_factory)
             return 0
         if args.data is None:
             raise ValueError('Données requises')
@@ -341,11 +354,12 @@ def main(argv=None):
                         campaigns.stop(store, request['campaign_id'], request['reason'])
                         result = campaigns.inspect(store, request['campaign_id'])
                     else:
-                        _fields(request, ('campaign_id', 'authority', 'evidence'), args.action)
+                        _fields(request, ('campaign_id', 'authority', 'evidence') + (('estimate',) if 'estimate' in request else ()), args.action)
                         purpose = 'resume' if args.action == 'resume-campaign' else 'start'
                         if type(request['authority']) is not dict or request['authority'].get('purpose') != purpose:
                             raise ValueError('Autorité distincte de lancement ou reprise requise')
-                        result = campaigns.admit(store, request['campaign_id'], request['authority'], request['evidence'])
+                        result = campaigns.admit(store, request['campaign_id'], request['authority'], request['evidence'],
+                                                 owner_launch=args.allow_owner_launch, estimate=request.get('estimate'))
                 elif args.action == 'inspect-evaluation':
                     from .evaluation import inspect
                     from .storage import _fields
