@@ -198,7 +198,7 @@ def restore(source, destination):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     campaign_actions = ('create-campaign', 'inspect-campaign', 'admit-campaign', 'stop-campaign', 'resume-campaign')
-    parser.add_argument('action', choices=campaign_actions + ('inspect-pi', 'prepare-recovery', 'prepare-candidate-configuration', 'inspect-model-profile', 'reserve-candidate', 'execute-candidate', 'prepare-review', 'prepare-evaluation', 'evaluate-attempt', 'initialize-reconciliation', 'reconcile-cost', 'inspect-cost', 'forecast-prices', 'initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
+    parser.add_argument('action', choices=campaign_actions + ('reserve-judgment', 'execute-judgment', 'inspect-judgment', 'inspect-pi', 'prepare-recovery', 'prepare-candidate-configuration', 'inspect-model-profile', 'reserve-candidate', 'execute-candidate', 'prepare-review', 'prepare-evaluation', 'evaluate-attempt', 'initialize-reconciliation', 'reconcile-cost', 'inspect-cost', 'forecast-prices', 'initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
     parser.add_argument('--data', type=Path)
     parser.add_argument('--authority', type=Path)
     parser.add_argument('--allow-owner-launch', action='store_true', help='Autoriser explicitement le propriétaire à déclencher les cellules admises')
@@ -209,6 +209,7 @@ def main(argv=None):
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--preparation-assistant', metavar='ALIAS_OR_PROFILE',
                         help='Alias glm-5.3-flash ou chemin d’un profil JSON local')
+    parser.add_argument('--judgment-profile', metavar='ALIAS_OR_PROFILE')
     parser.add_argument('--candidate-pi', action='store_true', help='Charger le transport candidat Pi/OpenRouter dans l’exécuteur privé')
     parser.add_argument('--model')
     parser.add_argument('--pi-package', type=Path)
@@ -219,6 +220,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
+        if args.judgment_profile is not None and args.action not in ('reserve-judgment', 'execute-judgment'):
+            raise ValueError('Profil réservé au jugement privé')
         if args.candidate_pi and args.action != 'executor':
             raise ValueError('Transport candidat réservé à l’exécuteur')
         if args.preparation_assistant is not None and args.action not in ('executor', 'forecast-prices'):
@@ -300,7 +303,28 @@ def main(argv=None):
             result = (backup if args.action == 'backup' else restore)(args.data, args.destination)
         else:
             with closing(Store(args.data)) as store:
-                if args.action in ('initialize-reconciliation', 'reconcile-cost', 'inspect-cost'):
+                if args.action in ('reserve-judgment', 'execute-judgment', 'inspect-judgment'):
+                    from . import judgment
+                    from .storage import _fields
+                    if args.authority is None:
+                        raise ValueError('Fichier opérateur privé requis')
+                    private_path(args.authority)
+                    request = json.loads(args.authority.read_text(), object_pairs_hook=_unique_object)
+                    if args.action == 'inspect-judgment':
+                        _fields(request, ('operation_id',), args.action)
+                        result = judgment.inspect(store, request['operation_id'])
+                    else:
+                        from .openrouter_judgment import OpenRouterJudgment
+                        if args.judgment_profile is None:
+                            raise ValueError('Profil de jugement explicite requis')
+                        transport = OpenRouterJudgment(os.environ.pop('OPENROUTER_API_KEY', ''), args.judgment_profile)
+                        if args.action == 'reserve-judgment':
+                            result = judgment.reserve(store, request, transport)
+                        else:
+                            _fields(request, ('operation_id',), args.action)
+                            judgment.execute(args.data, request['operation_id'], transport)
+                            result = judgment.inspect(store, request['operation_id'])
+                elif args.action in ('initialize-reconciliation', 'reconcile-cost', 'inspect-cost'):
                     with worker_lock(store):
                         verify(store)
                         if args.action == 'initialize-reconciliation':

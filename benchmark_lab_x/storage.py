@@ -977,6 +977,8 @@ class Store:
             if layout == 's5':
                 from .evaluation import verify_evaluations
                 verify_evaluations(self, connection)
+                from .judgment import verify_judgments
+                verify_judgments(self, connection)
             return {
                 'schema_version': SCHEMA_VERSION, 'integrity_ok': intact and not broken,
                 'cost_reconciliation_format': RECONCILIATION_IDENTITY if connection.execute(
