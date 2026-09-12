@@ -18,6 +18,33 @@ from tests.test_storage import PAYLOAD, operation, receipt, cost
 
 
 class ServiceStorageTests(unittest.TestCase):
+    def test_full_verification_checks_database_once_per_snapshot_not_per_piece(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / 'private'
+            initialize(root)
+            with closing(Store(root)) as store:
+                store.save_dossier('d', 1, PAYLOAD)
+                for number in range(8):
+                    store.put_piece('d', 1, f'piece-{number}', name=f'{number}.txt',
+                                    role='candidate', media_type='text/plain', content=b'fictif')
+                statements = []
+                store._connection.set_trace_callback(statements.append)
+                self.assertTrue(verify(store)['integrity_ok'])
+                # Entry validation and the locked snapshot each check the database
+                self.assertEqual(statements.count('PRAGMA quick_check'), 2)
+                self.assertEqual(statements.count('PRAGMA foreign_key_check'), 2)
+                store._connection.set_trace_callback(None)
+                piece = store.get_piece('piece-0')
+                (root / piece['relative_path']).write_bytes(b'altere')
+                with self.assertRaises(IntegrityError):
+                    verify(store)
+                (root / piece['relative_path']).write_bytes(b'fictif')
+                self.assertTrue(verify(store)['integrity_ok'])
+                store._connection.execute('PRAGMA foreign_keys=OFF')
+                store._connection.execute("UPDATE pieces SET dossier_id='absent' WHERE piece_id='piece-0'")
+                with self.assertRaises(IntegrityError):
+                    verify(store)
+
     def test_quiescence_refuses_active_qualification_and_preserves_data(self):
         from benchmark_lab_x import preparation, qualification as q
         from tests.test_s3_regressions import ACTOR, check, fixture, specification
