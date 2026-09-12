@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, localcontext, MAX_EMAX, MIN_EMIN
 import json
@@ -475,12 +476,13 @@ def _check_schema(connection, allow_empty=False, *, check_data=True):
         if s4 is not None and any(name == 's5_control' for _, name, _, _ in rows):
             from .evaluation import schema_objects
             s5 = s4 + schema_objects()
-        layout = ('canary' if normalized(rows) == normalized(expected) else
-                  's1' if normalized(rows) == normalized(extended) else
-                  's2' if normalized(rows) == normalized(s2) else
-                  's3' if s3 is not None and normalized(rows) == normalized(s3) else
-                  's4' if s4 is not None and normalized(rows) == normalized(s4) else
-                  's5' if s5 is not None and normalized(rows) == normalized(s5) else None)
+        actual = normalized(rows)
+        layout = ('canary' if actual == normalized(expected) else
+                  's1' if actual == normalized(extended) else
+                  's2' if actual == normalized(s2) else
+                  's3' if s3 is not None and actual == normalized(s3) else
+                  's4' if s4 is not None and actual == normalized(s4) else
+                  's5' if s5 is not None and actual == normalized(s5) else None)
         if layout in ('s2', 's3', 's4', 's5') and connection.execute(
                 'SELECT singleton, format_identity FROM s2_control').fetchall() != [(1, PREPARATION_IDENTITY)]:
             raise SchemaError('unsupported preparation identity')
@@ -587,6 +589,7 @@ class Store:
     def __init__(self, root: Path):
         self._connection = None
         self._verified_read_changes = None
+        self._verified_operations = None
         self._root_fd = self._pieces_fd = None
         self._root = _root_path(root)
         try:
@@ -650,6 +653,11 @@ class Store:
             raise ConflictError('budget identity already exists') from error
 
     def _operations(self, connection):
+        snapshot = (connection is self._connection and connection.in_transaction
+                    and self._verified_read_changes is not None
+                    and connection.total_changes == self._verified_read_changes)
+        if snapshot and self._verified_operations is not None:
+            return deepcopy(self._verified_operations)
         rows = connection.execute(
             'SELECT ' + ', '.join('o.' + column for column in _OPERATION_COLUMNS)
             + ', r.budget_id, r.amount, b.currency FROM operations o '
@@ -689,6 +697,8 @@ class Store:
             except (ValueError, TypeError, RecursionError) as error:
                 raise IntegrityError('invalid stored operation or reservation') from error
             records.append(record)
+        if snapshot:
+            self._verified_operations = deepcopy(records)
         return records
 
     def inspect_operations(self) -> list[dict]:
@@ -951,7 +961,9 @@ class Store:
         with _transaction(connection):
             layout = _check_schema(connection)
             previous = self._verified_read_changes
+            previous_operations = self._verified_operations
             self._verified_read_changes = connection.total_changes
+            self._verified_operations = None
             try:
                 intact = connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
                 for dossier_id, revision in connection.execute(
@@ -1003,6 +1015,7 @@ class Store:
                 }
             finally:
                 self._verified_read_changes = previous
+                self._verified_operations = previous_operations
 
 
     def save_dossier(self, dossier_id: str, revision: int, payload: dict) -> None:
