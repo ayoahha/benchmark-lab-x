@@ -18,6 +18,45 @@ from tests.test_storage import PAYLOAD, operation, receipt, cost
 
 
 class ServiceStorageTests(unittest.TestCase):
+    def test_selected_operations_copy_only_requested_records_without_skipping_validation(self):
+        from copy import deepcopy
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / 'private'
+            initialize(root)
+            with closing(Store(root)) as store:
+                store.save_dossier('d', 1, PAYLOAD)
+                store.create_budget('budget', '10', 'TEST')
+                store.reserve_intent(operation('selected'), 'budget', '1')
+                store.reserve_intent(operation('unrelated'), 'budget', '1')
+                original_budget = store._budget
+
+                def inspect_during_verification(connection, budget_id, operations):
+                    with patch('benchmark_lab_x.storage.deepcopy', wraps=deepcopy) as copied:
+                        selected = store._operations(connection, operation_ids={'selected'})
+                    self.assertEqual([r['operation_id'] for r in copied.call_args.args[0]], ['selected'])
+                    selected[0]['resources'].append('caller-only')
+                    self.assertNotIn('caller-only', store._operations(connection, operation_ids={'selected'})[0]['resources'])
+                    self.assertEqual(store._operations(connection, operation_ids=set()), [])
+                    self.assertEqual(original_budget(connection, 'budget')['reserved'], '2')
+                    store.get_dossier('d', 1)
+                    connection.execute('CREATE INDEX unexpected ON operations(phase)')
+                    with self.assertRaises(SchemaError):
+                        store.get_dossier('d', 1)
+                    connection.execute('DROP INDEX unexpected')
+                    connection.execute("UPDATE operations SET resources_json='{}' WHERE operation_id='unrelated'")
+                    with self.assertRaises(IntegrityError):
+                        store._operations(connection, operation_ids={'selected'})
+                    with self.assertRaises(IntegrityError):
+                        original_budget(connection, 'budget')
+                    connection.execute("UPDATE operations SET resources_json='[\"piece-fictive\"]' WHERE operation_id='unrelated'")
+                    return original_budget(connection, budget_id, operations)
+
+                with patch.object(store, '_budget', side_effect=inspect_during_verification):
+                    self.assertTrue(verify(store)['integrity_ok'])
+                store._connection.execute("UPDATE operations SET resources_json='{}' WHERE operation_id='unrelated'")
+                with self.assertRaises(IntegrityError):
+                    store._operations(store._connection, operation_ids={'selected'})
+
     def test_verified_operations_are_copied_and_invalidated_by_writes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve() / 'private'
