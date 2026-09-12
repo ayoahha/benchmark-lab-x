@@ -218,7 +218,7 @@ def _judgment(store, connection, value, ctx, resources, source_operation=None, r
             raise ValueError('Opération assistée incompatible avec le mode')
         return result
     c.identifier(oid)
-    current = next((o for o in store._operations(connection) if o['operation_id'] == oid), None)
+    current = next(iter(store._operations(connection, operation_ids={oid})), None)
     if current is None:
         raise KeyError(oid)
     op = current if source_operation is None else source_operation
@@ -310,7 +310,7 @@ def _configuration_links(store, connection, ctx, judgment):
         'SELECT operation_id FROM s2_actions WHERE dossier_id=? AND input_revision<?',
         (contract['dossier_id'], contract['revision']))}
     candidate = ctx['attempt']['operation']
-    others = [op for op in store._operations(connection) if op['operation_id'] in preparation_ids]
+    others = store._operations(connection, operation_ids=preparation_ids)
     if judgment['operation'] is not None:
         others.append(judgment['operation'])
     result = []

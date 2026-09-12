@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, localcontext, MAX_EMAX, MIN_EMIN
+from functools import cache, lru_cache
 import json
 import math
 import os
@@ -419,6 +420,19 @@ def _connect(root, mode):
         raise
 
 
+@cache
+def _expected_schema(objects):
+    return tuple(sorted((kind, name, table, ' '.join(sql.split()) if sql else None)
+                        for kind, name, table, sql in objects))
+
+
+@lru_cache(maxsize=1)
+def _observed_schema(objects):
+    # Only the latest complete schema value is retained; SQLite is still read each time
+    return tuple(sorted((kind, name, table, ' '.join(sql.split()) if sql else None)
+                        for kind, name, table, sql in objects))
+
+
 def _check_schema(connection, allow_empty=False, *, check_data=True):
     try:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
@@ -447,9 +461,6 @@ def _check_schema(connection, allow_empty=False, *, check_data=True):
             ("index", "sqlite_autoindex_pieces_1", "pieces", None),
             ("index", "sqlite_autoindex_pieces_2", "pieces", None),
         ]
-        def normalized(objects):
-            return sorted((kind, name, table, " ".join(sql.split()) if sql else None)
-                          for kind, name, table, sql in objects)
         extended = expected + [
             ("table", name, name, statement)
             for name, statement in zip(('budgets', 'operations', 'reservations'), _S1_SCHEMA)
@@ -476,13 +487,13 @@ def _check_schema(connection, allow_empty=False, *, check_data=True):
         if s4 is not None and any(name == 's5_control' for _, name, _, _ in rows):
             from .evaluation import schema_objects
             s5 = s4 + schema_objects()
-        actual = normalized(rows)
-        layout = ('canary' if actual == normalized(expected) else
-                  's1' if actual == normalized(extended) else
-                  's2' if actual == normalized(s2) else
-                  's3' if s3 is not None and actual == normalized(s3) else
-                  's4' if s4 is not None and actual == normalized(s4) else
-                  's5' if s5 is not None and actual == normalized(s5) else None)
+        actual = _observed_schema(tuple(rows))
+        layout = ('canary' if actual == _expected_schema(tuple(expected)) else
+                  's1' if actual == _expected_schema(tuple(extended)) else
+                  's2' if actual == _expected_schema(tuple(s2)) else
+                  's3' if s3 is not None and actual == _expected_schema(tuple(s3)) else
+                  's4' if s4 is not None and actual == _expected_schema(tuple(s4)) else
+                  's5' if s5 is not None and actual == _expected_schema(tuple(s5)) else None)
         if layout in ('s2', 's3', 's4', 's5') and connection.execute(
                 'SELECT singleton, format_identity FROM s2_control').fetchall() != [(1, PREPARATION_IDENTITY)]:
             raise SchemaError('unsupported preparation identity')
@@ -652,12 +663,15 @@ class Store:
         except sqlite3.IntegrityError as error:
             raise ConflictError('budget identity already exists') from error
 
-    def _operations(self, connection):
+    def _operations(self, connection, *, operation_ids=None):
+        if operation_ids is not None:
+            operation_ids = frozenset(operation_ids)
         snapshot = (connection is self._connection and connection.in_transaction
                     and self._verified_read_changes is not None
                     and connection.total_changes == self._verified_read_changes)
         if snapshot and self._verified_operations is not None:
-            return deepcopy(self._verified_operations)
+            return deepcopy([record for record in self._verified_operations
+                             if operation_ids is None or record['operation_id'] in operation_ids])
         rows = connection.execute(
             'SELECT ' + ', '.join('o.' + column for column in _OPERATION_COLUMNS)
             + ', r.budget_id, r.amount, b.currency FROM operations o '
@@ -699,7 +713,8 @@ class Store:
             records.append(record)
         if snapshot:
             self._verified_operations = deepcopy(records)
-        return records
+        return [record for record in records
+                if operation_ids is None or record['operation_id'] in operation_ids]
 
     def inspect_operations(self) -> list[dict]:
         return self._operations(self._s1_connection())
@@ -826,7 +841,14 @@ class Store:
                                (operation['operation_id'], raw, digest))
             return {'proof': proof, 'sha256': digest}
 
-    def _budget(self, connection, budget_id, operations):
+    def _budget(self, connection, budget_id, operations=None):
+        if operations is None:
+            snapshot = (connection is self._connection and connection.in_transaction
+                        and self._verified_read_changes is not None
+                        and connection.total_changes == self._verified_read_changes)
+            # This aggregation only reads the private cache and never returns its records
+            operations = (self._verified_operations if snapshot and self._verified_operations is not None
+                          else self._operations(connection))
         row = connection.execute(
             'SELECT limit_amount, currency FROM budgets WHERE budget_id=?', (budget_id,)
         ).fetchone()
@@ -907,7 +929,7 @@ class Store:
                            (operation['operation_id'], budget_id, amount))
 
     def _operation_for_update(self, connection, operation_id, allowed):
-        for record in self._operations(connection):
+        for record in self._operations(connection, operation_ids={operation_id}):
             if record['operation_id'] == operation_id:
                 if record['state'] not in allowed:
                     raise ConflictError('operation transition is not permitted')

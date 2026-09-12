@@ -489,7 +489,9 @@ def _inspect(store, connection, campaign_id):
     if status[1] is not None:
         _present(status[1], 'stop reason')
         _date(status[2])
-    operations = {op['operation_id']: op for op in store._operations(connection)}
+    operation_ids = {row[0] for row in connection.execute(
+        'SELECT operation_id FROM s4_attempts WHERE campaign_id=?', (campaign_id,))}
+    operations = {op['operation_id']: op for op in store._operations(connection, operation_ids=operation_ids)}
     attempts = []
     for row in connection.execute('SELECT operation_id, execution_id, cell_id, admission_id, request_json, request_sha256, engine_json '
                                   'FROM s4_attempts WHERE campaign_id=? ORDER BY rowid', (campaign_id,)):
@@ -553,7 +555,7 @@ def _inspect(store, connection, campaign_id):
     latest = next(reversed(admissions.values())) if admissions else None
     budget_id = latest['authority']['budget_id'] if latest else campaign_id
     try:
-        budget = store._budget(connection, budget_id, list(operations.values()))
+        budget = store._budget(connection, budget_id)
     except KeyError:
         if latest:
             raise IntegrityError('Enveloppe autorisée absente')

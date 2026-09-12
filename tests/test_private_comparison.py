@@ -37,6 +37,17 @@ class PrivateEvaluationTests(unittest.TestCase):
         self.store = self.fixture.store
         self.data = self.fixture.data
 
+    def test_campaign_budget_includes_non_candidate_operations(self):
+        operation = dict(operation_id='separate-judgment', phase='judgment', dossier_id='fixture',
+                         revision=self.fixture.view['revision'], authority='GO_FICTIF',
+                         engine_version='test-s1', requested_configuration={'model':'fictif'}, resources=[])
+        self.store.reserve_intent(operation, 'local-comparison', '3')
+        expected = self.store.inspect_budget('local-comparison')
+        self.assertEqual(expected['reserved'], '3')
+        self.assertEqual(c.inspect(self.store, 'local-comparison')['budget'], expected)
+        self.assertTrue(runtime.verify(self.store)['integrity_ok'])
+
+
     def request(self, status='PASS'):
         prepared = e.prepare_report(self.store, 'local-comparison', 'intent-x')
         ctx = e._context(self.store, e.connection_for(self.store), 'local-comparison', 'intent-x')
