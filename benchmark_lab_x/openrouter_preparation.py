@@ -320,6 +320,17 @@ def post(api_key, wire, timeout=TIMEOUT_SECONDS, max_response_bytes=MAX_RESPONSE
 
 
 class OpenRouterPreparation:
+    phases = ('preparation', 'correction')
+
+    def content(self, request):
+        return outgoing.closed_preparation(request['outgoing'])
+
+    def validate_document(self, document):
+        pass
+
+    def validate_answer(self, result, message):
+        return result
+
     def __init__(self, api_key, profile=None):
         if (type(api_key) is not str or not api_key or not api_key.isascii()
                 or any(character.isspace() or ord(character) < 32 for character in api_key)):
@@ -331,11 +342,11 @@ class OpenRouterPreparation:
         requested = operation['requested_configuration']
         expected = configuration(requested.get('reservation_estimate'), self._profile)
         if ('reserve_usd' not in expected or requested != expected
-                or operation['phase'] not in ('preparation', 'correction')):
+                or operation['phase'] not in self.phases):
             raise ValueError('Configuration ou réservation OpenRouter divergente')
         if request.get('outgoing_format') != outgoing.FORMAT:
             raise ValueError('Ancien format sortant : nouvelle préparation requise')
-        content = outgoing.closed_preparation(request['outgoing'])
+        content = self.content(request)
         wire = encode({'model': self._profile['model'], **self._profile['parameters'], 'messages': [
             {'role': 'system', 'content': self._profile['system']}, {'role': 'user', 'content': encode(content)}]})
         if len(wire.encode()) > self._profile['max_request_bytes'] or self._api_key in wire:
@@ -372,6 +383,7 @@ class OpenRouterPreparation:
                 redacted = True
             if status != 200 or not complete or redacted or document.get('model') not in expected_models:
                 raise ValueError('Réponse non attribuable')
+            self.validate_document(document)
             route = document.get('openrouter_metadata')
             if type(route) is dict:
                 if 'requested' in route and route['requested'] != self._profile['model']:
@@ -401,9 +413,10 @@ class OpenRouterPreparation:
             if self._api_key in encode(result):
                 redacted = True
                 raise ValueError('Réponse confidentielle')
-            if type(result) is dict:
+            if type(result) is dict and operation['phase'] != 'judgment':
                 result = {key: value for key, value in result.items() if value is not None or key in (
                     'stage', 'explanation', 'reformulation', 'fictional_parameters', 'package')}
+            result = self.validate_answer(result, message)
             incident = None
         except (ValueError, TypeError, KeyError, AttributeError):
             result = None

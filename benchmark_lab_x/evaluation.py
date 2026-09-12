@@ -2,7 +2,7 @@
 
 The trusted local caller supplies findings, never a verdict or a transport.
 Real local or human findings require an explicit private operator authority.
-Assisted model calls retain their historical test-only boundary.
+Assisted proposals require a separate private operator submission.
 """
 from contextlib import closing
 from copy import deepcopy
@@ -223,6 +223,9 @@ def _judgment(store, connection, value, ctx, resources, source_operation=None, r
         raise KeyError(oid)
     op = current if source_operation is None else source_operation
     _operation_snapshot(op, current)
+    if op['engine_version'] == 'benchmark-lab-x/judgment/v1':
+        from .judgment import evaluation_judgment
+        return evaluation_judgment(store, connection, value, ctx, op, result)
     contract = ctx['qualification']['contract']
     if (op['phase'] != 'judgment' or op['authority'] != 'TEST_ONLY_JUDGMENT_S5'
             or (op['dossier_id'], op['revision']) != (contract['dossier_id'], contract['revision'])):
@@ -368,8 +371,18 @@ def _record(store, connection, ctx, report, *, evaluation_id, created_at, engine
     _authority(responsible, authority)
     resources = _resources(store, ctx)
     findings, measures, judgment = _report(store, connection, report, ctx, resources, source_operation, responsible)
-    if authority['actor'] == 'Ayo' and judgment['mode'] == 'assisted':
-        raise ValueError('Transport de jugement assisté réel non raccordé')
+    if judgment['mode'] == 'assisted':
+        op = judgment['operation']
+        if op['engine_version'] == 'benchmark-lab-x/judgment/v1':
+            binding = json.loads(op['resources'][0])['request']
+            from .judgment import local_criteria
+            local = local_criteria(ctx['qualification']['contract']['specification'])
+            if any(f['criterion_id'] in local and f['status'] != 'INDETERMINE' for f in findings):
+                raise ValueError('Preuve opérationnelle absente des pièces de la relecture assistée')
+            if binding['previous_evaluation_id'] != previous_evaluation_id:
+                raise ConflictError('Prédécesseur distinct de la relecture assistée')
+        elif authority['actor'] == 'Ayo':
+            raise ValueError('Jugement historique réservé à son autorité fictive')
     verdict, reason = _verdict(ctx, findings, judgment)
     campaign, qualification, attempt = (ctx[k] for k in ('campaign', 'qualification', 'attempt'))
     contract = qualification['contract']
@@ -554,39 +567,45 @@ def _review_piece(piece_id, name, raw):
     return dict(piece_id=piece_id, name=name, sha256=sha256(raw).hexdigest(), content=raw.decode('utf-8'))
 
 
+def _review_content(store, ctx):
+    from . import outgoing
+    resources = _resources(store, ctx)
+    contract = ctx['qualification']['contract']
+    spec = contract['specification']
+    package = contract['package']
+    task_pieces = [_review_piece(p['id'], p['name'], resources[p['id']]) for p in package['pieces']]
+    references = [_review_piece(p['id'], p['name'], resources[p['id']]) for p in contract['reference_pieces']]
+    output = None
+    output_id = ctx['attempt']['output_piece_id']
+    if output_id is not None:
+        meta = store.get_piece(output_id)
+        output = _review_piece(output_id, meta['name'], resources[output_id])
+    method = spec['method']
+    content = outgoing.closed_review(dict(
+        task=dict(instruction=package['instruction'], deliverables=list(package['deliverables']),
+                  criteria=list(package['criteria']), acceptable_ambiguities=list(package['acceptable_ambiguities']),
+                  pieces=task_pieces),
+        result_expected=spec['result_expected'],
+        obligations=[dict(id=x['id'], description=x['description'], tolerance=x['tolerance'],
+                          control_ids=list(x['control_ids'])) for x in spec['obligations']],
+        eliminatory_errors=[dict(id=x['id'], description=x['description'],
+                                 control_ids=list(x['control_ids'])) for x in spec['eliminatory_errors']],
+        method=dict(id=method['id'], version=method['version'], control_ids=list(method['control_ids']),
+                    expected_evidence=method['expected_evidence'], responsible_role=method['responsible_role']),
+        secondary_criteria=[dict(id=x['id'], measure=x['measure'], proof=x['proof'], unit=x['unit'],
+                                 favorable=x['favorable'], aggregation=x['aggregation'])
+                            for x in spec['secondary_criteria']],
+        limits=list(spec['limits']), output=output, references=references))
+    return content
+
+
 def prepare_review(store, campaign_id, attempt_id):
     """Closed judgment view; campaign and attempt ids stay in a local binding"""
     from . import outgoing
     connection = connection_for(store)
     with _transaction(connection):
         ctx = _context(store, connection, campaign_id, attempt_id)
-        resources = _resources(store, ctx)
-        contract = ctx['qualification']['contract']
-        spec = contract['specification']
-        package = contract['package']
-        task_pieces = [_review_piece(p['id'], p['name'], resources[p['id']]) for p in package['pieces']]
-        references = [_review_piece(p['id'], p['name'], resources[p['id']]) for p in contract['reference_pieces']]
-        output = None
-        output_id = ctx['attempt']['output_piece_id']
-        if output_id is not None:
-            meta = store.get_piece(output_id)
-            output = _review_piece(output_id, meta['name'], resources[output_id])
-        method = spec['method']
-        content = outgoing.closed_review(dict(
-            task=dict(instruction=package['instruction'], deliverables=list(package['deliverables']),
-                      criteria=list(package['criteria']), acceptable_ambiguities=list(package['acceptable_ambiguities']),
-                      pieces=task_pieces),
-            result_expected=spec['result_expected'],
-            obligations=[dict(id=x['id'], description=x['description'], tolerance=x['tolerance'],
-                              control_ids=list(x['control_ids'])) for x in spec['obligations']],
-            eliminatory_errors=[dict(id=x['id'], description=x['description'],
-                                     control_ids=list(x['control_ids'])) for x in spec['eliminatory_errors']],
-            method=dict(id=method['id'], version=method['version'], control_ids=list(method['control_ids']),
-                        expected_evidence=method['expected_evidence'], responsible_role=method['responsible_role']),
-            secondary_criteria=[dict(id=x['id'], measure=x['measure'], proof=x['proof'], unit=x['unit'],
-                                     favorable=x['favorable'], aggregation=x['aggregation'])
-                                for x in spec['secondary_criteria']],
-            limits=list(spec['limits']), output=output, references=references))
+        content = _review_content(store, ctx)
         previous = _records(store, connection, attempt_id)
         return dict(outgoing_format=outgoing.FORMAT, content=content, content_sha256=q.digest(content),
                     binding=dict(campaign_id=campaign_id, attempt_id=attempt_id,
