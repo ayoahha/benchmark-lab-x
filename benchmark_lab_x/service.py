@@ -33,7 +33,7 @@ def release_identity():
 
 def executor_health(path):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(2)
+        connection.settimeout(5)
         connection.connect(str(path))
         connection.sendall(b'health\n')
         with connection.makefile('rb') as stream:

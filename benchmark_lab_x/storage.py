@@ -418,7 +418,7 @@ def _connect(root, mode):
         raise
 
 
-def _check_schema(connection, allow_empty=False):
+def _check_schema(connection, allow_empty=False, *, check_data=True):
     try:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         rows = connection.execute(
@@ -500,10 +500,11 @@ def _check_schema(connection, allow_empty=False):
             raise SchemaError("unsupported storage schema structure")
         if connection.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
             raise SchemaError("S1 requires the standard DELETE journal")
-        if connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
-            raise SchemaError("damaged SQLite database")
-        if connection.execute("PRAGMA foreign_key_check").fetchall():
-            raise IntegrityError("broken dossier/piece reference")
+        if check_data:
+            if connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                raise SchemaError("damaged SQLite database")
+            if connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise IntegrityError("broken dossier/piece reference")
         return layout
     except sqlite3.DatabaseError as error:
         raise SchemaError("unreadable storage schema") from error
@@ -585,6 +586,7 @@ class Store:
 
     def __init__(self, root: Path):
         self._connection = None
+        self._verified_read_changes = None
         self._root_fd = self._pieces_fd = None
         self._root = _root_path(root)
         try:
@@ -621,7 +623,12 @@ class Store:
         if ((current.st_dev, current.st_ino)
                 != (self._database_identity.st_dev, self._database_identity.st_ino)):
             raise IntegrityError("database identity changed")
-        _check_schema(self._connection)
+        # A full verification already checked this unchanged SQLite read snapshot
+        # Paths, schema identities and piece bytes remain checked on every read
+        check_data = (self._verified_read_changes is None
+                      or not self._connection.in_transaction
+                      or self._connection.total_changes != self._verified_read_changes)
+        _check_schema(self._connection, check_data=check_data)
         return self._connection
 
     def _s1_connection(self):
@@ -943,54 +950,60 @@ class Store:
         connection = self._connection_checked()
         with _transaction(connection):
             layout = _check_schema(connection)
-            intact = connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
-            for dossier_id, revision in connection.execute(
-                    'SELECT dossier_id, revision FROM dossier_revisions').fetchall():
-                try:
-                    self.get_dossier(dossier_id, revision)
-                except IntegrityError:
-                    intact = False
-            broken, references = [], set()
-            for piece_id, relative_path in connection.execute(
-                    'SELECT piece_id, relative_path FROM pieces ORDER BY piece_id').fetchall():
-                references.add(relative_path)
-                try:
-                    self.read_piece(piece_id)
-                except IntegrityError:
-                    broken.append(piece_id)
-            # Inventory names only: do not follow links or remove partial/orphan bytes
-            orphans = sorted('pieces/' + name for name in os.listdir(self._pieces_fd)
-                             if 'pieces/' + name not in references)
-            operations = self._operations(connection) if layout in ('s1', 's2', 's3', 's4', 's5') else []
-            if layout in ('s1', 's2', 's3', 's4', 's5'):
-                for (budget_id,) in connection.execute('SELECT budget_id FROM budgets').fetchall():
-                    self._budget(connection, budget_id, operations)
-            if layout in ('s2', 's3', 's4', 's5'):
-                from .preparation import verify_preparation
-                verify_preparation(self, connection)
-            if layout in ('s3', 's4', 's5'):
-                from .qualification import verify_qualification
-                verify_qualification(self, connection)
-            if layout in ('s4', 's5'):
-                from .campaigns import verify_campaigns
-                verify_campaigns(self, connection)
-            if layout == 's5':
-                from .evaluation import verify_evaluations
-                verify_evaluations(self, connection)
-                from .judgment import verify_judgments
-                verify_judgments(self, connection)
-            return {
-                'schema_version': SCHEMA_VERSION, 'integrity_ok': intact and not broken,
-                'cost_reconciliation_format': RECONCILIATION_IDENTITY if connection.execute(
-                    "SELECT 1 FROM sqlite_schema WHERE name='cost_reconciliations'").fetchone() else None,
-                'broken_pieces': broken, 'orphan_files': orphans,
-                'active_operations': [row['operation_id'] for row in operations
-                                      if row['state'] != 'RECEIVED'],
-                'ambiguous_operations': [row['operation_id'] for row in operations
-                                         if row['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS')],
-                'unknown_cost_operations': [row['operation_id'] for row in operations
-                    if self._effective_cost(connection, row) is not None and self._effective_cost(connection, row)['status'] == 'UNKNOWN'],
-            }
+            previous = self._verified_read_changes
+            self._verified_read_changes = connection.total_changes
+            try:
+                intact = connection.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
+                for dossier_id, revision in connection.execute(
+                        'SELECT dossier_id, revision FROM dossier_revisions').fetchall():
+                    try:
+                        self.get_dossier(dossier_id, revision)
+                    except IntegrityError:
+                        intact = False
+                broken, references = [], set()
+                for piece_id, relative_path in connection.execute(
+                        'SELECT piece_id, relative_path FROM pieces ORDER BY piece_id').fetchall():
+                    references.add(relative_path)
+                    try:
+                        self.read_piece(piece_id)
+                    except IntegrityError:
+                        broken.append(piece_id)
+                # Inventory names only: do not follow links or remove partial/orphan bytes
+                orphans = sorted('pieces/' + name for name in os.listdir(self._pieces_fd)
+                                 if 'pieces/' + name not in references)
+                operations = self._operations(connection) if layout in ('s1', 's2', 's3', 's4', 's5') else []
+                if layout in ('s1', 's2', 's3', 's4', 's5'):
+                    for (budget_id,) in connection.execute('SELECT budget_id FROM budgets').fetchall():
+                        self._budget(connection, budget_id, operations)
+                if layout in ('s2', 's3', 's4', 's5'):
+                    from .preparation import verify_preparation
+                    verify_preparation(self, connection)
+                if layout in ('s3', 's4', 's5'):
+                    from .qualification import verify_qualification
+                    verify_qualification(self, connection)
+                if layout in ('s4', 's5'):
+                    from .campaigns import verify_campaigns
+                    verify_campaigns(self, connection)
+                if layout == 's5':
+                    from .evaluation import verify_evaluations
+                    verify_evaluations(self, connection)
+                    from .judgment import verify_judgments
+                    verify_judgments(self, connection)
+                return {
+                    'schema_version': SCHEMA_VERSION, 'integrity_ok': intact and not broken,
+                    'cost_reconciliation_format': RECONCILIATION_IDENTITY if connection.execute(
+                        "SELECT 1 FROM sqlite_schema WHERE name='cost_reconciliations'").fetchone() else None,
+                    'broken_pieces': broken, 'orphan_files': orphans,
+                    'active_operations': [row['operation_id'] for row in operations
+                                          if row['state'] != 'RECEIVED'],
+                    'ambiguous_operations': [row['operation_id'] for row in operations
+                                             if row['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS')],
+                    'unknown_cost_operations': [row['operation_id'] for row in operations
+                        if self._effective_cost(connection, row) is not None and self._effective_cost(connection, row)['status'] == 'UNKNOWN'],
+                }
+            finally:
+                self._verified_read_changes = previous
+
 
     def save_dossier(self, dossier_id: str, revision: int, payload: dict) -> None:
         _identity(dossier_id, revision)
