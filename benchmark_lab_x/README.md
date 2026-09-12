@@ -93,7 +93,7 @@ Le workflow [GitHub Pages](../.github/workflows/pages.yml) publie `pages/` lors 
 
 ## Interfaces locales du service Linux en construction
 
-L’[ARD](../docs/ARD.md#3-pi-comme-frontière-constante) impose OpenRouter pour tous les appels modèles du produit : préparation, correction, jugement et candidats. Aucun modèle indisponible sur ce canal ne doit être appelé par l’API propre de son fournisseur, ni remplacé implicitement. Pi reste le harnais des candidats et doit utiliser OpenRouter ; le moteur historique le sélectionne déjà avec `--provider openrouter` et désactive le repli fournisseur. S4 fournit une interface à transport injecté ; le raccordement Pi/OpenRouter et le jugement opérateur sont décrits dans la section « Première comparaison privée » ci-dessous. S5 ne raccorde aucun modèle juge réel. Les contrats historiques et les outils de développement Graph/Codex restent hors de cette nouvelle règle produit.
+L’[ARD](../docs/ARD.md#3-pi-comme-frontière-constante) impose OpenRouter pour tous les appels modèles du produit : préparation, correction, jugement et candidats. Le secours officiel candidat explicitement autorisé suit les conditions décrites ci-dessous ; aucune substitution implicite de modèle n’est admise. Pi reste le harnais des candidats et doit utiliser OpenRouter ; le moteur historique le sélectionne déjà avec `--provider openrouter` et désactive le repli fournisseur. S4 fournit une interface à transport injecté ; le raccordement Pi/OpenRouter et le jugement opérateur sont décrits dans la section « Première comparaison privée » ci-dessous. S5 ne raccorde aucun modèle juge réel. Les contrats historiques et les outils de développement Graph/Codex restent hors de cette nouvelle règle produit.
 
 Le module `benchmark_lab_x.runtime` fournit une initialisation privée, la vérification de SQLite et des pièces, la maintenance, une sauvegarde cohérente et une restauration vers un nouvel emplacement. Ces interfaces sont distinctes du moteur historique ci-dessus. Les processus web et exécuteur sont fournis ci-dessous. Le candidat local ajoute le parcours fictif S2 décrit plus bas. Le raccordement local OpenRouter de préparation est décrit ci-dessous ; ses essais réels restent à autoriser et vérifier.
 
@@ -511,7 +511,7 @@ Le module [restitution.py](restitution.py) relie le besoin, la révision du doss
 | `restitution.materialize(bundle, approval, destination)` | Vérification des octets et du reçu fictif, puis activation atomique dans un répertoire local existant |
 | `GET /publications/{sha256}/{file}` | Lecture de la projection S6 vérifiée, indépendante du pointeur actif, du stockage privé et de l’exécuteur |
 
-Les paramètres GET combinables sont `case`, `sort`, `direction`, `verdict`, `obligation` et `configuration`. `sort` accepte les clés `id` renvoyées dans `columns`. `cost` désigne le coût observé. Les critères secondaires gardent leur identifiant, sauf le critère nommé `cost` : sa clé de tri reçoit autant de préfixes `criterion:` que nécessaire pour éviter toute collision. `criterion_id` conserve son identifiant contractuel, sans modifier le contrat approuvé ; `direction` accepte `asc` et `desc`. `verdict` accepte les trois verdicts S5, et `obligation` associe un identifiant d’obligation à `PASS`, `FAIL` ou `INDETERMINE`, par exemple `O1:FAIL`. Les identifiants de cas et configuration proviennent de la seule campagne choisie. Paramètre inconnu, répété, vide ou hors contrat : refus. L’interface propose des formulaires GET séparés qui conservent les autres sélections, et des liens pour enlever un filtre ou tous les filtres. L’absence de tri garde un ordre descriptif, sans préférence produit.
+Les paramètres GET combinables sont `case`, `sort`, `direction`, `verdict`, `obligation` et `configuration`. `sort` accepte les clés `id` renvoyées dans `columns`. `cost` désigne le coût observé. Les critères secondaires gardent leur identifiant, sauf le critère nommé `cost` : sa clé de tri reçoit autant de préfixes `criterion:` que nécessaire pour éviter toute collision. `criterion_id` conserve son identifiant contractuel, sans modifier le contrat approuvé ; `direction` accepte `asc` et `desc`. `verdict` accepte `SATISFAIT`, `NE SATISFAIT PAS`, `A_REPRENDRE` et l’alias historique `INDETERMINE`, et `obligation` associe un identifiant d’obligation à `PASS`, `FAIL` ou `INDETERMINE`, par exemple `O1:FAIL`. Les identifiants de cas et configuration proviennent de la seule campagne choisie. Paramètre inconnu, répété, vide ou hors contrat : refus. L’interface propose des formulaires GET séparés qui conservent les autres sélections, et des liens pour enlever un filtre ou tous les filtres. L’absence de tri garde un ordre descriptif, sans préférence produit.
 
 Un script fixe, autorisé par l’empreinte CSP `sha256-UYVwhfSrYOHss9ut/0sNyZev/f+WGn1ovpct7BS3gkA=` sur la seule comparaison HTML, conserve la ligne consultée dans l’historique du navigateur et rétablit son focus au retour. Les régressions vérifient cette empreinte exacte et son périmètre HTTP. Il ne lit ni pièce ni contenu candidat et n’effectue aucune requête. Les formulaires, le lien de retour explicite et le reste du parcours restent natifs.
 
@@ -603,8 +603,54 @@ python -m benchmark_lab_x.runtime inspect-judgment --data /chemin/prive --author
 
 Une campagne arrêtée, une restauration à rapprocher, une dérive ou un verrou de sauvegarde bloque l’admission. Une émission ne peut partir qu’une fois. Interruption et timeout conservent une ambiguïté ; une réception tardive peut compléter ce reçu sans réécrire une évaluation. Un coût inconnu garde la réserve et bloque les appels dépendant de l’enveloppe ou de la même campagne, même avec un autre budget : l’exception de préparation ne s’applique pas au jugement.
 
-La sortie d’inspection contient `operation`, `binding` et `proposal` (nul si inexploitable). L’opérateur examine `proposal.report`, complète ou corrige les constats et soumet séparément le format `constats.json` décrit plus haut avec `evaluate-attempt`. Il conserve le mode `assisted` et l’opération effectivement utilisée. Critères, pièces, empreintes, passages, provenance et dernier prédécesseur sont contrôlés avant calcul local du verdict. Une seconde correction concurrente est refusée.
+La sortie d’inspection contient `operation`, `binding`, `proposal` (nul si inexploitable) et un `diagnostic` dérivé de la réponse conservée. L’opérateur examine `proposal.report`, complète ou corrige les constats et soumet séparément le format `constats.json` décrit plus haut avec `evaluate-attempt`. Il conserve le mode `assisted` et l’opération effectivement utilisée. Critères, pièces, empreintes, passages, provenance et dernier prédécesseur sont contrôlés avant calcul local du verdict. Une seconde correction concurrente est refusée.
 
 Les pièces citées prouvent leurs octets, pas la justesse métier d’un constat. Les critères sur les données opérationnelles exclues exigent un contrôle local. Une garde conservatrice repère les mentions de coût, budget, transport, latence ou durée dans les critères et conserve leurs constats assistés à `INDETERMINE` ; une soumission assistée ne peut pas transformer ces constats en succès en citant seulement la sortie. Cette garde ne constitue pas une analyse sémantique générale des exigences. La référence qualifiée et la relecture opérateur restent nécessaires pour identifier les autres preuves absentes.
 
 Les [tests propres S14](../tests/test_s14_judgment.py) couvrent CLI, profil changé, concurrence, verrou de sauvegarde, maintenance, restauration et réception tardive. Les tests utilisent des réponses HTTP synthétiques ; ils ne prouvent aucun appel produit ni qualification d’un modèle. La CI Linux avec services et la suite historique native macOS restent des preuves distinctes à acquérir sur le candidat exact.
+
+
+## Décisions conclusives et travaux à reprendre
+
+Les nouvelles évaluations propriétaire utilisent le format de reçu `benchmark-lab-x/evaluations/v2`. Elles conservent le rapport complet, le contexte, les preuves et la chaîne `previous_evaluation_id`. Une évaluation non concluante porte `verdict: null`, un `state` et une `decision` contenant le motif et la prochaine action. Elle reste consultable et corrigible ; aucun constat ni arbitrage soumis n’est perdu. Une décision conclusive porte `SATISFAIT` ou `NE SATISFAIT PAS`. L’assistant ne finalise aucune décision.
+
+La disposition SQL et `s5_control` restent en version 1. Le lecteur accepte explicitement les reçus v1 et v2 et refuse les formats inconnus. Les reçus historiques v1 sont reconstruits avec leur logique d’origine. **Après une première écriture v2, l’ancien binaire ne peut plus vérifier ce stockage.** Un retour arrière exige un lecteur compatible ou une restauration coordonnée autorisée, en conservant les écritures postérieures à la sauvegarde.
+
+L’opérateur peut consulter la suite à donner sans clé ni appel modèle :
+
+```sh
+python -m benchmark_lab_x.runtime inspect-attempt-status --data /chemin/prive --authority /chemin/tentative.json
+```
+
+Le fichier privé contient exactement `campaign_id` et `attempt_id`. La réponse distingue décision, diagnostic candidat, dernière opération de juge et travail de relecture restant. `inspect-judgment` distingue notamment une citation de preuve invalide d’un incident de transport. Les passages restent vérifiés exactement ; aucune correction automatique de citation ne modifie le reçu. Une erreur du juge se résout sur la même sortie, avec une nouvelle évaluation liée à la précédente.
+
+La comparaison privée expose `decision`, un verdict métier éventuellement nul, les `pending_attempts` et le nombre `decided_attempts`. Le détail historique garde la valeur d’origine. Le filtre `A_REPRENDRE` sélectionne les lignes sans verdict ; l’ancien filtre `INDETERMINE` reste un alias de lecture. Les coûts et populations de classement ne changent pas.
+
+Les reprises utilisent toujours les capacités et autorités figées. Une réponse HTTP 429/502/503/504 complète peut omettre l’identité du modèle sans constituer une contradiction ; une identité explicitement divergente reste bloquante. La réserve prudente ne devient pas une consommation observée. Une route fautive non attribuable, des routes épuisées, une autorité absente ou des effets inconnus donnent un motif d’arrêt. Aucun nouvel appel candidat ne suit une réponse complète simplement pour chercher un meilleur verdict.
+
+Le transport candidat officiel réutilise Pi et la projection fermée. La commande privée `execute-candidate` sélectionne explicitement `--candidate-provider anthropic|deepseek|zai` ; OpenRouter reste le défaut. Les canaux sont fixes : Messages Anthropic, Chat Completions DeepSeek et API générale Z.ai. Les clés ne rejoignent ni Pi ni le corps candidat. Le reçu conserve le corps natif, son empreinte, l’identité observée et les quantités natives. Sans reçu financier, le coût reste `UNKNOWN` et la réserve reste engagée.
+
+Le manifeste de secours conserve `recovery_of` et ajoute `official_fallback: {"route_attempts": ["identifiant-operation"]}`. Ces opérations antérieures doivent prouver des incidents de route, sorties vides ou troncatures épuisées sur toutes les routes OpenRouter initialement autorisées, pour la même cellule, tâche et identité. Une réponse complète ou un refus ne permet pas ce secours. Une troncature n’est épuisée que si son plafond figé et autorisé est atteint, ou si augmenter la limite sur la même route n’a produit aucune progression. Sans cette preuve, les reprises OpenRouter restent prioritaires.
+
+La configuration officielle conserve l’effort et les identifiants modèle/révision, à l’exception du préfixe fournisseur OpenRouter. Elle est admise séparément avec son budget et ses paramètres natifs : `output_config.effort` pour Anthropic ; `thinking.type=enabled` et `reasoning_effort` pour DeepSeek et Z.ai ; `max_tokens` et `stream=false` dans les trois cas. Un ancien binaire ne sait pas lire ce nouveau manifeste : appliquer les mêmes précautions de retour arrière que pour les reçus v2.
+
+La découverte authentifiée du 12 septembre 2026 confirme `claude-opus-5` chez Anthropic et `deepseek-flash` chez DeepSeek. Le second est un alias : le validateur ne le substitue pas silencieusement à `deepseek-v4.1-flash`. L’API DeepSeek a retiré V4 Flash et redirige son ancien alias vers V4.1 ; aucun secours exact 0731 n’est établi. Le raccordement local testé avec des réponses HTTP simulées ne prouve ni un appel officiel réel ni son déploiement sur la VM.
+
+
+## Clés API dans un fichier .env
+
+Depuis la racine du projet, copier [.env.example](../.env.example) vers `.env`, puis renseigner les clés souhaitées. Le fichier `.env` est ignoré par Git ; seul l’exemple avec des valeurs vides est versionné. Lui donner les permissions `600` sur macOS ou Linux.
+
+`OPENROUTER_API_KEY` concerne le canal principal. `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY` et `ZAI_API_KEY` sont facultatives et réservées aux secours officiels. Les renseigner ne déclenche aucun appel ; le secours exige sa sélection et une admission distinctes.
+
+Le chargement local utilise uv, déjà présent dans la chaîne du projet, sans dépendance supplémentaire :
+
+```sh
+uv run --env-file .env python -m benchmark_lab_x.runtime <commande> <options>
+```
+
+Cette option charge les variables pour la commande opérateur concernée ; le runtime ne recherche pas automatiquement un fichier dans le dossier courant. Ne pas charger les clés dans le processus du serveur web public. Sur la VM, le fichier privé d’environnement de l’exécuteur remplit déjà cette fonction et reste hors des archives de déploiement. Aucun coffre de secrets supplémentaire n’est requis pour ce mode de configuration.
+
+## Modèle DeepSeek courant
+
+DeepSeek V4.1 Flash remplace 0731 dans le panel et les assistants à sélectionner. Le registre propose `deepseek-v4-1-flash`, identifiant OpenRouter `deepseek/deepseek-v4.1-flash`. L’ancien modèle et son alias redirigé sont refusés pour les nouvelles campagnes, réservations et émissions, y compris depuis un ancien profil ou une intention déjà enregistrée. Le parcours de préparation affiche ce retrait. Les lectures et preuves historiques gardent leurs identités ; aucun résultat 0731 n’est renommé en V4.1.

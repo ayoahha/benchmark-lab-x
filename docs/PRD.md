@@ -38,7 +38,7 @@ Le catalogue distingue le métier ou domaine, qui donne le contexte, et la famil
 | L’exemple ne me convient pas | corriger ce qui diffère de mon besoin | dossier révisé sans perdre les accords non touchés |
 | Je dois choisir un modèle pour une tâche précise | comparer les résultats sous le même Pi | verdicts, classements par critère et filtres explicables |
 | Je veux examiner les compromis de coût et de résultat | consulter des mesures connues et comparables | erreurs visibles, égalités conservées et inconnues non classées |
-| La preuve ne suffit pas | éviter une conclusion artificielle | préparation suspendue ou verdict `INDETERMINE` motivé selon la phase |
+| La preuve ne suffit pas | résoudre ce qui empêche la décision | préparation, exécution ou évaluation à reprendre, avec cause et prochaine action |
 | Je veux vérifier une conclusion                  | retrouver tâche, contrat, configuration, sortie et preuves                    | chaîne d'attribution bornée                              |
 | Je cherche une tâche proche de mon besoin        | parcourir le catalogue et sa couverture réelle                               | tâche, version, cas et campagnes pertinents              |
 
@@ -60,7 +60,7 @@ Ce jalon réunit les capacités ci-dessous et les [critères d’acceptation pro
 - catalogue de tâches versionnées, avec contrat et cas d'essai identifiés ; aucune demande n’y est publiée automatiquement
 - plusieurs campagnes, chacune liée à une version de tâche, à ses cas et à un panel figé
 - résultats réellement acquis et évalués sur le catalogue et le panel approuvés
-- accès API via OpenRouter sous Pi constant pour chaque comparaison
+- accès API via OpenRouter sous Pi constant ; secours officiel candidat en dernier recours selon les conditions de l’ARD
 - suivi des tentatives, incidents, coûts et preuves sans relance implicite
 - navigation catalogue, tâche, campagne et comparaison des configurations
 - classements par critère et filtres combinés, sans note pondérée ni désignation automatique du meilleur modèle
@@ -68,11 +68,11 @@ Ce jalon réunit les capacités ci-dessous et les [critères d’acceptation pro
 
 Le parcours fondé sur les demandes des utilisateurs remplace le corpus prédéfini de deux à neuf tâches. Comparer des salles pour une association et transformer des notes de réunion en suivi des décisions et actions deviennent des exemples pédagogiques, sans périmètre obligatoire ni preuve de couverture métier. Les cas de chaque tâche restent à construire et à qualifier. Les réponses d’une campagne sont réellement acquises sous autorisation ; une simulation ne constitue pas un résultat de benchmark. Le choix et le nombre des campagnes réelles nécessaires à 0.1.0 restent à décider.
 
-Le panel nominal retenu par Ayo pour 0.1.0 est : GLM5.3, Deepseek V4 Flash-0731, Muse spark 1.3, Hy4 Preview, Minimax M3, Qwen3.8-Max-0902, Mimo-V2.5-Pro, Gemini 3.8 Flash, Kimi k3 et Grok 4.6. Les révisions `0731` et `0902` sont exigées.
+Le produit est agnostique des modèles et de leurs versions. Les choix courants relèvent du registre de modèles, des profils d’assistance approuvés et des manifestes de campagne. Ils peuvent évoluer sans modifier les spécifications. Chaque campagne fige son panel et les identités exactes requises avant admission ; les résultats historiques conservent leurs configurations d’origine.
 
-Cette décision ne prouve ni disponibilité, ni identifiant fournisseur, ni compatibilité avec Pi. Son articulation avec les panels du nouveau parcours reste à décider ; elle ne prescrit pas ces dix modèles pour toute demande utilisateur. Les contrats, cas, configurations exactes, accès, routes, agrégations et budgets sont arrêtés avant les manifestes de campagne. Aucun alias ou modèle de substitution n’est déduit du nom retenu. La capacité logicielle sur données synthétiques prouve seulement le logiciel ; 0.1.0 exige aussi les résultats réels autorisés.
+La sélection d’un modèle ne prouve ni sa disponibilité ni sa compatibilité avec le harnais. Les contrats, cas, configurations exactes, accès, routes, agrégations et budgets sont arrêtés avant les manifestes de campagne. Aucun alias ou modèle de substitution n’est déduit du nom retenu. La capacité logicielle sur données synthétiques prouve seulement le logiciel ; 0.1.0 exige aussi les résultats réels autorisés.
 
-Ayo a retenu sept modèles à essayer pour l’accueil et la préparation : GPT-6 Astra, Fable 5.1, kimi-k3, grok-4.6, GLM5.3-flash, Deepseek V4 Flash 0731 et Qwen 3.8 max 0902. Cette liste ne remplace pas le panel nominal des candidats. Aucun de ces assistants n’est déclaré sélectionné, disponible ou moins cher sans preuve. Le responsable peut retenir un profil OpenRouter déjà approuvé au démarrage, sans modifier le code ; un fichier de profil ne promeut aucun essai en assistant de production. Leurs essais doivent examiner la fidélité au besoin vague, l’utilité des questions, l’absence de besoins inventés, la cohérence et la vérifiabilité du cas, ainsi que la conservation des accords lors des modifications. Coûts et provenance sont examinés séparément de cette qualité ; identifiants, méthode d’essai et budget doivent être décidés avant les appels.
+Les assistants d’accueil, de préparation et de jugement sont sélectionnés séparément du panel candidat. Aucun assistant n’est déclaré qualifié, disponible ou moins cher sans preuve. Le responsable peut retenir un profil OpenRouter déjà approuvé au démarrage, sans modifier le code ; un fichier de profil ne promeut aucun essai en assistant de production. Les essais de préparation examinent la fidélité au besoin vague, l’utilité des questions, l’absence de besoins inventés, la cohérence et la vérifiabilité du cas, ainsi que la conservation des accords lors des modifications. Coûts et provenance sont examinés séparément de cette qualité ; identifiants, méthode d’essai et budget doivent être décidés avant les appels.
 
 Restent ouverts avant réalisation ou ouverture des fonctions concernées : approbateur du contrat et admission des demandes, identité et sessions, traitement des saisies sensibles et conservation, financement et enveloppes, protection contre les abus, articulation des panels et campagnes réelles, publication et alimentation du catalogue. La confidentialité demeure la règle avant autorisation de publication. Les frontières d’accès et le composant portant l’assistance sont à préciser dans l’[ARD](ARD.md#121-frontières-du-produit). Ces inconnues n’annulent pas le cap produit ; elles n’autorisent aucun choix implicite de compte, quota, prix ou publication automatique.
 
@@ -82,7 +82,7 @@ Un score pondéré personnalisé appartient à la vision durable, hors 0.1.0. Av
 
 La couverture de métiers variés appartient à la vision durable : droit et notariat, documentation de santé, enseignement, artisanat, maintenance, logistique, agriculture, comptabilité, journalisme ou qualité industrielle, sans liste fermée ni couverture de tous ces domaines exigée pour 0.1.0. Les cas sont choisis pour leur utilité et les difficultés concrètes du travail, sans obligation de mettre en échec un humain ou un modèle réputé performant.
 
-Les bons modèles locaux appartiennent à la vision durable du produit, sans intégration imposée à 0.1.0. Leur entrée dans un panel exige une décision propre, avec identité des poids, quantification, serveur d’inférence, matériel et base de coût explicites. Cette perspective n’autorise aucun contournement du canal unique [OpenRouter](ARD.md#3-pi-comme-frontière-constante).
+Les bons modèles locaux appartiennent à la vision durable du produit, sans intégration imposée à 0.1.0. Leur entrée dans un panel exige une décision propre, avec identité des poids, quantification, serveur d’inférence, matériel et base de coût explicites. Cette perspective n’autorise aucun contournement du canal normal [OpenRouter](ARD.md#3-pi-comme-frontière-constante).
 
 Les abonnements comme objets de comparaison, les produits agentiques et la comparaison de harnais exigent un besoin démontré et une décision de périmètre. Aucun scénario de maquette ne devient implicitement une tâche du catalogue.
 

@@ -185,11 +185,16 @@ def _entries(values, fields, label):
 
 
 def _manifest(value, contract):
-    _fields(value, _MANIFEST + tuple(k for k in ('financial_cost_policy', 'recovery_of') if k in value), 'manifest')
+    _fields(value, _MANIFEST + tuple(k for k in ('financial_cost_policy', 'recovery_of', 'official_fallback') if k in value), 'manifest')
     if value.get('financial_cost_policy', 'require_observed') not in ('require_observed', 'retain_reserve'):
         raise ValueError('Politique financière inconnue')
     if 'recovery_of' in value:
         identifier(value['recovery_of'])
+    if 'official_fallback' in value:
+        if 'recovery_of' not in value:
+            raise ValueError('Secours officiel sans tentative source')
+        _fields(value['official_fallback'], ('route_attempts',), 'official fallback')
+        q._texts(value['official_fallback']['route_attempts'], 'route attempts', required=True, unique=True)
     encode(value)
     identifier(value['campaign_id'])
     if type(value['version']) is not int or value['version'] < 1:
@@ -200,6 +205,10 @@ def _manifest(value, contract):
         if case['package_sha256'] != contract['package_sha256']:
             raise ValueError('Cas sans paquet contractuel exact')
     panel = _entries(value['panel'], _CONFIGURATION, 'panel')
+    from .pi_official import CHANNELS
+    official_channels = {'https://' + host + path for provider, host, path, key in CHANNELS.values()}
+    if any(config['channel_id'] in official_channels for config in value['panel']) and 'official_fallback' not in value:
+        raise ValueError('Secours officiel lié aux reçus OpenRouter requis')
     for config in value['panel']:
         for field in ('provider', 'model', 'revision', 'access', 'channel_id'):
             _present(config[field], field)
@@ -258,7 +267,7 @@ def _approved(store, connection, fingerprint, *, current=False):
 
 def create(store, manifest):
     value = deepcopy(manifest)
-    _fields(value, _MANIFEST + tuple(k for k in ('financial_cost_policy', 'recovery_of') if k in value), 'manifest')
+    _fields(value, _MANIFEST + tuple(k for k in ('financial_cost_policy', 'recovery_of', 'official_fallback') if k in value), 'manifest')
     _intact(store)
     connection = connection_for(store)
     with _transaction(connection, write=True):
@@ -270,6 +279,9 @@ def _create(store, connection, value):
     try:
         contract = _approved(store, connection, value['contract_sha256'], current=True)
         _manifest(value, contract)
+        from .model_catalog import require_current
+        for configuration in value['panel']:
+            require_current(configuration)
         if 'recovery_of' in value:
             from .recovery import validate_link
             validate_link(store, connection, value)
@@ -589,6 +601,7 @@ def verify_campaigns(store, connection):
 
 
 def _retained_costs(snapshot, store=None, connection=None):
+    from .recovery import routing_error
     if snapshot['manifest'].get('financial_cost_policy') != 'retain_reserve':
         return set()
     attempts = list(snapshot['attempts'])
@@ -596,14 +609,15 @@ def _retained_costs(snapshot, store=None, connection=None):
         from .recovery import parent
         previous, _ = parent(store, connection, snapshot['manifest']['recovery_of'])
         return _retained_costs(previous, store, connection) | {a['operation_id'] for a in attempts
-                if a['state'] == 'RECEIVED' and not a['attribution_incident']
+                if a['state'] == 'RECEIVED' and (not a['attribution_incident'] or routing_error(a['operation']))
                 and a['operation']['receipt']['result']['emission'] == 'ESTABLISHED'}
     return {a['operation_id'] for a in attempts
-            if a['state'] == 'RECEIVED' and not a['attribution_incident']
+            if a['state'] == 'RECEIVED' and (not a['attribution_incident'] or routing_error(a['operation']))
             and a['operation']['receipt']['result']['emission'] == 'ESTABLISHED'}
 
 
 def _envelope(store, connection, snapshot, authority):
+    from .recovery import routing_error
     operations = store._operations(connection)
     budget = store._budget(connection, authority['budget_id'], operations)
     campaign_operations = {row[0] for row in connection.execute('SELECT operation_id FROM s4_attempts')}
@@ -613,10 +627,10 @@ def _envelope(store, connection, snapshot, authority):
         raise BudgetError('Unité du budget différente de la base de coût')
     retained = _retained_costs(snapshot, store, connection)
     if (set(budget['unknown_cost_operations']) - retained or Decimal(budget['available']) < 0
-            or any(_attribution(op['receipt'], op['requested_configuration'])
+            or any((_attribution(op['receipt'], op['requested_configuration']) and not routing_error(op))
                    or op['receipt']['result']['emission'] != 'ESTABLISHED' for op in dependent_receipts)
             or any(op['budget_id'] == authority['budget_id'] and op['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS') for op in operations)
-            or any(a['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS') or a['attribution_incident']
+            or any(a['state'] in ('EMISSION_POSSIBLE', 'AMBIGUOUS') or (a['attribution_incident'] and not routing_error(a['operation']))
                    or (a['operation']['observed_cost'] is not None and a['operation']['observed_cost']['status'] == 'UNKNOWN'
                        and a['operation_id'] not in retained)
                    or (a['operation']['receipt'] is not None and a['operation']['receipt']['result']['emission'] != 'ESTABLISHED')
@@ -724,6 +738,9 @@ def launch_view(store, session_id, dossier_id, campaign_id):
         eligible = False
         if grant and grant['session_id'] == session_id:
             try:
+                from .model_catalog import require_current
+                for configuration in snapshot['manifest']['panel']:
+                    require_current(configuration)
                 _eligible(store, connection, snapshot, admission['authority'], admission['evidence'])
                 eligible = not snapshot['restore_pending'] and not snapshot['attempts']
             except (ValueError, ConflictError, BudgetError):

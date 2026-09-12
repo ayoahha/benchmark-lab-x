@@ -27,7 +27,7 @@ def parent(store, connection, operation_id):
 
 
 def observation(attempt):
-    if attempt['state'] != 'RECEIVED' or attempt['attribution_incident']:
+    if attempt['state'] != 'RECEIVED':
         raise ConflictError('Reçu attribuable requis ; aucun rejeu ambigu')
     receipt = attempt['operation']['receipt']
     observed = receipt['observed_configuration']
@@ -43,7 +43,10 @@ def observation(attempt):
     reason = choice.get('finish_reason')
     incident = receipt['result']['incident']
     content = message.get('content') or ''
-    if reason == 'content_filter' or choice.get('native_finish_reason') == 'refusal' or message.get('refusal'):
+    if observed.get('channel_id') == 'https://api.anthropic.com/v1/messages':
+        reason = {'end_turn': 'stop', 'max_tokens': 'length'}.get(data.get('stop_reason'), data.get('stop_reason'))
+        content = receipt['result']['output'] or ''
+    if incident == 'CONTENT_REFUSAL' or reason in ('content_filter', 'refusal') or choice.get('native_finish_reason') == 'refusal' or message.get('refusal'):
         kind = 'CONTENT_REFUSAL'
     elif incident in _UNRECOVERABLE or observed.get('pi', {}).get('terminal') is False:
         kind = 'UNRECOVERABLE'
@@ -57,10 +60,24 @@ def observation(attempt):
         kind = 'COMPLETE'
     else:
         kind = 'UNRECOVERABLE'
+    if attempt['attribution_incident'] and (kind != 'ROUTE_ERROR' or any(
+            observed.get(field) is not None for field in attempt['attribution_incident'])):
+        raise ConflictError('Reçu attribuable requis ; aucune identité contradictoire admise')
     usage = data.get('usage') or {}
     return dict(kind=kind, output_chars=len(content), usage=usage,
                 provider=observed.get('provider'), route=observed.get('route'),
                 receipt_sha256=q.digest(receipt), received_at=http.get('received_at'))
+
+
+def routing_error(operation):
+    """A complete HTTP error may omit model identity without contradicting it"""
+    if operation['receipt'] is None:
+        return False
+    try:
+        return observation(dict(state=operation['state'], operation=operation,
+            attribution_incident=c._attribution(operation['receipt'], operation['requested_configuration'])))['kind'] == 'ROUTE_ERROR'
+    except (ValueError, ConflictError, IntegrityError, KeyError, TypeError):
+        return False
 
 
 def validate_link(store, connection, manifest):
@@ -80,10 +97,85 @@ def validate_link(store, connection, manifest):
     if manifest['plan'] != [cell] or len(manifest['panel']) != 1:
         raise ValueError('Une reprise concerne uniquement la cellule interrompue')
     new = manifest['panel'][0]
+    if 'official_fallback' in manifest:
+        validate_official_link(store, connection, manifest, old, config)
+        return
     if any(new[k] != config[k] for k in config if k not in ('parameters', 'route', 'effort')):
         raise ValueError('Modèle ou identité de tâche modifié')
     if not set(new['parameters']['provider']['only']) <= set(config['parameters']['provider']['only']):
         raise ValueError('Endpoint hors autorisation initiale')
+
+
+def validate_official_link(store, connection, manifest, source, original_config):
+    from .pi_official import CHANNELS
+    from .openrouter_preparation import ENDPOINT
+    new = manifest['panel'][0]
+    endpoints = {'https://' + host + path: provider for provider, host, path, key in CHANNELS.values()}
+    if (new['channel_id'] not in endpoints or new['provider'] != endpoints[new['channel_id']]
+            or original_config['channel_id'] != ENDPOINT):
+        raise ValueError('Secours officiel depuis OpenRouter uniquement')
+    # Native identifiers may omit the OpenRouter namespace, never change revision
+    namespace = {'Anthropic': 'anthropic', 'DeepSeek': 'deepseek', 'Z.ai': 'z-ai'}[new['provider']]
+    if any(original_config[key] != namespace + '/' + new[key] for key in ('model', 'revision')):
+        raise ValueError('Identité native exacte indisponible ; aucun alias de substitution')
+    if new['id'] != original_config['id'] or new['effort'] != original_config['effort']:
+        raise ValueError('Cellule ou effort modifié dans le secours officiel')
+    root = source
+    while root.get('recovery_of'):
+        root = parent(store, connection, root['recovery_of'])[0]['manifest']
+    root_config = next(p for p in root['panel'] if p['id'] == original_config['id'])
+    expected = set(root_config['parameters']['provider']['only'])
+    attempted = set()
+    own = connection.execute('SELECT rowid FROM s4_campaigns WHERE campaign_id=?', (manifest['campaign_id'],)).fetchone()
+    for oid in manifest['official_fallback']['route_attempts']:
+        row = connection.execute('SELECT c.rowid FROM s4_campaigns c JOIN s4_attempts a USING(campaign_id) WHERE a.operation_id=?', (oid,)).fetchone()
+        if row is None or own and row[0] >= own[0]:
+            raise ValueError('Preuve de route antérieure requise')
+        snapshot, attempt = parent(store, connection, oid)
+        config = attempt['operation']['requested_configuration']
+        if (snapshot['manifest']['contract_sha256'] != source['contract_sha256']
+                or snapshot['manifest']['conditions'] != source['conditions']
+                or snapshot['manifest']['cases'] != source['cases']
+                or attempt['cell_id'] != manifest['plan'][0]['cell_id']
+                or next(cell for cell in snapshot['manifest']['plan'] if cell['cell_id'] == attempt['cell_id']) != manifest['plan'][0]
+                or any(config[k] != original_config[k] for k in _IDENTITY)):
+            raise ValueError('Tentative de route étrangère à la configuration source')
+        observed = observation(attempt)
+        exhausted_length = False
+        if observed['kind'] == 'LENGTH':
+            prior_id = snapshot['manifest'].get('recovery_of')
+            if prior_id:
+                _, prior = parent(store, connection, prior_id)
+                before = observation(prior)
+                prior_config = prior['operation']['requested_configuration']
+                exhausted_length = (before['kind'] == 'LENGTH' and before['route'] == observed['route']
+                    and config['effort'] == prior_config['effort']
+                    and {k: v for k, v in config['parameters'].items() if k not in ('max_tokens', 'provider')}
+                        == {k: v for k, v in prior_config['parameters'].items() if k not in ('max_tokens', 'provider')}
+                    and config['parameters']['max_tokens'] > prior_config['parameters']['max_tokens']
+                    and observed['output_chars'] <= before['output_chars'])
+            _, grant = _owner_grant(store, connection, snapshot)
+            tokens = observed['usage'].get('prompt_tokens')
+            if grant and type(tokens) is int and tokens >= 0:
+                capabilities = frozen_capabilities(grant, config['model'])
+                endpoints = [endpoint for endpoint in capabilities['endpoints'] if endpoint['tag'] == observed['route']]
+                if len(endpoints) == 1:
+                    endpoint = endpoints[0]
+                    limit = min(endpoint['max_completion_tokens'], endpoint['context_length'] - tokens,
+                                snapshot['manifest']['conditions']['defaults']['context_window'] - tokens)
+                    exhausted_length = exhausted_length or config['parameters']['max_tokens'] >= limit
+        if observed['kind'] not in ('ROUTE_ERROR', 'EMPTY_OUTPUT') and not exhausted_length:
+            raise ValueError('Reprise OpenRouter à résoudre avant secours officiel')
+        allowed = config['parameters']['provider']['only']
+        if not set(allowed) <= expected:
+            raise ValueError('Route non autorisée')
+        route = observed.get('route')
+        if route:
+            attempted.update(tag for tag in expected if route == tag or route.startswith(tag + '/'))
+        elif len(allowed) == 1:
+            attempted.add(allowed[0])
+    if not expected <= attempted or manifest['recovery_of'] not in manifest['official_fallback']['route_attempts']:
+        raise ValueError('Routes OpenRouter non épuisées ou reçu source absent')
 
 
 def _identity(configuration, outgoing_format):
@@ -172,7 +264,12 @@ def derive_child(source_manifest, attempt, observed, capabilities, *, budget_id,
         raise ValueError('Endpoints autorisés épuisés')
     input_tokens = observed['usage'].get('prompt_tokens')
     if type(input_tokens) is not int or input_tokens < 0:
-        raise ValueError('Quantité d’entrée non établie')
+        if observed['kind'] != 'ROUTE_ERROR':
+            raise ValueError('Quantité d’entrée non établie')
+        # Bound context without claiming an observed token count
+        input_tokens = manifest['conditions']['defaults']['context_window'] - params['max_tokens']
+        if input_tokens < 0:
+            raise ValueError('Limite de contexte atteinte')
     limit = min(manifest['conditions']['defaults']['context_window'] - input_tokens,
                 *(min(e['max_completion_tokens'], e['context_length'] - input_tokens) for e in endpoints))
     if observed['kind'] == 'LENGTH':
@@ -232,6 +329,35 @@ def propose(store, operation_id, capabilities):
     connection = c.connection_for(store)
     with _transaction(connection):
         return _proposal(store, connection, operation_id, capabilities)
+
+
+def diagnose(store, operation_id):
+    """Explain the existing recovery gate without reserving or emitting anything"""
+    c._intact(store)
+    connection = c.connection_for(store)
+    with _transaction(connection):
+        snapshot, attempt = parent(store, connection, operation_id)
+        try:
+            observed = observation(attempt)
+        except (ValueError, ConflictError, IntegrityError, KeyError, TypeError):
+            return dict(kind='RECONCILIATION_REQUIRED', automatic=False,
+                        reason='Reçu complet attribuable absent ; rapprocher les effets avant tout rejeu')
+        kind = observed['kind']
+        if kind == 'COMPLETE':
+            return dict(kind=kind, automatic=False, reason='Sortie complète : poursuivre le jugement, sans nouvel appel candidat')
+        if kind not in _RECOVERABLE:
+            return dict(kind=kind, automatic=False, reason='Examiner le refus ou l’intégrité ; aucun contournement ni rejeu automatique')
+        _, grant = _owner_grant(store, connection, snapshot)
+        if grant is None:
+            return dict(kind=kind, automatic=False, reason='Préautorisation de reprise absente ; préparer une reprise avec ses capacités et son autorité')
+        try:
+            capabilities = frozen_capabilities(grant, attempt['operation']['requested_configuration']['model'])
+            proposal = _proposal(store, connection, operation_id, capabilities)
+        except (ValueError, ConflictError, IntegrityError, BudgetError, KeyError) as exc:
+            return dict(kind=kind, automatic=False, reason=str(exc))
+        admitted = snapshot['admission'] is not None and not os.path.lexists(store._root / 'restore.json')
+        return dict(kind=kind, automatic=admitted, reason='Reprise technique préautorisée' if admitted else 'Admission fermée ; aucune émission',
+                    next_campaign_id=proposal['manifest']['campaign_id'], reserve_amount=proposal['reserve_amount'])
 
 
 def starting_configuration(store, configuration, *, content_format=None):
@@ -384,7 +510,7 @@ def _next_preauthorized_attempt(store, operation_id):
     try:
         with _transaction(connection, write=True):
             snapshot, attempt = parent(store, connection, operation_id)
-            if (attempt['state'] != 'RECEIVED' or attempt['attribution_incident']
+            if (attempt['state'] != 'RECEIVED'
                     or snapshot['admission'] is None
                     or os.path.lexists(store._root / 'restore.json')):
                 return None

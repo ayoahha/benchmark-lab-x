@@ -198,6 +198,7 @@ def restore(source, destination):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     campaign_actions = ('create-campaign', 'inspect-campaign', 'admit-campaign', 'stop-campaign', 'resume-campaign')
+    campaign_actions += ('inspect-attempt-status',)
     parser.add_argument('action', choices=campaign_actions + ('reserve-judgment', 'execute-judgment', 'inspect-judgment', 'inspect-pi', 'prepare-recovery', 'prepare-candidate-configuration', 'inspect-model-profile', 'reserve-candidate', 'execute-candidate', 'prepare-review', 'prepare-evaluation', 'evaluate-attempt', 'initialize-reconciliation', 'reconcile-cost', 'inspect-cost', 'forecast-prices', 'initialize-evaluations', 'inspect-evaluation', 'initialize-campaigns', 'inspect-qualification', 'approve-qualification', 'initialize-preparation', 'admit-preparation', 'initialize', 'verify', 'status', 'maintenance', 'quiescence', 'backup', 'verify-backup', 'restore', 'web', 'executor'))
     parser.add_argument('--data', type=Path)
     parser.add_argument('--authority', type=Path)
@@ -211,6 +212,8 @@ def main(argv=None):
                         help='Alias glm-5.3-flash ou chemin d’un profil JSON local')
     parser.add_argument('--judgment-profile', metavar='ALIAS_OR_PROFILE')
     parser.add_argument('--candidate-pi', action='store_true', help='Charger le transport candidat Pi/OpenRouter dans l’exécuteur privé')
+    parser.add_argument('--candidate-provider', choices=('openrouter', 'anthropic', 'deepseek', 'zai'), default='openrouter',
+                        help='Canal candidat explicitement admis ; les API officielles sont un dernier recours')
     parser.add_argument('--model')
     parser.add_argument('--pi-package', type=Path)
     parser.add_argument('--node', type=Path)
@@ -220,6 +223,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
+        if args.candidate_provider != 'openrouter' and args.action != 'execute-candidate':
+            raise ValueError('Canal officiel réservé à une acquisition opérateur explicitement admise')
         if args.judgment_profile is not None and args.action not in ('reserve-judgment', 'execute-judgment'):
             raise ValueError('Profil réservé au jugement privé')
         if args.candidate_pi and args.action != 'executor':
@@ -303,7 +308,16 @@ def main(argv=None):
             result = (backup if args.action == 'backup' else restore)(args.data, args.destination)
         else:
             with closing(Store(args.data)) as store:
-                if args.action in ('reserve-judgment', 'execute-judgment', 'inspect-judgment'):
+                if args.action == 'inspect-attempt-status':
+                    from .evaluation import attempt_status
+                    from .storage import _fields
+                    if args.authority is None:
+                        raise ValueError('Fichier opérateur privé requis')
+                    private_path(args.authority)
+                    request = json.loads(args.authority.read_text(), object_pairs_hook=_unique_object)
+                    _fields(request, ('campaign_id', 'attempt_id'), args.action)
+                    result = attempt_status(store, request['campaign_id'], request['attempt_id'])
+                elif args.action in ('reserve-judgment', 'execute-judgment', 'inspect-judgment'):
                     from . import judgment
                     from .storage import _fields
                     if args.authority is None:
@@ -375,7 +389,12 @@ def main(argv=None):
                         before = campaigns.inspect(store, request['campaign_id'])
                         if request['attempt_id'] not in {a['operation_id'] for a in before['attempts']}:
                             raise ValueError('Tentative étrangère à la campagne')
-                        transport = PiOpenRouter(os.environ.pop('OPENROUTER_API_KEY', ''), args.pi_package, args.node)
+                        if args.candidate_provider == 'openrouter':
+                            transport = PiOpenRouter(os.environ.pop('OPENROUTER_API_KEY', ''), args.pi_package, args.node)
+                        else:
+                            from .pi_official import PiOfficial, CHANNELS
+                            transport = PiOfficial(os.environ.pop(CHANNELS[args.candidate_provider][3], ''),
+                                                   args.pi_package, args.node, args.candidate_provider)
                         campaigns.execute(args.data, request['attempt_id'], transport)
                         result = next(a for a in campaigns.inspect(store, request['campaign_id'])['attempts']
                                       if a['operation_id'] == request['attempt_id'])
