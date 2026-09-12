@@ -18,6 +18,30 @@ from tests.test_storage import PAYLOAD, operation, receipt, cost
 
 
 class ServiceStorageTests(unittest.TestCase):
+    def test_verified_operations_are_copied_and_invalidated_by_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / 'private'
+            initialize(root)
+            with closing(Store(root)) as store:
+                store.save_dossier('d', 1, PAYLOAD)
+                store.create_budget('budget', '10', 'TEST')
+                store.reserve_intent(operation(), 'budget', '1')
+                original_budget = store._budget
+
+                def inspect_during_verification(connection, budget_id, operations):
+                    first = store._operations(connection)
+                    first[0]['resources'].append('caller-local-change')
+                    second = store._operations(connection)
+                    self.assertNotIn('caller-local-change', second[0]['resources'])
+                    connection.execute("UPDATE operations SET resources_json='[\"changed\"]' WHERE operation_id='op'")
+                    self.assertEqual(store._operations(connection)[0]['resources'], ['changed'])
+                    return original_budget(connection, budget_id, operations)
+
+                with patch.object(store, '_budget', side_effect=inspect_during_verification):
+                    self.assertTrue(verify(store)['integrity_ok'])
+                self.assertIsNone(store._verified_operations)
+                self.assertEqual(store.inspect_operations()[0]['resources'], ['changed'])
+
     def test_full_verification_checks_database_once_per_snapshot_not_per_piece(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve() / 'private'
